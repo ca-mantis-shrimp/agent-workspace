@@ -824,6 +824,100 @@ fn s6_clean_transaction_revert_restores_repository_and_freshness() {
     );
 }
 
+#[test]
+fn multi_path_revert_conflict_changes_nothing() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let observation = invoke(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&observation.stdout).unwrap();
+    let claim = invoke(&[
+        "claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--statement",
+        "transaction target",
+        "--observation",
+        &observation.id.to_string(),
+    ]);
+    let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
+    let transaction = invoke(&[
+        "begin-transaction",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--claim",
+        &claim.id.to_string(),
+    ]);
+    let transaction: Transaction = serde_json::from_slice(&transaction.stdout).unwrap();
+    let owned_lib = "pub fn foo() -> i32 { 2 }\n";
+    let owned_helper = "pub fn helper() -> i32 { 2 }\n";
+    for (path, contents) in [("src/lib.rs", owned_lib), ("src/helper.rs", owned_helper)] {
+        invoke(&[
+            "apply",
+            "--repository",
+            fixture.repository.to_str().unwrap(),
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--id",
+            &transaction.id.to_string(),
+            "--path",
+            path,
+            "--content",
+            contents,
+        ]);
+    }
+    let external_lib = "pub fn foo() -> i32 { 99 }\n";
+    fs::write(fixture.repository.join("src/lib.rs"), external_lib).unwrap();
+
+    let failure = invoke_failure(&[
+        "revert-transaction",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &transaction.id.to_string(),
+    ]);
+    assert!(String::from_utf8_lossy(&failure.stderr).contains("revert conflict"));
+    assert_eq!(
+        fs::read_to_string(fixture.repository.join("src/lib.rs")).unwrap(),
+        external_lib
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.repository.join("src/helper.rs")).unwrap(),
+        owned_helper
+    );
+    let status = invoke(&[
+        "status",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+    ]);
+    let status: WorkspaceStatus = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status.transactions[0].state, TransactionState::Open);
+}
+
+fn invoke_failure(arguments: &[&str]) -> Output {
+    let output = Command::new(env!("CARGO_BIN_EXE_agent-workspace"))
+        .args(arguments)
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "command unexpectedly succeeded");
+    output
+}
+
 fn invoke(arguments: &[&str]) -> Output {
     let output = Command::new(env!("CARGO_BIN_EXE_agent-workspace"))
         .args(arguments)

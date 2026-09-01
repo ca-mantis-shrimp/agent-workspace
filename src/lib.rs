@@ -787,9 +787,12 @@ impl Workspace {
                 "transaction is not open or has no mutations".to_owned(),
             ));
         }
+
+        let mut validated = Vec::with_capacity(transaction.mutations.len());
         for mutation in transaction.mutations.iter().rev() {
             let absolute_path = self.repository_root.join(&mutation.path);
-            if fingerprint_file(&absolute_path)? != mutation.after_fingerprint {
+            let owned_contents = fs::read(&absolute_path)?;
+            if hex_digest(&owned_contents) != mutation.after_fingerprint {
                 return Err(WorkspaceError::InvalidTransaction(format!(
                     "revert conflict on {}",
                     mutation.path.display()
@@ -806,9 +809,23 @@ impl Workspace {
                     mutation.path.display()
                 )));
             }
-            write_file_atomically(&absolute_path, &original)?;
+            validated.push((absolute_path, original, owned_contents));
         }
-        self.append(Event::TransactionReverted { transaction_id })?;
+
+        for (index, (path, original, _)) in validated.iter().enumerate() {
+            if let Err(error) = write_file_atomically(path, original) {
+                for (restored_path, _, owned_contents) in validated[..index].iter().rev() {
+                    let _ = write_file_atomically(restored_path, owned_contents);
+                }
+                return Err(error);
+            }
+        }
+        if let Err(error) = self.append(Event::TransactionReverted { transaction_id }) {
+            for (path, _, owned_contents) in validated.iter().rev() {
+                let _ = write_file_atomically(path, owned_contents);
+            }
+            return Err(error);
+        }
         self.resume_status()?
             .transactions
             .into_iter()

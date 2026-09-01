@@ -41,17 +41,19 @@ agent-workspace status --repository . --workspace .agent-workspace
    belief, citing the observations that back it. Add `--dependency <path>` for a
    file the claim depends on but you didn't directly observe.
 4. `status` — check freshness *before acting* on any claim.
-5. To change code: `begin-transaction --claim <id>`, then
-   `apply --id <tx> --path <file> --content "..."`, attach `evidence`, and
-   `accept-transaction` or `revert-transaction`.
+5. To make a reversible clean-base experiment: `begin-transaction --claim
+   <id>`, then `apply --id <tx> --path <file> --content "..."`, and use
+   `revert-transaction` when needed. Post-mutation acceptance is not yet a sound
+   workflow: descriptive claims become stale after the owned edit, and the
+   separate acceptance-criterion model is still pending.
 
 ## Scope honesty
 
-`--scope declared` asserts your listed paths and dependencies are the *complete*
-support for the claim — a strong promise. If a claim leans on helpers you can't
-fully enumerate, use `--scope conservative-siblings` to widen the net, or record
-the dependencies explicitly. Never assert-complete a scope you haven't actually
-bounded; an honestly narrow claim beats a falsely confident one.
+`--scope declared` records exactly the paths and dependencies you supplied; it
+still reports completeness as `not-asserted`. If a claim leans on helpers you
+cannot enumerate, use `--scope conservative-siblings` to widen the net, or
+record dependencies explicitly. In every case, read `scope_assurance` alongside
+freshness: an honestly narrow claim beats a falsely confident one.
 
 ## Gotchas
 

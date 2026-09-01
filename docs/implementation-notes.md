@@ -220,6 +220,13 @@ revised when later scenarios expose a better boundary.
   criterion acceptance seam. Post-mutation acceptance remains provisional and
   must not be presented as complete until `AcceptanceCriterion` replaces S4's
   `acceptance_claim_ids` scaffolding.
+- First review exposed a reachable multi-path consistency bug: revert originally
+  validated and restored in one reverse loop, so a conflict on a later path
+  could leave earlier paths restored and permanently wedge the open transaction.
+  Revert now has a read-only validation phase for every owned path before any
+  write. Write or event-append failures trigger best-effort compensation back to
+  the owned after-state. The conflict fixture proves an overlapping edit leaves
+  every path untouched and the transaction open.
 
 ## 2026-09-01 — CLI ergonomics, surfaced by first dogfooding pass
 
