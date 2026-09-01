@@ -48,6 +48,13 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
             )?;
         }
         "status" => print_json(&workspace.resume_status()?)?,
+        "checkpoint" => {
+            let label = options
+                .label
+                .ok_or_else(|| CliError::Usage("checkpoint requires --label".to_owned()))?;
+            print_json(&workspace.checkpoint(label, options.note)?)?;
+        }
+        "delta" => print_json(&workspace.delta_since(options.since.as_deref())?)?,
         "observe" => {
             let path = options
                 .path
@@ -186,6 +193,9 @@ struct Options {
     contents: Option<String>,
     selector: Option<ObservationSelector>,
     retain_payload: bool,
+    label: Option<String>,
+    note: Option<String>,
+    since: Option<String>,
 }
 
 impl Options {
@@ -211,6 +221,9 @@ impl Options {
         let mut contents = None;
         let mut selector = None;
         let mut retain_payload = false;
+        let mut label = None;
+        let mut note = None;
+        let mut since = None;
         let mut index = 0;
 
         while index < arguments.len() {
@@ -248,6 +261,9 @@ impl Options {
                 "--intent" => intent = Some(value.clone()),
                 "--reference" => external_reference = Some(value.clone()),
                 "--reason" => reason = Some(value.clone()),
+                "--label" => label = Some(value.clone()),
+                "--note" => note = Some(value.clone()),
+                "--since" => since = Some(value.clone()),
                 "--content" => contents = Some(value.clone()),
                 "--range" => selector = Some(parse_byte_range(value)?),
                 "--retain-payload" => {
@@ -313,6 +329,9 @@ impl Options {
             contents,
             selector,
             retain_payload,
+            label,
+            note,
+            since,
         })
     }
 }

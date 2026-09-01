@@ -332,3 +332,46 @@ These are ergonomics only — the freshness and rollback cores behaved exactly a
 specified. Recorded here so the dogfooding-versus-fix boundary stays honest: the
 skill captures durable *judgment* (defer to a `stale` verdict, declare scope
 honestly), not the tool's fixable quirks.
+
+## 2026-09-01 — Checkpoint and delta-oriented resume view
+
+Closes two of the lifecycle gaps the supersession entry deferred: objective
+completion (recorded, not overwritten) and the "changes since checkpoint" view
+both cold-resume runs asked for. It is the slice the run-2 reviewer sequenced
+after supersession, on the grounds that there is no meaningful delta without a
+checkpoint notion to diff against.
+
+- **A checkpoint is a remembered sequence boundary, not new entity state.**
+  `Checkpointed { label, note, git_revision }` is an additive schema-v2 event;
+  replay records the marker together with the sequence it landed at and a
+  snapshot of the objective then in force. Because the marker carries the
+  objective, replacing an objective after a checkpoint no longer erases the fact
+  that the previous one was completed — the checkpoint preserves it.
+- **The delta is projection-twice-and-diff, introducing no new freshness axis.**
+  `delta_since` projects the log up to the checkpoint's sequence (a pure read via
+  `project_upto`, which never appends reconciliation events) and projects the log
+  to now (`resume_status`, which does reconcile), then diffs the two states.
+  "Staled since" therefore means a claim whose *recorded* freshness at the
+  checkpoint was `current` and is `stale` now — derived, not a stored flag.
+- **This design was forced by a pre-existing seam.** `resume_status` reconciles
+  every claim/observation/evidence and `reconcile_claim` appends unconditionally,
+  so the log grows on every `status` and a stale verdict is re-emitted each call.
+  A naive "stale-reconcile event after sequence S" delta would therefore be
+  noise. Diffing two projected states sidesteps it. No-op suppression remains the
+  right separate fix; the live workspace log is already ~750 events, most of them
+  redundant reconciliations.
+- **`delta` defaults to the latest checkpoint, with `--since <label>` to
+  override.** This is the cold-resume ergonomic ("what changed since I last drew a
+  line"); the explicit override keeps it unmagical when a specific baseline is
+  wanted. Labels are unique so a `--since` reference is unambiguous.
+- **No §4 contract scenario was added.** The contract's scenarios are the F1–F9
+  adversarial safety fixtures; checkpoint/delta is a lifecycle/orientation feature
+  already covered by vocabulary (§0) and invariant 13 ("stopping is success"). It
+  is proven by walking-skeleton tests instead — the same precedent supersession
+  set. The full `status` output is unchanged; the delta is a strictly additive
+  surface (`checkpoints` is now listed in `status` so labels are discoverable).
+- **Still open after this slice.** A checkpoint records the objective but there is
+  no explicit "objective completed" disposition distinct from "replaced"; the
+  delta reports objective *change* structurally, not intent. Focus/working-set
+  retirement and semantic (formatting-only) drift classification remain separate,
+  as does no-op event suppression.

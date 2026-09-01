@@ -30,6 +30,8 @@ pub enum WorkspaceError {
     InvalidEvidence(String),
     TransactionNotFound(u64),
     InvalidTransaction(String),
+    InvalidCheckpoint(String),
+    CheckpointNotFound(String),
     CorruptLog(String),
 }
 
@@ -61,6 +63,10 @@ impl fmt::Display for WorkspaceError {
             Self::TransactionNotFound(id) => write!(formatter, "transaction {id} not found"),
             Self::InvalidTransaction(message) => {
                 write!(formatter, "invalid transaction: {message}")
+            }
+            Self::InvalidCheckpoint(message) => write!(formatter, "invalid checkpoint: {message}"),
+            Self::CheckpointNotFound(label) => {
+                write!(formatter, "checkpoint {label:?} not found")
             }
             Self::CorruptLog(message) => write!(formatter, "corrupt event log: {message}"),
         }
@@ -302,6 +308,20 @@ pub struct Transaction {
     pub last_rejection: Option<String>,
 }
 
+/// A named point in the event log. Recording a checkpoint captures *where in the
+/// log* a line was drawn (its `sequence`) together with the objective in force at
+/// that moment. It creates no entity state of its own; it is the anchor a delta
+/// projection diffs against.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CheckpointMarker {
+    pub label: String,
+    #[serde(default)]
+    pub note: Option<String>,
+    pub git_revision: String,
+    pub objective: Option<Objective>,
+    pub sequence: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkspaceStatus {
     pub objective: Option<Objective>,
@@ -312,6 +332,31 @@ pub struct WorkspaceStatus {
     pub superseded_claims: Vec<Claim>,
     pub evidence: Vec<Evidence>,
     pub transactions: Vec<Transaction>,
+    #[serde(default)]
+    pub checkpoints: Vec<CheckpointMarker>,
+}
+
+/// The objective in force shifted between the checkpoint and now.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ObjectiveChange {
+    pub before: Option<Objective>,
+    pub after: Option<Objective>,
+}
+
+/// What changed since a checkpoint. Every field is derived by projecting the log
+/// twice — once up to the checkpoint's sequence, once to now — and diffing the two
+/// states. It introduces no new freshness axis: `claims_staled` are claims whose
+/// *recorded* freshness at the checkpoint was `current` and is now `stale`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DeltaStatus {
+    pub checkpoint: CheckpointMarker,
+    pub objective_change: Option<ObjectiveChange>,
+    pub claims_recorded: Vec<Claim>,
+    pub claims_superseded: Vec<Claim>,
+    pub claims_staled: Vec<Claim>,
+    pub observations_recorded: Vec<Observation>,
+    pub transactions_opened: Vec<Transaction>,
+    pub transactions_closed: Vec<Transaction>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -417,6 +462,12 @@ enum Event {
         transaction_id: u64,
         reason: String,
     },
+    Checkpointed {
+        label: String,
+        #[serde(default)]
+        note: Option<String>,
+        git_revision: String,
+    },
 }
 
 #[derive(Debug)]
@@ -511,6 +562,142 @@ impl Workspace {
             superseded_claims,
             evidence: projection.evidence.into_values().collect(),
             transactions: projection.transactions.into_values().collect(),
+            checkpoints: projection.checkpoints,
+        })
+    }
+
+    /// Draw a named line in the log. Reconciles everything to current truth first
+    /// so the checkpoint anchors an accurate freshness baseline, then records the
+    /// marker. Labels must be unique so `delta_since` can resolve them.
+    pub fn checkpoint(
+        &self,
+        label: impl Into<String>,
+        note: Option<String>,
+    ) -> Result<CheckpointMarker, WorkspaceError> {
+        let label = label.into();
+        if label.trim().is_empty() {
+            return Err(WorkspaceError::InvalidCheckpoint(
+                "label must not be empty".to_owned(),
+            ));
+        }
+        if self
+            .project()?
+            .checkpoints
+            .iter()
+            .any(|marker| marker.label == label)
+        {
+            return Err(WorkspaceError::InvalidCheckpoint(format!(
+                "label {label:?} is already used"
+            )));
+        }
+
+        // Bring recorded freshness up to date so the baseline this checkpoint
+        // anchors reflects the world as it is now, not as it was last reconciled.
+        self.resume_status()?;
+        let git_revision = git_output(&self.repository_root, &["rev-parse", "HEAD"])?;
+        self.append(Event::Checkpointed {
+            label: label.clone(),
+            note,
+            git_revision,
+        })?;
+
+        self.project()?
+            .checkpoints
+            .into_iter()
+            .find(|marker| marker.label == label)
+            .ok_or(WorkspaceError::CheckpointNotFound(label))
+    }
+
+    /// Project what changed since a checkpoint. With `label`, diffs against that
+    /// checkpoint; without one, diffs against the most recent checkpoint — the
+    /// ergonomic cold-resume default of "what changed since I last drew a line."
+    pub fn delta_since(&self, label: Option<&str>) -> Result<DeltaStatus, WorkspaceError> {
+        let checkpoints = self.project()?.checkpoints;
+        let checkpoint = match label {
+            Some(label) => checkpoints
+                .into_iter()
+                .find(|marker| marker.label == label)
+                .ok_or_else(|| WorkspaceError::CheckpointNotFound(label.to_owned()))?,
+            None => checkpoints
+                .into_iter()
+                .next_back()
+                .ok_or_else(|| WorkspaceError::CheckpointNotFound("<latest>".to_owned()))?,
+        };
+
+        // Baseline is a pure read of the log up to the checkpoint (no
+        // reconciliation); current reconciles against the live worktree. Diffing
+        // the two is what makes "staled since" honest without a new axis.
+        let baseline = self.project_upto(Some(checkpoint.sequence))?;
+        let current = self.resume_status()?;
+
+        let objective_change = if baseline.objective != current.objective {
+            Some(ObjectiveChange {
+                before: baseline.objective.clone(),
+                after: current.objective.clone(),
+            })
+        } else {
+            None
+        };
+
+        let mut claims_recorded = Vec::new();
+        let mut claims_staled = Vec::new();
+        for claim in &current.claims {
+            match baseline.claims.get(&claim.id) {
+                None => claims_recorded.push(claim.clone()),
+                Some(before) => {
+                    if before.lifecycle.is_active()
+                        && before.report.freshness_within_scope == FreshnessWithinScope::Current
+                        && claim.report.freshness_within_scope == FreshnessWithinScope::Stale
+                    {
+                        claims_staled.push(claim.clone());
+                    }
+                }
+            }
+        }
+
+        let claims_superseded = current
+            .superseded_claims
+            .iter()
+            .filter(|claim| {
+                baseline
+                    .claims
+                    .get(&claim.id)
+                    .is_some_and(|before| before.lifecycle.is_active())
+            })
+            .cloned()
+            .collect();
+
+        let observations_recorded = current
+            .observations
+            .iter()
+            .filter(|observation| !baseline.observations.contains_key(&observation.id))
+            .cloned()
+            .collect();
+
+        let mut transactions_opened = Vec::new();
+        let mut transactions_closed = Vec::new();
+        for transaction in &current.transactions {
+            match baseline.transactions.get(&transaction.id) {
+                None => transactions_opened.push(transaction.clone()),
+                Some(before) => {
+                    if before.state == TransactionState::Open
+                        && transaction.state != TransactionState::Open
+                    {
+                        transactions_closed.push(transaction.clone());
+                    }
+                }
+            }
+        }
+
+        Ok(DeltaStatus {
+            checkpoint,
+            objective_change,
+            claims_recorded,
+            claims_superseded,
+            claims_staled,
+            observations_recorded,
+            transactions_opened,
+            transactions_closed,
         })
     }
 
@@ -1237,6 +1424,15 @@ impl Workspace {
     }
 
     fn project(&self) -> Result<Projection, WorkspaceError> {
+        self.project_upto(None)
+    }
+
+    /// Replay the log, optionally stopping after `max_sequence`. `None` projects
+    /// the whole log (current state); `Some(s)` reconstructs the state the log
+    /// described up to and including sequence `s` — the baseline a delta diffs
+    /// against. This is a pure read: it never appends reconciliation events, so
+    /// the freshness it reports is the freshness *recorded at that time*.
+    fn project_upto(&self, max_sequence: Option<u64>) -> Result<Projection, WorkspaceError> {
         let path = self.event_log_path();
         if !path.exists() {
             return Ok(Projection::default());
@@ -1249,6 +1445,9 @@ impl Workspace {
             let record: EventRecord = serde_json::from_str(&line).map_err(|error| {
                 WorkspaceError::CorruptLog(format!("line {}: {error}", index + 1))
             })?;
+            if max_sequence.is_some_and(|max_sequence| record.sequence > max_sequence) {
+                break;
+            }
             projection.apply(record)?;
         }
         Ok(projection)
@@ -1263,6 +1462,7 @@ struct Projection {
     claims: BTreeMap<u64, Claim>,
     evidence: BTreeMap<u64, Evidence>,
     transactions: BTreeMap<u64, Transaction>,
+    checkpoints: Vec<CheckpointMarker>,
     next_observation_id: u64,
     next_claim_id: u64,
     next_evidence_id: u64,
@@ -1681,6 +1881,21 @@ impl Projection {
                     .get_mut(&transaction_id)
                     .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
                 transaction.last_rejection = Some(reason);
+            }
+            Event::Checkpointed {
+                label,
+                note,
+                git_revision,
+            } => {
+                self.checkpoints.push(CheckpointMarker {
+                    label,
+                    note,
+                    git_revision,
+                    objective: self.objective.clone(),
+                    // `next_sequence` was advanced above; this event's own
+                    // sequence is therefore one less.
+                    sequence: self.next_sequence - 1,
+                });
             }
         }
         Ok(())

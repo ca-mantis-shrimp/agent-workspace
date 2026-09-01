@@ -237,3 +237,37 @@ Two lessons worth keeping:
 The stale-objective problem also recurred: the durable objective still read
 "implement S7" after S7 was done, and rebinding was a manual, undurable judgment
 call. Objective completion/replacement is the remaining lifecycle gap.
+
+## Fourth run — the checkpoint/delta slice, Opus resuming cold
+
+Resumed cold from a compaction. `status` reconstructed the whole picture —
+supersession done, both live claims fresh, no open transactions — with no chat
+history, so the "orient first" pitch held again. The human relayed two wishes
+from other sessions (a delta view, and read-hooking). The useful move was
+*refusing to conflate them*: the delta view is a kernel slice already sequenced
+after supersession; read-hooking is adapter-layer auto-capture. Building the
+delta first is the filter before the auto-capture firehose, not a deferral of it.
+
+Two lessons worth keeping:
+
+- **The delta design was dictated by an existing seam, not chosen freely.**
+  `resume_status` reconciles everything and appends a `ClaimReconciled` event on
+  every call, so the log grows each `status` and a stale verdict re-emits
+  constantly. The obvious "scan for stale-reconcile events after the checkpoint
+  sequence" delta would therefore be noise. The sound design — project the log up
+  to the checkpoint, project it to now, diff the two — fell out of respecting that
+  seam. Reading the code before designing was what surfaced it; a memory-based
+  design would have shipped the noisy version.
+
+- **The completion gap closes by making the boundary a first-class thing, not by
+  adding a "done" flag.** The prior run left "objective completion" as an open
+  lifecycle gap. A checkpoint that snapshots the objective turns rebinding from a
+  destructive overwrite into a preserved transition — the delta reports the
+  change instead of losing it. Dogfooded live: checkpointing the finished
+  supersession objective, then rebinding, then `delta` showed the exact
+  transition plus the new claim and observations, with `claims_staled` correctly
+  empty because the drift happened before the line was drawn.
+
+Still undone: a checkpoint records the objective but not an explicit "completed"
+vs "replaced" disposition, and the ~750-event live log is mostly redundant
+reconciliations — no-op suppression is now the loudest unaddressed seam.

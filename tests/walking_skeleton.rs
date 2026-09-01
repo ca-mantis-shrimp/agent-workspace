@@ -1,7 +1,7 @@
 use agent_workspace::{
-    Claim, ClaimInputSource, ClaimLifecycle, Evidence, FreshnessWithinScope, Observation,
-    ObservationCapture, ObservationSelector, RevealedObservation, ScopeCompleteness, ScopeSource,
-    Transaction, TransactionState, WorkspaceStatus,
+    Claim, ClaimInputSource, ClaimLifecycle, DeltaStatus, Evidence, FreshnessWithinScope,
+    Objective, Observation, ObservationCapture, ObservationSelector, RevealedObservation,
+    ScopeCompleteness, ScopeSource, Transaction, TransactionState, WorkspaceStatus,
 };
 use serde_json::Value;
 use std::fs;
@@ -1541,6 +1541,271 @@ fn complete_bounded_task(repository: &Path, source: &str, perceived_source: &str
         String::from_utf8_lossy(&compile.stderr)
     );
     assert!(Command::new(binary).status().unwrap().success());
+}
+
+#[test]
+fn checkpoint_delta_reports_recorded_superseded_and_staled_since_a_line() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    let observe = |path: &str| -> Observation {
+        let out = invoke(&[
+            "observe",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--path",
+            path,
+        ]);
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let claim = |statement: &str, observation_id: u64| -> Claim {
+        let observation_id = observation_id.to_string();
+        let out = invoke(&[
+            "claim",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--statement",
+            statement,
+            "--observation",
+            &observation_id,
+        ]);
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+
+    let helper_observation = observe("src/helper.rs");
+    let lib_observation = observe("src/lib.rs");
+    let will_stale = claim("helper returns one", helper_observation.id);
+    let will_retire = claim("foo returns one", lib_observation.id);
+
+    // Draw the line at a clean, all-current base.
+    invoke(&[
+        "checkpoint",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--label",
+        "baseline",
+        "--note",
+        "before the changes",
+    ]);
+
+    // (a) stale a claim by editing its input out of band,
+    fs::write(
+        fixture.repository.join("src/helper.rs"),
+        "pub fn helper() -> i32 { 2 }\n",
+    )
+    .unwrap();
+    // (b) record a new belief, and (c) supersede an old one with it.
+    let successor = claim("foo still returns one after review", lib_observation.id);
+    invoke(&[
+        "supersede-claim",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--id",
+        &will_retire.id.to_string(),
+        "--claim",
+        &successor.id.to_string(),
+        "--reason",
+        "consumed by review",
+    ]);
+
+    let delta = invoke(&[
+        "delta",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--since",
+        "baseline",
+    ]);
+    let delta: DeltaStatus = serde_json::from_slice(&delta.stdout).unwrap();
+
+    assert_eq!(delta.checkpoint.label, "baseline");
+    assert_eq!(delta.checkpoint.note.as_deref(), Some("before the changes"));
+    assert_eq!(claim_ids(&delta.claims_recorded), vec![successor.id]);
+    assert_eq!(claim_ids(&delta.claims_superseded), vec![will_retire.id]);
+    assert_eq!(claim_ids(&delta.claims_staled), vec![will_stale.id]);
+    assert_eq!(
+        delta.claims_staled[0].report.freshness_within_scope,
+        FreshnessWithinScope::Stale
+    );
+    // A reused observation, an untouched objective, and no transactions must not
+    // masquerade as changes.
+    assert!(delta.observations_recorded.is_empty());
+    assert!(delta.objective_change.is_none());
+    assert!(delta.transactions_opened.is_empty());
+    assert!(delta.transactions_closed.is_empty());
+}
+
+#[test]
+fn delta_without_a_label_uses_the_latest_checkpoint() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    let lib_observation: Observation = serde_json::from_slice(
+        &invoke(&[
+            "observe",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--path",
+            "src/lib.rs",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let claim = |statement: &str| -> Claim {
+        let observation_id = lib_observation.id.to_string();
+        serde_json::from_slice(
+            &invoke(&[
+                "claim",
+                "--repository",
+                &repo,
+                "--workspace",
+                &ws,
+                "--statement",
+                statement,
+                "--observation",
+                &observation_id,
+            ])
+            .stdout,
+        )
+        .unwrap()
+    };
+    let checkpoint = |label: &str| {
+        invoke(&[
+            "checkpoint",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--label",
+            label,
+        ]);
+    };
+
+    checkpoint("first");
+    let middle = claim("foo returns one");
+    checkpoint("second");
+    let late = claim("foo is a function");
+
+    let latest: DeltaStatus = serde_json::from_slice(
+        &invoke(&["delta", "--repository", &repo, "--workspace", &ws]).stdout,
+    )
+    .unwrap();
+    assert_eq!(latest.checkpoint.label, "second");
+    assert_eq!(claim_ids(&latest.claims_recorded), vec![late.id]);
+
+    let from_first: DeltaStatus = serde_json::from_slice(
+        &invoke(&[
+            "delta",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--since",
+            "first",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        claim_ids(&from_first.claims_recorded),
+        vec![middle.id, late.id]
+    );
+}
+
+#[test]
+fn checkpoint_rejects_duplicate_labels_and_records_objective_change() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    invoke(&[
+        "bind-objective",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--intent",
+        "ship the delta view",
+    ]);
+    invoke(&[
+        "checkpoint",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--label",
+        "start",
+    ]);
+
+    let duplicate = invoke_failure(&[
+        "checkpoint",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--label",
+        "start",
+    ]);
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already used"));
+
+    invoke(&[
+        "bind-objective",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--intent",
+        "ship the read hook",
+    ]);
+
+    let delta: DeltaStatus = serde_json::from_slice(
+        &invoke(&["delta", "--repository", &repo, "--workspace", &ws]).stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        delta.checkpoint.objective,
+        Some(Objective {
+            intent: "ship the delta view".to_owned(),
+            external_reference: None,
+        })
+    );
+    let change = delta.objective_change.expect("objective changed");
+    assert_eq!(change.before.unwrap().intent, "ship the delta view");
+    assert_eq!(change.after.unwrap().intent, "ship the read hook");
+}
+
+#[test]
+fn delta_without_any_checkpoint_fails_clearly() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let failure = invoke_failure(&[
+        "delta",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+    ]);
+    assert!(String::from_utf8_lossy(&failure.stderr).contains("not found"));
+}
+
+fn claim_ids(claims: &[Claim]) -> Vec<u64> {
+    claims.iter().map(|claim| claim.id).collect()
 }
 
 fn append_raw_event(workspace: &Path, event: Value) {
