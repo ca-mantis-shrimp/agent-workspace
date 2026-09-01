@@ -7,7 +7,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
-const EVENT_SCHEMA_VERSION: u32 = 1;
+const EVENT_SCHEMA_VERSION: u32 = 2;
+const MINIMUM_EVENT_SCHEMA_VERSION: u32 = 1;
 const EVENT_LOG_NAME: &str = "events.jsonl";
 
 #[derive(Debug)]
@@ -85,7 +86,7 @@ pub struct ScopeAssurance {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OperationalCoverage {
     pub mediated_paths: Vec<PathBuf>,
-    pub repository_fingerprint: String,
+    pub reconciliation_fingerprint: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -122,13 +123,15 @@ enum Event {
         provider: String,
         git_revision: String,
         input_fingerprint: String,
-        repository_fingerprint: String,
+        #[serde(alias = "repository_fingerprint")]
+        reconciliation_fingerprint: String,
     },
     ObservationReconciled {
         observation_id: u64,
         freshness: FreshnessWithinScope,
         reason: String,
-        repository_fingerprint: String,
+        #[serde(alias = "repository_fingerprint")]
+        reconciliation_fingerprint: String,
     },
 }
 
@@ -160,8 +163,11 @@ impl Workspace {
         let path = validate_relative_path(path.as_ref())?;
         let input_fingerprint = fingerprint_file(&self.repository_root.join(&path))?;
         let git_revision = git_output(&self.repository_root, &["rev-parse", "HEAD"])?;
-        let repository_fingerprint =
-            scoped_repository_fingerprint(&self.repository_root, &path, Some(&input_fingerprint))?;
+        let reconciliation_fingerprint = scoped_reconciliation_fingerprint(
+            &self.repository_root,
+            &path,
+            Some(&input_fingerprint),
+        )?;
         let projection = self.project()?;
         let observation_id = projection.next_observation_id;
 
@@ -171,7 +177,7 @@ impl Workspace {
             provider: provider.into(),
             git_revision,
             input_fingerprint,
-            repository_fingerprint,
+            reconciliation_fingerprint,
         })?;
 
         self.project()?
@@ -190,7 +196,7 @@ impl Workspace {
             .get(&observation_id)
             .ok_or(WorkspaceError::ObservationNotFound(observation_id))?;
         let current_fingerprint = fingerprint_file(&self.repository_root.join(&observation.path));
-        let repository_fingerprint = scoped_repository_fingerprint(
+        let reconciliation_fingerprint = scoped_reconciliation_fingerprint(
             &self.repository_root,
             &observation.path,
             current_fingerprint.as_ref().ok(),
@@ -205,9 +211,13 @@ impl Workspace {
                 FreshnessWithinScope::Stale,
                 "supporting input changed".to_owned(),
             ),
-            Err(_) => (
+            Err(WorkspaceError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => (
                 FreshnessWithinScope::Stale,
                 "supporting input unavailable".to_owned(),
+            ),
+            Err(_) => (
+                FreshnessWithinScope::Unknown,
+                "supporting input could not be verified".to_owned(),
             ),
         };
 
@@ -215,7 +225,7 @@ impl Workspace {
             observation_id,
             freshness,
             reason,
-            repository_fingerprint,
+            reconciliation_fingerprint,
         })?;
 
         self.project()?
@@ -275,7 +285,7 @@ struct Projection {
 
 impl Projection {
     fn apply(&mut self, record: EventRecord) -> Result<(), WorkspaceError> {
-        if record.schema_version != EVENT_SCHEMA_VERSION {
+        if !(MINIMUM_EVENT_SCHEMA_VERSION..=EVENT_SCHEMA_VERSION).contains(&record.schema_version) {
             return Err(WorkspaceError::CorruptLog(format!(
                 "unsupported schema version {}",
                 record.schema_version
@@ -296,7 +306,7 @@ impl Projection {
                 provider,
                 git_revision,
                 input_fingerprint,
-                repository_fingerprint,
+                reconciliation_fingerprint,
             } => {
                 if self.observations.contains_key(&observation_id) {
                     return Err(WorkspaceError::CorruptLog(format!(
@@ -315,12 +325,12 @@ impl Projection {
                         report: FreshnessReport {
                             freshness_within_scope: FreshnessWithinScope::Current,
                             scope_assurance: ScopeAssurance {
-                                source: ScopeSource::Derived,
+                                source: ScopeSource::Declared,
                                 completeness: ScopeCompleteness::AssertedComplete,
                             },
                             operational_coverage: OperationalCoverage {
                                 mediated_paths: vec![path],
-                                repository_fingerprint,
+                                reconciliation_fingerprint,
                             },
                             reason: "supporting input recorded".to_owned(),
                         },
@@ -331,7 +341,7 @@ impl Projection {
                 observation_id,
                 freshness,
                 reason,
-                repository_fingerprint,
+                reconciliation_fingerprint,
             } => {
                 let observation = self
                     .observations
@@ -342,7 +352,7 @@ impl Projection {
                 observation
                     .report
                     .operational_coverage
-                    .repository_fingerprint = repository_fingerprint;
+                    .reconciliation_fingerprint = reconciliation_fingerprint;
             }
         }
         Ok(())
@@ -369,7 +379,7 @@ fn fingerprint_file(path: &Path) -> Result<String, WorkspaceError> {
     Ok(hex_digest(&bytes))
 }
 
-fn scoped_repository_fingerprint(
+fn scoped_reconciliation_fingerprint(
     repository_root: &Path,
     path: &Path,
     input_fingerprint: Option<&String>,
