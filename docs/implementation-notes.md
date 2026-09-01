@@ -38,3 +38,20 @@ revised when later scenarios expose a better boundary.
 - S1 is exercised through the standalone executable: record an observation,
   mutate its source out of band, reconcile, and recover a reasoned `stale`
   verdict from the persisted events.
+
+## 2026-09-01 — S2 scoped claim invalidation
+
+- A claim records its statement, supporting observation IDs, and a deduplicated,
+  path-ordered set of supporting and explicitly declared dependency inputs.
+- Claim scope is `declared` and defaults to `not-asserted`. It is established
+  independently and never inherits an observation's `asserted-complete` payload
+  capture.
+- Recording a claim is itself a reconciliation boundary. Supporting inputs are
+  reread before the claim may report `current`; an observation that changed
+  before claim creation produces an initially stale claim.
+- Operational coverage is reported per result as the paths actually mediated
+  for that claim. An edit outside the recorded scope does not alter scoped
+  freshness or its reconciliation fingerprint; the omitted path remains visible
+  by its absence from `mediated_paths`.
+- The standalone CLI adds `claim` and `reconcile-claim` solely to drive the
+  executable scenarios. It is not yet the eventual agent-facing protocol.

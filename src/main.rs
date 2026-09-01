@@ -35,6 +35,22 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 .ok_or_else(|| CliError::Usage("reconcile requires --id".to_owned()))?;
             print_json(&workspace.reconcile_observation(id)?)?;
         }
+        "claim" => {
+            let statement = options
+                .statement
+                .ok_or_else(|| CliError::Usage("claim requires --statement".to_owned()))?;
+            print_json(&workspace.record_claim(
+                statement,
+                &options.observation_ids,
+                &options.dependencies,
+            )?)?;
+        }
+        "reconcile-claim" => {
+            let id = options
+                .id
+                .ok_or_else(|| CliError::Usage("reconcile-claim requires --id".to_owned()))?;
+            print_json(&workspace.reconcile_claim(id)?)?;
+        }
         _ => return Err(CliError::Usage(usage())),
     }
     Ok(())
@@ -51,6 +67,9 @@ struct Options {
     path: Option<PathBuf>,
     provider: Option<String>,
     id: Option<u64>,
+    statement: Option<String>,
+    observation_ids: Vec<u64>,
+    dependencies: Vec<PathBuf>,
 }
 
 impl Options {
@@ -60,6 +79,9 @@ impl Options {
         let mut path = None;
         let mut provider = None;
         let mut id = None;
+        let mut statement = None;
+        let mut observation_ids = Vec::new();
+        let mut dependencies = Vec::new();
         let mut index = 0;
 
         while index < arguments.len() {
@@ -72,11 +94,19 @@ impl Options {
                 "--workspace" => workspace = Some(PathBuf::from(value)),
                 "--path" => path = Some(PathBuf::from(value)),
                 "--provider" => provider = Some(value.clone()),
+                "--statement" => statement = Some(value.clone()),
+                "--observation" => observation_ids.push(
+                    value
+                        .parse()
+                        .map_err(|_| CliError::Usage(format!("invalid observation id: {value}")))?,
+                ),
+                "--dependency" => dependencies.push(PathBuf::from(value)),
                 "--id" => {
-                    id =
-                        Some(value.parse().map_err(|_| {
-                            CliError::Usage(format!("invalid observation id: {value}"))
-                        })?)
+                    id = Some(
+                        value
+                            .parse()
+                            .map_err(|_| CliError::Usage(format!("invalid id: {value}")))?,
+                    )
                 }
                 _ => return Err(CliError::Usage(format!("unknown option: {flag}"))),
             }
@@ -91,6 +121,9 @@ impl Options {
             path,
             provider,
             id,
+            statement,
+            observation_ids,
+            dependencies,
         })
     }
 }
@@ -125,5 +158,5 @@ impl From<serde_json::Error> for CliError {
 }
 
 fn usage() -> String {
-    "usage: agent-workspace <observe|reconcile> --repository PATH --workspace PATH [--path PATH] [--provider ID] [--id NUMBER]".to_owned()
+    "usage: agent-workspace <observe|reconcile|claim|reconcile-claim> --repository PATH --workspace PATH [options]".to_owned()
 }

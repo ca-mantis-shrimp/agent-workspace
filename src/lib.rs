@@ -18,6 +18,8 @@ pub enum WorkspaceError {
     InvalidPath(PathBuf),
     Git(String),
     ObservationNotFound(u64),
+    ClaimNotFound(u64),
+    InvalidClaim(String),
     CorruptLog(String),
 }
 
@@ -35,6 +37,8 @@ impl fmt::Display for WorkspaceError {
             }
             Self::Git(message) => write!(formatter, "Git error: {message}"),
             Self::ObservationNotFound(id) => write!(formatter, "observation {id} not found"),
+            Self::ClaimNotFound(id) => write!(formatter, "claim {id} not found"),
+            Self::InvalidClaim(message) => write!(formatter, "invalid claim: {message}"),
             Self::CorruptLog(message) => write!(formatter, "corrupt event log: {message}"),
         }
     }
@@ -107,6 +111,29 @@ pub struct Observation {
     pub report: FreshnessReport,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimInputSource {
+    SupportingObservation,
+    DeclaredDependency,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ClaimInput {
+    pub path: PathBuf,
+    pub recorded_input_fingerprint: String,
+    pub source: ClaimInputSource,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Claim {
+    pub id: u64,
+    pub statement: String,
+    pub supporting_observation_ids: Vec<u64>,
+    pub inputs: Vec<ClaimInput>,
+    pub report: FreshnessReport,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct EventRecord {
     schema_version: u32,
@@ -131,6 +158,21 @@ enum Event {
         freshness: FreshnessWithinScope,
         reason: String,
         #[serde(alias = "repository_fingerprint")]
+        reconciliation_fingerprint: String,
+    },
+    ClaimRecorded {
+        claim_id: u64,
+        statement: String,
+        supporting_observation_ids: Vec<u64>,
+        inputs: Vec<ClaimInput>,
+        freshness: FreshnessWithinScope,
+        reason: String,
+        reconciliation_fingerprint: String,
+    },
+    ClaimReconciled {
+        claim_id: u64,
+        freshness: FreshnessWithinScope,
+        reason: String,
         reconciliation_fingerprint: String,
     },
 }
@@ -165,8 +207,7 @@ impl Workspace {
         let git_revision = git_output(&self.repository_root, &["rev-parse", "HEAD"])?;
         let reconciliation_fingerprint = scoped_reconciliation_fingerprint(
             &self.repository_root,
-            &path,
-            Some(&input_fingerprint),
+            &[(path.clone(), Some(input_fingerprint.clone()))],
         )?;
         let projection = self.project()?;
         let observation_id = projection.next_observation_id;
@@ -198,8 +239,10 @@ impl Workspace {
         let current_fingerprint = fingerprint_file(&self.repository_root.join(&observation.path));
         let reconciliation_fingerprint = scoped_reconciliation_fingerprint(
             &self.repository_root,
-            &observation.path,
-            current_fingerprint.as_ref().ok(),
+            &[(
+                observation.path.clone(),
+                current_fingerprint.as_ref().ok().cloned(),
+            )],
         )?;
 
         let (freshness, reason) = match &current_fingerprint {
@@ -232,6 +275,95 @@ impl Workspace {
             .observations
             .remove(&observation_id)
             .ok_or(WorkspaceError::ObservationNotFound(observation_id))
+    }
+
+    pub fn record_claim(
+        &self,
+        statement: impl Into<String>,
+        supporting_observation_ids: &[u64],
+        declared_dependencies: &[PathBuf],
+    ) -> Result<Claim, WorkspaceError> {
+        let statement = statement.into();
+        if statement.trim().is_empty() {
+            return Err(WorkspaceError::InvalidClaim(
+                "statement must not be empty".to_owned(),
+            ));
+        }
+        if supporting_observation_ids.is_empty() {
+            return Err(WorkspaceError::InvalidClaim(
+                "at least one supporting observation is required".to_owned(),
+            ));
+        }
+
+        let projection = self.project()?;
+        let mut inputs = BTreeMap::new();
+        for observation_id in supporting_observation_ids {
+            let observation = projection
+                .observations
+                .get(observation_id)
+                .ok_or(WorkspaceError::ObservationNotFound(*observation_id))?;
+            inputs.insert(
+                observation.path.clone(),
+                ClaimInput {
+                    path: observation.path.clone(),
+                    recorded_input_fingerprint: observation.observed_input_fingerprint.clone(),
+                    source: ClaimInputSource::SupportingObservation,
+                },
+            );
+        }
+        for dependency in declared_dependencies {
+            let path = validate_relative_path(dependency)?;
+            let input_fingerprint = fingerprint_file(&self.repository_root.join(&path))?;
+            inputs.entry(path.clone()).or_insert(ClaimInput {
+                path,
+                recorded_input_fingerprint: input_fingerprint,
+                source: ClaimInputSource::DeclaredDependency,
+            });
+        }
+        let inputs: Vec<_> = inputs.into_values().collect();
+        let (freshness, reason, fingerprint_inputs) =
+            assess_claim_inputs(&self.repository_root, &inputs);
+        let reconciliation_fingerprint =
+            scoped_reconciliation_fingerprint(&self.repository_root, &fingerprint_inputs)?;
+        let claim_id = projection.next_claim_id;
+
+        self.append(Event::ClaimRecorded {
+            claim_id,
+            statement,
+            supporting_observation_ids: supporting_observation_ids.to_vec(),
+            inputs,
+            freshness,
+            reason,
+            reconciliation_fingerprint,
+        })?;
+
+        self.project()?
+            .claims
+            .remove(&claim_id)
+            .ok_or(WorkspaceError::ClaimNotFound(claim_id))
+    }
+
+    pub fn reconcile_claim(&self, claim_id: u64) -> Result<Claim, WorkspaceError> {
+        let projection = self.project()?;
+        let claim = projection
+            .claims
+            .get(&claim_id)
+            .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
+        let (freshness, reason, fingerprint_inputs) =
+            assess_claim_inputs(&self.repository_root, &claim.inputs);
+        let reconciliation_fingerprint =
+            scoped_reconciliation_fingerprint(&self.repository_root, &fingerprint_inputs)?;
+        self.append(Event::ClaimReconciled {
+            claim_id,
+            freshness,
+            reason,
+            reconciliation_fingerprint,
+        })?;
+
+        self.project()?
+            .claims
+            .remove(&claim_id)
+            .ok_or(WorkspaceError::ClaimNotFound(claim_id))
     }
 
     pub fn event_log_path(&self) -> PathBuf {
@@ -279,7 +411,9 @@ impl Workspace {
 #[derive(Default)]
 struct Projection {
     observations: BTreeMap<u64, Observation>,
+    claims: BTreeMap<u64, Claim>,
     next_observation_id: u64,
+    next_claim_id: u64,
     next_sequence: u64,
 }
 
@@ -354,6 +488,67 @@ impl Projection {
                     .operational_coverage
                     .reconciliation_fingerprint = reconciliation_fingerprint;
             }
+            Event::ClaimRecorded {
+                claim_id,
+                statement,
+                supporting_observation_ids,
+                inputs,
+                freshness,
+                reason,
+                reconciliation_fingerprint,
+            } => {
+                if self.claims.contains_key(&claim_id) {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "duplicate claim {claim_id}"
+                    )));
+                }
+                if let Some(missing) = supporting_observation_ids
+                    .iter()
+                    .find(|id| !self.observations.contains_key(id))
+                {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "claim {claim_id} references missing observation {missing}"
+                    )));
+                }
+                self.next_claim_id = self.next_claim_id.max(claim_id + 1);
+                let mediated_paths = inputs.iter().map(|input| input.path.clone()).collect();
+                self.claims.insert(
+                    claim_id,
+                    Claim {
+                        id: claim_id,
+                        statement,
+                        supporting_observation_ids,
+                        inputs,
+                        report: FreshnessReport {
+                            freshness_within_scope: freshness,
+                            scope_assurance: ScopeAssurance {
+                                source: ScopeSource::Declared,
+                                completeness: ScopeCompleteness::NotAsserted,
+                            },
+                            operational_coverage: OperationalCoverage {
+                                mediated_paths,
+                                reconciliation_fingerprint,
+                            },
+                            reason,
+                        },
+                    },
+                );
+            }
+            Event::ClaimReconciled {
+                claim_id,
+                freshness,
+                reason,
+                reconciliation_fingerprint,
+            } => {
+                let claim = self
+                    .claims
+                    .get_mut(&claim_id)
+                    .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
+                claim.report.freshness_within_scope = freshness;
+                claim.report.reason = reason;
+                claim.report.operational_coverage.reconciliation_fingerprint =
+                    reconciliation_fingerprint;
+            }
         }
         Ok(())
     }
@@ -379,21 +574,55 @@ fn fingerprint_file(path: &Path) -> Result<String, WorkspaceError> {
     Ok(hex_digest(&bytes))
 }
 
+fn assess_claim_inputs(
+    repository_root: &Path,
+    inputs: &[ClaimInput],
+) -> (FreshnessWithinScope, String, Vec<(PathBuf, Option<String>)>) {
+    let mut freshness = FreshnessWithinScope::Current;
+    let mut reason = "recorded claim inputs unchanged".to_owned();
+    let mut fingerprint_inputs = Vec::with_capacity(inputs.len());
+
+    for input in inputs {
+        let current = fingerprint_file(&repository_root.join(&input.path));
+        match &current {
+            Ok(fingerprint) if fingerprint == &input.recorded_input_fingerprint => {}
+            Ok(_) => {
+                freshness = FreshnessWithinScope::Stale;
+                reason = "recorded claim input changed".to_owned();
+            }
+            Err(WorkspaceError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                freshness = FreshnessWithinScope::Stale;
+                reason = "recorded claim input unavailable".to_owned();
+            }
+            Err(_) if freshness != FreshnessWithinScope::Stale => {
+                freshness = FreshnessWithinScope::Unknown;
+                reason = "recorded claim input could not be verified".to_owned();
+            }
+            Err(_) => {}
+        }
+        fingerprint_inputs.push((input.path.clone(), current.ok()));
+    }
+
+    (freshness, reason, fingerprint_inputs)
+}
+
 fn scoped_reconciliation_fingerprint(
     repository_root: &Path,
-    path: &Path,
-    input_fingerprint: Option<&String>,
+    inputs: &[(PathBuf, Option<String>)],
 ) -> Result<String, WorkspaceError> {
     let revision = git_output(repository_root, &["rev-parse", "HEAD"])?;
     let mut material = revision.into_bytes();
-    material.push(0);
-    material.extend(path.as_os_str().as_encoded_bytes());
-    material.push(0);
-    material.extend(
-        input_fingerprint
-            .map(String::as_bytes)
-            .unwrap_or(b"<missing>"),
-    );
+    for (path, input_fingerprint) in inputs {
+        material.push(0);
+        material.extend(path.as_os_str().as_encoded_bytes());
+        material.push(0);
+        material.extend(
+            input_fingerprint
+                .as_ref()
+                .map(String::as_bytes)
+                .unwrap_or(b"<missing>"),
+        );
+    }
     Ok(hex_digest(&material))
 }
 

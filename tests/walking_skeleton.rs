@@ -1,4 +1,4 @@
-use agent_workspace::{FreshnessWithinScope, Observation, ScopeCompleteness, ScopeSource};
+use agent_workspace::{Claim, FreshnessWithinScope, Observation, ScopeCompleteness, ScopeSource};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -167,6 +167,159 @@ fn schema_one_fingerprint_records_still_replay() {
     assert_eq!(records[1]["schema_version"], 2);
 }
 
+#[test]
+fn s2_declared_dependency_change_makes_claim_stale() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let observation = invoke(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&observation.stdout).unwrap();
+    let claim = invoke(&[
+        "claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--statement",
+        "foo delegates to the helper",
+        "--observation",
+        &observation.id.to_string(),
+        "--dependency",
+        "src/helper.rs",
+    ]);
+    let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
+    assert_eq!(
+        claim.report.scope_assurance.completeness,
+        ScopeCompleteness::NotAsserted
+    );
+    assert_eq!(claim.report.operational_coverage.mediated_paths.len(), 2);
+
+    fs::write(
+        fixture.repository.join("src/helper.rs"),
+        "pub fn helper() -> i32 { 2 }\n",
+    )
+    .unwrap();
+    let reconciled = invoke(&[
+        "reconcile-claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &claim.id.to_string(),
+    ]);
+    let reconciled: Claim = serde_json::from_slice(&reconciled.stdout).unwrap();
+    assert_eq!(
+        reconciled.report.freshness_within_scope,
+        FreshnessWithinScope::Stale
+    );
+    assert_eq!(reconciled.report.reason, "recorded claim input changed");
+}
+
+#[test]
+fn s2_out_of_scope_change_keeps_scoped_claim_current_and_visible() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let observation = invoke(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&observation.stdout).unwrap();
+    let claim = invoke(&[
+        "claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--statement",
+        "foo returns one",
+        "--observation",
+        &observation.id.to_string(),
+    ]);
+    let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
+
+    fs::write(
+        fixture.repository.join("src/helper.rs"),
+        "pub fn helper() -> i32 { 2 }\n",
+    )
+    .unwrap();
+    let reconciled = invoke(&[
+        "reconcile-claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &claim.id.to_string(),
+    ]);
+    let reconciled: Claim = serde_json::from_slice(&reconciled.stdout).unwrap();
+    assert_eq!(
+        reconciled.report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+    assert_eq!(
+        reconciled.report.operational_coverage.mediated_paths,
+        vec![std::path::PathBuf::from("src/lib.rs")]
+    );
+    assert_eq!(
+        claim.report.operational_coverage.reconciliation_fingerprint,
+        reconciled
+            .report
+            .operational_coverage
+            .reconciliation_fingerprint
+    );
+}
+
+#[test]
+fn claim_creation_reconciles_supporting_observations_before_reporting_current() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let observation = invoke(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&observation.stdout).unwrap();
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 { 2 }\n",
+    )
+    .unwrap();
+
+    let claim = invoke(&[
+        "claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--statement",
+        "foo returns one",
+        "--observation",
+        &observation.id.to_string(),
+    ]);
+    let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
+    assert_eq!(
+        claim.report.freshness_within_scope,
+        FreshnessWithinScope::Stale
+    );
+}
+
 fn invoke(arguments: &[&str]) -> Output {
     let output = Command::new(env!("CARGO_BIN_EXE_agent-workspace"))
         .args(arguments)
@@ -192,6 +345,11 @@ impl GitFixture {
         let repository = root.path().join("repository");
         fs::create_dir_all(repository.join("src")).unwrap();
         fs::write(repository.join("src/lib.rs"), "pub fn foo() -> i32 { 1 }\n").unwrap();
+        fs::write(
+            repository.join("src/helper.rs"),
+            "pub fn helper() -> i32 { 1 }\n",
+        )
+        .unwrap();
 
         git(&repository, &["init", "--quiet"]);
         git(
@@ -199,7 +357,7 @@ impl GitFixture {
             &["config", "user.email", "fixture@example.invalid"],
         );
         git(&repository, &["config", "user.name", "Fixture"]);
-        git(&repository, &["add", "src/lib.rs"]);
+        git(&repository, &["add", "src"]);
         git(&repository, &["commit", "--quiet", "-m", "fixture"]);
 
         Self { root, repository }
