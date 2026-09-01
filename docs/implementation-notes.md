@@ -220,3 +220,24 @@ revised when later scenarios expose a better boundary.
   criterion acceptance seam. Post-mutation acceptance remains provisional and
   must not be presented as complete until `AcceptanceCriterion` replaces S4's
   `acceptance_claim_ids` scaffolding.
+
+## 2026-09-01 — CLI ergonomics, surfaced by first dogfooding pass
+
+A hands-on shakeout of the full CLI loop (`bind-objective → observe → claim →
+status`, plus an out-of-band edit to confirm a claim goes `stale` and back to
+`current`) confirmed the mechanism end to end. It also exposed two rough edges
+that belong in the tool, not worked around in the accompanying skill:
+
+- **`bind-objective` returns no id or handle** — it echoes the intent back only,
+  so a caller cannot confirm state was persisted or later reference the objective
+  by id. Every other create verb returns an `id`; this one should too.
+- **IDs are zero-indexed and unforgiving.** `observe` returns `id: 0`, but the
+  natural 1-based instinct (`--observation 1`) fails hard with `not found`. The
+  ergonomic fix is open (echo ids more prominently, or accept and report a
+  clearer error). Until then the skill documents the hazard, but documenting a
+  papercut is not the same as removing it.
+
+These are ergonomics only — the freshness and rollback cores behaved exactly as
+specified. Recorded here so the dogfooding-versus-fix boundary stays honest: the
+skill captures durable *judgment* (defer to a `stale` verdict, declare scope
+honestly), not the tool's fixable quirks.
