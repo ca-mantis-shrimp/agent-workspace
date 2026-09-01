@@ -206,6 +206,14 @@ pub struct Evidence {
 pub enum TransactionState {
     Open,
     Accepted,
+    Reverted,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Mutation {
+    pub path: PathBuf,
+    pub before_fingerprint: String,
+    pub after_fingerprint: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -215,6 +223,7 @@ pub struct Transaction {
     pub initial_worktree_fingerprint: String,
     pub acceptance_claim_ids: Vec<u64>,
     pub evidence_ids: Vec<u64>,
+    pub mutations: Vec<Mutation>,
     pub state: TransactionState,
     pub last_rejection: Option<String>,
 }
@@ -305,7 +314,14 @@ enum Event {
         reason: String,
         reconciliation_fingerprint: String,
     },
+    MutationApplied {
+        transaction_id: u64,
+        mutation: Mutation,
+    },
     TransactionAccepted {
+        transaction_id: u64,
+    },
+    TransactionReverted {
         transaction_id: u64,
     },
     TransactionAcceptanceRejected {
@@ -709,6 +725,97 @@ impl Workspace {
             .ok_or(WorkspaceError::EvidenceNotFound(evidence_id))
     }
 
+    pub fn apply_file_mutation(
+        &self,
+        transaction_id: u64,
+        path: impl AsRef<Path>,
+        new_contents: &[u8],
+    ) -> Result<Transaction, WorkspaceError> {
+        let path = validate_relative_path(path.as_ref())?;
+        let projection = self.project()?;
+        let transaction = projection
+            .transactions
+            .get(&transaction_id)
+            .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+        if transaction.state != TransactionState::Open
+            || transaction
+                .mutations
+                .iter()
+                .any(|mutation| mutation.path == path)
+        {
+            return Err(WorkspaceError::InvalidTransaction(
+                "transaction is not open or already owns this path".to_owned(),
+            ));
+        }
+        let before =
+            git_file_at_revision(&self.repository_root, &transaction.base_revision, &path)?;
+        let absolute_path = self.repository_root.join(&path);
+        let current = fs::read(&absolute_path)?;
+        if current != before {
+            return Err(WorkspaceError::InvalidTransaction(
+                "S6 clean-base mutation requires the path to match the base revision".to_owned(),
+            ));
+        }
+        write_file_atomically(&absolute_path, new_contents)?;
+        let event = Event::MutationApplied {
+            transaction_id,
+            mutation: Mutation {
+                path,
+                before_fingerprint: hex_digest(&before),
+                after_fingerprint: hex_digest(new_contents),
+            },
+        };
+        if let Err(error) = self.append(event) {
+            let _ = write_file_atomically(&absolute_path, &before);
+            return Err(error);
+        }
+        self.resume_status()?
+            .transactions
+            .into_iter()
+            .find(|transaction| transaction.id == transaction_id)
+            .ok_or(WorkspaceError::TransactionNotFound(transaction_id))
+    }
+
+    pub fn revert_transaction(&self, transaction_id: u64) -> Result<Transaction, WorkspaceError> {
+        let projection = self.project()?;
+        let transaction = projection
+            .transactions
+            .get(&transaction_id)
+            .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+        if transaction.state != TransactionState::Open || transaction.mutations.is_empty() {
+            return Err(WorkspaceError::InvalidTransaction(
+                "transaction is not open or has no mutations".to_owned(),
+            ));
+        }
+        for mutation in transaction.mutations.iter().rev() {
+            let absolute_path = self.repository_root.join(&mutation.path);
+            if fingerprint_file(&absolute_path)? != mutation.after_fingerprint {
+                return Err(WorkspaceError::InvalidTransaction(format!(
+                    "revert conflict on {}",
+                    mutation.path.display()
+                )));
+            }
+            let original = git_file_at_revision(
+                &self.repository_root,
+                &transaction.base_revision,
+                &mutation.path,
+            )?;
+            if hex_digest(&original) != mutation.before_fingerprint {
+                return Err(WorkspaceError::CorruptLog(format!(
+                    "base fingerprint mismatch for {}",
+                    mutation.path.display()
+                )));
+            }
+            write_file_atomically(&absolute_path, &original)?;
+        }
+        self.append(Event::TransactionReverted { transaction_id })?;
+        self.resume_status()?
+            .transactions
+            .into_iter()
+            .find(|transaction| transaction.id == transaction_id)
+            .ok_or(WorkspaceError::TransactionNotFound(transaction_id))
+    }
+
     pub fn accept_transaction(&self, transaction_id: u64) -> Result<Transaction, WorkspaceError> {
         let projection = self.project()?;
         let transaction = projection
@@ -996,6 +1103,7 @@ impl Projection {
                         initial_worktree_fingerprint,
                         acceptance_claim_ids,
                         evidence_ids: Vec::new(),
+                        mutations: Vec::new(),
                         state: TransactionState::Open,
                         last_rejection: None,
                     },
@@ -1076,6 +1184,16 @@ impl Projection {
                     .operational_coverage
                     .reconciliation_fingerprint = reconciliation_fingerprint;
             }
+            Event::MutationApplied {
+                transaction_id,
+                mutation,
+            } => {
+                let transaction = self
+                    .transactions
+                    .get_mut(&transaction_id)
+                    .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+                transaction.mutations.push(mutation);
+            }
             Event::TransactionAccepted { transaction_id } => {
                 let transaction = self
                     .transactions
@@ -1083,6 +1201,13 @@ impl Projection {
                     .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
                 transaction.state = TransactionState::Accepted;
                 transaction.last_rejection = None;
+            }
+            Event::TransactionReverted { transaction_id } => {
+                let transaction = self
+                    .transactions
+                    .get_mut(&transaction_id)
+                    .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+                transaction.state = TransactionState::Reverted;
             }
             Event::TransactionAcceptanceRejected {
                 transaction_id,
@@ -1191,6 +1316,50 @@ fn scoped_reconciliation_fingerprint(
         );
     }
     Ok(hex_digest(&material))
+}
+
+fn git_file_at_revision(
+    repository_root: &Path,
+    revision: &str,
+    path: &Path,
+) -> Result<Vec<u8>, WorkspaceError> {
+    let path = path
+        .to_str()
+        .ok_or_else(|| WorkspaceError::Git("non-UTF-8 Git path is not yet supported".to_owned()))?;
+    let object = format!("{revision}:{path}");
+    git_bytes(repository_root, &["show", &object])
+}
+
+fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<(), WorkspaceError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| WorkspaceError::InvalidPath(path.to_owned()))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| WorkspaceError::InvalidPath(path.to_owned()))?;
+    let temporary = parent.join(format!(
+        ".{}.agent-workspace-{}-tmp",
+        file_name.to_string_lossy(),
+        std::process::id()
+    ));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        if let Ok(metadata) = fs::metadata(path) {
+            file.set_permissions(metadata.permissions())?;
+        }
+        file.write_all(contents)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 fn worktree_fingerprint(repository_root: &Path) -> Result<String, WorkspaceError> {

@@ -182,3 +182,41 @@ revised when later scenarios expose a better boundary.
 - This is restart coherence, not yet a useful orientation experience. Manual
   dogfooding should begin once checkpointing and the S6 transaction boundary can
   preserve a real in-progress change safely.
+- **`status` must recompute, never replay (F9 guard).** The write-on-read here is
+  not a smell to remove: `status` reconciles before reporting because serving a
+  last-known verdict without re-checking current inputs would be exactly F9 (an
+  inherited verdict) and could report `current` for a since-changed file. The only
+  sanctioned optimization is no-op suppression — always recompute, persist an event
+  only when a verdict changes. Do not "optimize" `status` into a pure replay; that
+  silently reintroduces F9.
+- The no-writer-lock deferral is sharper now that the resume/read path writes.
+  `status` is the call a projection or agent loop will hit often and possibly
+  concurrently; two concurrent `status` processes collide on sequence and fail
+  **loud** as `CorruptLog` (not silent divergence). As built, `status` is strictly
+  single-writer until locking lands.
+
+## 2026-09-01 — S6 clean-base transaction rollback
+
+- S6 deliberately supports one narrow ownership boundary: a tracked file must
+  still byte-match the transaction's Git base before the transaction may mutate
+  it. Dirty initial files, new files, deletion, and multiple writes to one path
+  remain later scenarios.
+- A mutation event retains repository-relative path plus before/after SHA-256
+  fingerprints, not source bytes. Clean-base rollback reconstructs the original
+  payload through `git show <base>:<path>`, verifies both fingerprints, and writes
+  through a same-directory temporary file plus atomic rename.
+- Revert refuses to proceed when current bytes differ from the transaction's
+  recorded after-fingerprint. S10 will broaden and harden this conflict behavior;
+  S6 proves the clean, unambiguous path.
+- Applying and reverting both cross reconciliation boundaries, so descriptive
+  claims and evidence become stale after the owned mutation and current again
+  only when clean rollback restores their exact recorded inputs.
+- If appending `MutationApplied` fails after the atomic file write, the operation
+  attempts immediate compensation. A process crash between the filesystem write
+  and durable event append remains an unclosed recovery window; prepared/applied
+  mutation events or equivalent journaling are required before this can be
+  called crash-atomic.
+- This rollback slice does not resolve the descriptive-claim versus normative-
+  criterion acceptance seam. Post-mutation acceptance remains provisional and
+  must not be presented as complete until `AcceptanceCriterion` replaces S4's
+  `acceptance_claim_ids` scaffolding.

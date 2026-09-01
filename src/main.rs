@@ -103,6 +103,24 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 )?,
             )?;
         }
+        "apply" => {
+            let id = options
+                .id
+                .ok_or_else(|| CliError::Usage("apply requires --id".to_owned()))?;
+            let path = options
+                .path
+                .ok_or_else(|| CliError::Usage("apply requires --path".to_owned()))?;
+            let contents = options
+                .contents
+                .ok_or_else(|| CliError::Usage("apply requires --content".to_owned()))?;
+            print_json(&workspace.apply_file_mutation(id, path, contents.as_bytes())?)?;
+        }
+        "revert-transaction" => {
+            let id = options
+                .id
+                .ok_or_else(|| CliError::Usage("revert-transaction requires --id".to_owned()))?;
+            print_json(&workspace.revert_transaction(id)?)?;
+        }
         "accept-transaction" => {
             let id = options
                 .id
@@ -138,6 +156,7 @@ struct Options {
     intent: Option<String>,
     external_reference: Option<String>,
     reason: Option<String>,
+    contents: Option<String>,
 }
 
 impl Options {
@@ -160,6 +179,7 @@ impl Options {
         let mut intent = None;
         let mut external_reference = None;
         let mut reason = None;
+        let mut contents = None;
         let mut index = 0;
 
         while index < arguments.len() {
@@ -197,6 +217,7 @@ impl Options {
                 "--intent" => intent = Some(value.clone()),
                 "--reference" => external_reference = Some(value.clone()),
                 "--reason" => reason = Some(value.clone()),
+                "--content" => contents = Some(value.clone()),
                 "--result" => {
                     outcome = Some(match value.as_str() {
                         "passed" => EvidenceOutcome::Passed,
@@ -252,6 +273,7 @@ impl Options {
             intent,
             external_reference,
             reason,
+            contents,
         })
     }
 }
