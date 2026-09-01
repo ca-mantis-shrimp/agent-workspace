@@ -1,7 +1,7 @@
 use agent_workspace::{
-    Claim, ClaimInputSource, Evidence, FreshnessWithinScope, Observation, ObservationCapture,
-    ObservationSelector, RevealedObservation, ScopeCompleteness, ScopeSource, Transaction,
-    TransactionState, WorkspaceStatus,
+    Claim, ClaimInputSource, ClaimLifecycle, Evidence, FreshnessWithinScope, Observation,
+    ObservationCapture, ObservationSelector, RevealedObservation, ScopeCompleteness, ScopeSource,
+    Transaction, TransactionState, WorkspaceStatus,
 };
 use serde_json::Value;
 use std::fs;
@@ -1087,6 +1087,286 @@ fn s7_bounded_perception_reduces_ingestion_with_equal_outcome_and_reveal() {
     );
 }
 
+#[test]
+fn claim_supersession_distinguishes_retired_beliefs_from_active_drift() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let observation = invoke(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&observation.stdout).unwrap();
+
+    let record_claim = |statement: &str, observation_id: u64| {
+        let observation_id = observation_id.to_string();
+        let output = invoke(&[
+            "claim",
+            "--repository",
+            fixture.repository.to_str().unwrap(),
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--statement",
+            statement,
+            "--observation",
+            &observation_id,
+        ]);
+        serde_json::from_slice::<Claim>(&output.stdout).unwrap()
+    };
+    let retired = record_claim("foo returns one", observation.id);
+    let drifted = record_claim("foo has no arguments", observation.id);
+
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 { 2 }\n",
+    )
+    .unwrap();
+    let replacement_observation = invoke(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+    ]);
+    let replacement_observation: Observation =
+        serde_json::from_slice(&replacement_observation.stdout).unwrap();
+    let replacement = record_claim("foo returns two", replacement_observation.id);
+    let superseded = invoke(&[
+        "supersede-claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &retired.id.to_string(),
+        "--claim",
+        &replacement.id.to_string(),
+        "--reason",
+        "the implementation and supported return-value belief changed",
+    ]);
+    let superseded: Claim = serde_json::from_slice(&superseded.stdout).unwrap();
+    assert_eq!(
+        superseded.lifecycle,
+        ClaimLifecycle::Superseded {
+            replacement_claim_id: replacement.id,
+            reason: "the implementation and supported return-value belief changed".to_owned(),
+        }
+    );
+    assert_eq!(
+        superseded.report.freshness_within_scope,
+        FreshnessWithinScope::Stale
+    );
+
+    let status = invoke(&[
+        "status",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+    ]);
+    let status: WorkspaceStatus = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(
+        status
+            .claims
+            .iter()
+            .map(|claim| claim.id)
+            .collect::<Vec<_>>(),
+        vec![drifted.id, replacement.id]
+    );
+    assert_eq!(
+        status.claims[0].report.freshness_within_scope,
+        FreshnessWithinScope::Stale
+    );
+    assert_eq!(status.claims[0].lifecycle, ClaimLifecycle::Active);
+    assert_eq!(status.superseded_claims, vec![superseded]);
+    let resumed = invoke(&[
+        "status",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+    ]);
+    let resumed: WorkspaceStatus = serde_json::from_slice(&resumed.stdout).unwrap();
+    assert_eq!(resumed, status);
+
+    let reconciled_history = invoke(&[
+        "reconcile-claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &retired.id.to_string(),
+    ]);
+    let reconciled_history: Claim = serde_json::from_slice(&reconciled_history.stdout).unwrap();
+    assert_eq!(reconciled_history, status.superseded_claims[0]);
+}
+
+#[test]
+fn claim_supersession_rejects_unsafe_lifecycle_transitions_and_replay() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let observation = invoke(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&observation.stdout).unwrap();
+    let mut claims = Vec::new();
+    for statement in ["claim a", "claim b", "claim c", "claim d"] {
+        let output = invoke(&[
+            "claim",
+            "--repository",
+            fixture.repository.to_str().unwrap(),
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--statement",
+            statement,
+            "--observation",
+            &observation.id.to_string(),
+        ]);
+        claims.push(serde_json::from_slice::<Claim>(&output.stdout).unwrap());
+    }
+
+    for (claim_id, replacement_id, reason, expected) in [
+        (claims[0].id, claims[1].id, "", "must not be empty"),
+        (
+            claims[0].id,
+            claims[0].id,
+            "self replacement",
+            "cannot supersede itself",
+        ),
+    ] {
+        let failure = invoke_failure(&[
+            "supersede-claim",
+            "--repository",
+            fixture.repository.to_str().unwrap(),
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--id",
+            &claim_id.to_string(),
+            "--claim",
+            &replacement_id.to_string(),
+            "--reason",
+            reason,
+        ]);
+        assert!(String::from_utf8_lossy(&failure.stderr).contains(expected));
+    }
+
+    invoke(&[
+        "supersede-claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &claims[0].id.to_string(),
+        "--claim",
+        &claims[1].id.to_string(),
+        "--reason",
+        "b replaces a",
+    ]);
+    let superseded_replacement = invoke_failure(&[
+        "supersede-claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &claims[2].id.to_string(),
+        "--claim",
+        &claims[0].id.to_string(),
+        "--reason",
+        "invalid replacement",
+    ]);
+    assert!(
+        String::from_utf8_lossy(&superseded_replacement.stderr)
+            .contains("replacement claim 0 is superseded")
+    );
+    invoke(&[
+        "supersede-claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &claims[1].id.to_string(),
+        "--claim",
+        &claims[2].id.to_string(),
+        "--reason",
+        "c replaces b",
+    ]);
+
+    let historical_transaction = invoke_failure(&[
+        "begin-transaction",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--claim",
+        &claims[0].id.to_string(),
+    ]);
+    assert!(
+        String::from_utf8_lossy(&historical_transaction.stderr)
+            .contains("acceptance claim 0 is superseded")
+    );
+
+    invoke(&[
+        "begin-transaction",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--claim",
+        &claims[3].id.to_string(),
+    ]);
+    let open_transaction = invoke_failure(&[
+        "supersede-claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &claims[3].id.to_string(),
+        "--claim",
+        &claims[2].id.to_string(),
+        "--reason",
+        "cannot retire open acceptance",
+    ]);
+    assert!(
+        String::from_utf8_lossy(&open_transaction.stderr)
+            .contains("belongs to an open transaction")
+    );
+
+    append_raw_event(
+        &workspace,
+        serde_json::json!({
+            "type": "claim_superseded",
+            "claim_id": claims[3].id,
+            "replacement_claim_id": claims[2].id,
+            "reason": "invalid concurrent retirement"
+        }),
+    );
+    let corrupt = invoke_failure(&[
+        "status",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+    ]);
+    assert!(String::from_utf8_lossy(&corrupt.stderr).contains("belongs to an open transaction"));
+}
+
 #[cfg(unix)]
 #[test]
 fn bounded_observation_rejects_repository_and_payload_symlink_escapes() {
@@ -1261,6 +1541,22 @@ fn complete_bounded_task(repository: &Path, source: &str, perceived_source: &str
         String::from_utf8_lossy(&compile.stderr)
     );
     assert!(Command::new(binary).status().unwrap().success());
+}
+
+fn append_raw_event(workspace: &Path, event: Value) {
+    let event_log = workspace.join("events.jsonl");
+    let mut contents = fs::read_to_string(&event_log).unwrap();
+    let sequence = contents.lines().count() as u64;
+    contents.push_str(
+        &serde_json::to_string(&serde_json::json!({
+            "schema_version": 2,
+            "sequence": sequence,
+            "event": event,
+        }))
+        .unwrap(),
+    );
+    contents.push('\n');
+    fs::write(event_log, contents).unwrap();
 }
 
 fn invoke_failure(arguments: &[&str]) -> Output {

@@ -276,6 +276,42 @@ revised when later scenarios expose a better boundary.
   redaction exists. Retention must not be enabled for secret-bearing provider
   output until that scenario is implemented.
 
+## 2026-09-01 — Claim supersession for handoff correctness
+
+- Claim lifecycle is now orthogonal to freshness. An active claim may be
+  `current`, `stale`, or `unknown`; a superseded claim retains its last freshness
+  report but is explicitly retired with a required replacement claim ID and a
+  non-empty human-readable reason. Input drift therefore no longer doubles as a
+  retirement signal.
+- `supersede-claim --id <old> --claim <replacement> --reason <why>` requires both
+  claims to exist and be active, rejects self-replacement and empty reasons, and
+  refuses to retire an acceptance claim belonging to an open transaction.
+  Replacement chains are permitted, but cycles are prevented because an already
+  superseded claim cannot become a replacement.
+- Resume reconciliation touches both active and superseded claims because
+  freshness remains independent of lifecycle: history must not preserve an
+  inherited `current` verdict after its inputs drift. `WorkspaceStatus.claims` is
+  the live belief set; `superseded_claims` is explicit, freshly reconciled history.
+  The observation-based `working_set` is unchanged, so “leaves the live working
+  set” means leaving the active claim projection rather than deleting support.
+- Superseded claims may be reconciled, but cannot begin a transaction or receive
+  new evidence. Existing evidence remains historical; supersession does not
+  rewrite prior provenance. Supersession itself reconciles the retiring claim
+  before persisting lifecycle state, so its immediate response cannot expose an
+  inherited verdict.
+- `ClaimSuperseded` is an additive schema-v2 event. Claims replayed from older
+  logs default to active. Replay revalidates lifecycle invariants rather than
+  trusting command-layer checks: reasons are non-empty, open transaction claims
+  cannot retire, transactions require active claims, and evidence must match a
+  current active acceptance claim. The fixture keeps two drifted beliefs without
+  pre-reconciling them: supersession discovers one claim's drift, while cold
+  status discovers the other's. They appear in different sections with the
+  replacement link and reason; safety coverage also exercises chains, attempted
+  cycles, transaction guards, and invalid event ordering.
+- This slice curates claims only. Objective completion/replacement, checkpoint
+  deltas, observation focus retirement, and semantic classification of formatting-
+  only drift remain separate work.
+
 ## 2026-09-01 — CLI ergonomics, surfaced by first dogfooding pass
 
 A hands-on shakeout of the full CLI loop (`bind-objective → observe → claim →

@@ -91,6 +91,18 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 .ok_or_else(|| CliError::Usage("reconcile-claim requires --id".to_owned()))?;
             print_json(&workspace.reconcile_claim(id)?)?;
         }
+        "supersede-claim" => {
+            let id = options
+                .id
+                .ok_or_else(|| CliError::Usage("supersede-claim requires --id".to_owned()))?;
+            let replacement_claim_id = options
+                .claim_id
+                .ok_or_else(|| CliError::Usage("supersede-claim requires --claim".to_owned()))?;
+            let reason = options
+                .reason
+                .ok_or_else(|| CliError::Usage("supersede-claim requires --reason".to_owned()))?;
+            print_json(&workspace.supersede_claim(id, replacement_claim_id, reason)?)?;
+        }
         "begin-transaction" => {
             print_json(&workspace.begin_transaction(&options.claim_ids)?)?;
         }

@@ -214,6 +214,23 @@ impl ClaimScopeStrategy {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ClaimLifecycle {
+    #[default]
+    Active,
+    Superseded {
+        replacement_claim_id: u64,
+        reason: String,
+    },
+}
+
+impl ClaimLifecycle {
+    fn is_active(&self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Claim {
     pub id: u64,
@@ -221,6 +238,8 @@ pub struct Claim {
     pub supporting_observation_ids: Vec<u64>,
     pub scope_strategy: ClaimScopeStrategy,
     pub inputs: Vec<ClaimInput>,
+    #[serde(default)]
+    pub lifecycle: ClaimLifecycle,
     pub report: FreshnessReport,
 }
 
@@ -289,6 +308,8 @@ pub struct WorkspaceStatus {
     pub working_set: Vec<WorkingSetEntry>,
     pub observations: Vec<Observation>,
     pub claims: Vec<Claim>,
+    #[serde(default)]
+    pub superseded_claims: Vec<Claim>,
     pub evidence: Vec<Evidence>,
     pub transactions: Vec<Transaction>,
 }
@@ -351,6 +372,11 @@ enum Event {
         freshness: FreshnessWithinScope,
         reason: String,
         reconciliation_fingerprint: String,
+    },
+    ClaimSuperseded {
+        claim_id: u64,
+        replacement_claim_id: u64,
+        reason: String,
     },
     TransactionBegan {
         transaction_id: u64,
@@ -473,11 +499,16 @@ impl Workspace {
             self.reconcile_evidence(evidence_id)?;
         }
         let projection = self.project()?;
+        let (claims, superseded_claims) = projection
+            .claims
+            .into_values()
+            .partition(|claim| claim.lifecycle.is_active());
         Ok(WorkspaceStatus {
             objective: projection.objective,
             working_set: projection.working_set.into_values().collect(),
             observations: projection.observations.into_values().collect(),
-            claims: projection.claims.into_values().collect(),
+            claims,
+            superseded_claims,
             evidence: projection.evidence.into_values().collect(),
             transactions: projection.transactions.into_values().collect(),
         })
@@ -793,6 +824,63 @@ impl Workspace {
             .ok_or(WorkspaceError::ClaimNotFound(claim_id))
     }
 
+    pub fn supersede_claim(
+        &self,
+        claim_id: u64,
+        replacement_claim_id: u64,
+        reason: impl Into<String>,
+    ) -> Result<Claim, WorkspaceError> {
+        let reason = reason.into();
+        if reason.trim().is_empty() {
+            return Err(WorkspaceError::InvalidClaim(
+                "supersession reason must not be empty".to_owned(),
+            ));
+        }
+        if claim_id == replacement_claim_id {
+            return Err(WorkspaceError::InvalidClaim(
+                "a claim cannot supersede itself".to_owned(),
+            ));
+        }
+        let projection = self.project()?;
+        let claim = projection
+            .claims
+            .get(&claim_id)
+            .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
+        if !claim.lifecycle.is_active() {
+            return Err(WorkspaceError::InvalidClaim(format!(
+                "claim {claim_id} is already superseded"
+            )));
+        }
+        let replacement = projection
+            .claims
+            .get(&replacement_claim_id)
+            .ok_or(WorkspaceError::ClaimNotFound(replacement_claim_id))?;
+        if !replacement.lifecycle.is_active() {
+            return Err(WorkspaceError::InvalidClaim(format!(
+                "replacement claim {replacement_claim_id} is superseded"
+            )));
+        }
+        if projection.transactions.values().any(|transaction| {
+            transaction.state == TransactionState::Open
+                && transaction.acceptance_claim_ids.contains(&claim_id)
+        }) {
+            return Err(WorkspaceError::InvalidClaim(format!(
+                "claim {claim_id} belongs to an open transaction"
+            )));
+        }
+
+        self.reconcile_claim(claim_id)?;
+        self.append(Event::ClaimSuperseded {
+            claim_id,
+            replacement_claim_id,
+            reason,
+        })?;
+        self.project()?
+            .claims
+            .remove(&claim_id)
+            .ok_or(WorkspaceError::ClaimNotFound(claim_id))
+    }
+
     pub fn begin_transaction(
         &self,
         acceptance_claim_ids: &[u64],
@@ -804,8 +892,14 @@ impl Workspace {
         }
         let projection = self.project()?;
         for claim_id in acceptance_claim_ids {
-            if !projection.claims.contains_key(claim_id) {
-                return Err(WorkspaceError::ClaimNotFound(*claim_id));
+            let claim = projection
+                .claims
+                .get(claim_id)
+                .ok_or(WorkspaceError::ClaimNotFound(*claim_id))?;
+            if !claim.lifecycle.is_active() {
+                return Err(WorkspaceError::InvalidTransaction(format!(
+                    "acceptance claim {claim_id} is superseded"
+                )));
             }
         }
         let transaction_id = projection.next_transaction_id;
@@ -847,6 +941,11 @@ impl Workspace {
             .claims
             .get(&claim_id)
             .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
+        if !claim.lifecycle.is_active() {
+            return Err(WorkspaceError::InvalidEvidence(format!(
+                "claim {claim_id} is superseded"
+            )));
+        }
         let inputs = claim.inputs.clone();
         let (freshness, reason, fingerprint_inputs) =
             assess_claim_inputs(&self.repository_root, &inputs);
@@ -1321,6 +1420,7 @@ impl Projection {
                         supporting_observation_ids,
                         scope_strategy,
                         inputs,
+                        lifecycle: ClaimLifecycle::Active,
                         report: FreshnessReport {
                             freshness_within_scope: freshness,
                             scope_assurance: ScopeAssurance {
@@ -1352,6 +1452,52 @@ impl Projection {
                 claim.report.operational_coverage.reconciliation_fingerprint =
                     reconciliation_fingerprint;
             }
+            Event::ClaimSuperseded {
+                claim_id,
+                replacement_claim_id,
+                reason,
+            } => {
+                if reason.trim().is_empty() {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "claim {claim_id} has an empty supersession reason"
+                    )));
+                }
+                if claim_id == replacement_claim_id {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "claim {claim_id} supersedes itself"
+                    )));
+                }
+                if self.transactions.values().any(|transaction| {
+                    transaction.state == TransactionState::Open
+                        && transaction.acceptance_claim_ids.contains(&claim_id)
+                }) {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "superseded claim {claim_id} belongs to an open transaction"
+                    )));
+                }
+                let replacement = self
+                    .claims
+                    .get(&replacement_claim_id)
+                    .ok_or(WorkspaceError::ClaimNotFound(replacement_claim_id))?;
+                if !replacement.lifecycle.is_active() {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "replacement claim {replacement_claim_id} is superseded"
+                    )));
+                }
+                let claim = self
+                    .claims
+                    .get_mut(&claim_id)
+                    .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
+                if !claim.lifecycle.is_active() {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "claim {claim_id} is already superseded"
+                    )));
+                }
+                claim.lifecycle = ClaimLifecycle::Superseded {
+                    replacement_claim_id,
+                    reason,
+                };
+            }
             Event::TransactionBegan {
                 transaction_id,
                 base_revision,
@@ -1362,6 +1508,22 @@ impl Projection {
                     return Err(WorkspaceError::CorruptLog(format!(
                         "duplicate transaction {transaction_id}"
                     )));
+                }
+                if acceptance_claim_ids.is_empty() {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "transaction {transaction_id} has no acceptance claims"
+                    )));
+                }
+                for claim_id in &acceptance_claim_ids {
+                    let claim = self
+                        .claims
+                        .get(claim_id)
+                        .ok_or(WorkspaceError::ClaimNotFound(*claim_id))?;
+                    if !claim.lifecycle.is_active() {
+                        return Err(WorkspaceError::CorruptLog(format!(
+                            "transaction {transaction_id} references superseded claim {claim_id}"
+                        )));
+                    }
                 }
                 self.next_transaction_id = self.next_transaction_id.max(transaction_id + 1);
                 self.transactions.insert(
@@ -1398,14 +1560,49 @@ impl Projection {
                 }
                 let transaction = self
                     .transactions
-                    .get_mut(&transaction_id)
+                    .get(&transaction_id)
                     .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+                if transaction.state != TransactionState::Open
+                    || !transaction.acceptance_claim_ids.contains(&claim_id)
+                {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "evidence {evidence_id} does not support an open transaction acceptance claim"
+                    )));
+                }
                 let claim = self
                     .claims
                     .get(&claim_id)
                     .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
+                if !claim.lifecycle.is_active() {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "evidence {evidence_id} references superseded claim {claim_id}"
+                    )));
+                }
+                if inputs != claim.inputs || freshness != FreshnessWithinScope::Current {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "evidence {evidence_id} does not match its current claim inputs"
+                    )));
+                }
+                let assurance_source = claim.report.scope_assurance.source.clone();
+                let mediated_paths = claim
+                    .inputs
+                    .iter()
+                    .map(|input| input.path.clone())
+                    .collect();
+                let mediated_units = claim
+                    .inputs
+                    .iter()
+                    .map(|input| MediatedUnit {
+                        path: input.path.clone(),
+                        selector: input.selector.clone(),
+                    })
+                    .collect();
                 self.next_evidence_id = self.next_evidence_id.max(evidence_id + 1);
-                transaction.evidence_ids.push(evidence_id);
+                self.transactions
+                    .get_mut(&transaction_id)
+                    .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?
+                    .evidence_ids
+                    .push(evidence_id);
                 self.evidence.insert(
                     evidence_id,
                     Evidence {
@@ -1420,23 +1617,12 @@ impl Projection {
                         report: FreshnessReport {
                             freshness_within_scope: freshness,
                             scope_assurance: ScopeAssurance {
-                                source: claim.report.scope_assurance.source.clone(),
+                                source: assurance_source,
                                 completeness: ScopeCompleteness::NotAsserted,
                             },
                             operational_coverage: OperationalCoverage {
-                                mediated_paths: claim
-                                    .inputs
-                                    .iter()
-                                    .map(|input| input.path.clone())
-                                    .collect(),
-                                mediated_units: claim
-                                    .inputs
-                                    .iter()
-                                    .map(|input| MediatedUnit {
-                                        path: input.path.clone(),
-                                        selector: input.selector.clone(),
-                                    })
-                                    .collect(),
+                                mediated_paths,
+                                mediated_units,
                                 reconciliation_fingerprint,
                             },
                             reason,
