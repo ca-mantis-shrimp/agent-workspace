@@ -1,5 +1,6 @@
 use agent_workspace::{
-    Claim, ClaimInputSource, FreshnessWithinScope, Observation, ScopeCompleteness, ScopeSource,
+    Claim, ClaimInputSource, Evidence, FreshnessWithinScope, Observation, ScopeCompleteness,
+    ScopeSource, Transaction, TransactionState,
 };
 use serde_json::Value;
 use std::fs;
@@ -435,6 +436,160 @@ fn claim_creation_reconciles_supporting_observations_before_reporting_current() 
         claim.report.freshness_within_scope,
         FreshnessWithinScope::Stale
     );
+}
+
+#[test]
+fn s4_stale_evidence_cannot_accept_transaction() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let observation = invoke(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&observation.stdout).unwrap();
+    let claim = invoke(&[
+        "claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--statement",
+        "foo returns one",
+        "--observation",
+        &observation.id.to_string(),
+    ]);
+    let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
+    let transaction = invoke(&[
+        "begin-transaction",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--claim",
+        &claim.id.to_string(),
+    ]);
+    let transaction: Transaction = serde_json::from_slice(&transaction.stdout).unwrap();
+    let evidence = invoke(&[
+        "evidence",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--transaction",
+        &transaction.id.to_string(),
+        "--claim",
+        &claim.id.to_string(),
+        "--check",
+        "fixture-check",
+        "--invocation",
+        "fixture check",
+        "--provider",
+        "fixture-runner",
+        "--result",
+        "passed",
+    ]);
+    let evidence: Evidence = serde_json::from_slice(&evidence.stdout).unwrap();
+    assert_eq!(
+        evidence.report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 { 2 }\n",
+    )
+    .unwrap();
+    let rejected = invoke(&[
+        "accept-transaction",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &transaction.id.to_string(),
+    ]);
+    let rejected: Transaction = serde_json::from_slice(&rejected.stdout).unwrap();
+    assert_eq!(rejected.state, TransactionState::Open);
+    assert_eq!(
+        rejected.last_rejection.as_deref(),
+        Some("acceptance claims lack current passing evidence")
+    );
+
+    let event_log = fs::read_to_string(workspace.join("events.jsonl")).unwrap();
+    assert!(event_log.contains("\"type\":\"evidence_reconciled\""));
+    assert!(event_log.contains("\"freshness\":\"stale\""));
+    assert!(event_log.contains("\"type\":\"transaction_acceptance_rejected\""));
+}
+
+#[test]
+fn current_passing_evidence_accepts_transaction() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let observation = invoke(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&observation.stdout).unwrap();
+    let claim = invoke(&[
+        "claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--statement",
+        "foo returns one",
+        "--observation",
+        &observation.id.to_string(),
+    ]);
+    let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
+    let transaction = invoke(&[
+        "begin-transaction",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--claim",
+        &claim.id.to_string(),
+    ]);
+    let transaction: Transaction = serde_json::from_slice(&transaction.stdout).unwrap();
+    invoke(&[
+        "evidence",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--transaction",
+        &transaction.id.to_string(),
+        "--claim",
+        &claim.id.to_string(),
+        "--check",
+        "fixture-check",
+        "--invocation",
+        "fixture check",
+        "--result",
+        "passed",
+    ]);
+    let accepted = invoke(&[
+        "accept-transaction",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &transaction.id.to_string(),
+    ]);
+    let accepted: Transaction = serde_json::from_slice(&accepted.stdout).unwrap();
+    assert_eq!(accepted.state, TransactionState::Accepted);
 }
 
 fn invoke(arguments: &[&str]) -> Output {

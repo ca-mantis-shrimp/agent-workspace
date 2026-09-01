@@ -1,4 +1,4 @@
-use agent_workspace::{ClaimScopeStrategy, Workspace, WorkspaceError};
+use agent_workspace::{ClaimScopeStrategy, EvidenceOutcome, Workspace, WorkspaceError};
 use serde::Serialize;
 use std::env;
 use std::path::PathBuf;
@@ -52,6 +52,39 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 .ok_or_else(|| CliError::Usage("reconcile-claim requires --id".to_owned()))?;
             print_json(&workspace.reconcile_claim(id)?)?;
         }
+        "begin-transaction" => {
+            print_json(&workspace.begin_transaction(&options.claim_ids)?)?;
+        }
+        "evidence" => {
+            let transaction_id = options
+                .transaction_id
+                .ok_or_else(|| CliError::Usage("evidence requires --transaction".to_owned()))?;
+            let claim_id = options
+                .claim_id
+                .ok_or_else(|| CliError::Usage("evidence requires --claim".to_owned()))?;
+            print_json(
+                &workspace.record_evidence(
+                    transaction_id,
+                    claim_id,
+                    options
+                        .check_name
+                        .ok_or_else(|| CliError::Usage("evidence requires --check".to_owned()))?,
+                    options.invocation.ok_or_else(|| {
+                        CliError::Usage("evidence requires --invocation".to_owned())
+                    })?,
+                    options.provider.unwrap_or_else(|| "imported".to_owned()),
+                    options
+                        .outcome
+                        .ok_or_else(|| CliError::Usage("evidence requires --result".to_owned()))?,
+                )?,
+            )?;
+        }
+        "accept-transaction" => {
+            let id = options
+                .id
+                .ok_or_else(|| CliError::Usage("accept-transaction requires --id".to_owned()))?;
+            print_json(&workspace.accept_transaction(id)?)?;
+        }
         _ => return Err(CliError::Usage(usage())),
     }
     Ok(())
@@ -72,6 +105,12 @@ struct Options {
     observation_ids: Vec<u64>,
     dependencies: Vec<PathBuf>,
     scope_strategy: ClaimScopeStrategy,
+    claim_ids: Vec<u64>,
+    claim_id: Option<u64>,
+    transaction_id: Option<u64>,
+    check_name: Option<String>,
+    invocation: Option<String>,
+    outcome: Option<EvidenceOutcome>,
 }
 
 impl Options {
@@ -85,6 +124,12 @@ impl Options {
         let mut observation_ids = Vec::new();
         let mut dependencies = Vec::new();
         let mut scope_strategy = ClaimScopeStrategy::Declared;
+        let mut claim_ids = Vec::new();
+        let mut claim_id = None;
+        let mut transaction_id = None;
+        let mut check_name = None;
+        let mut invocation = None;
+        let mut outcome = None;
         let mut index = 0;
 
         while index < arguments.len() {
@@ -104,6 +149,32 @@ impl Options {
                         .map_err(|_| CliError::Usage(format!("invalid observation id: {value}")))?,
                 ),
                 "--dependency" => dependencies.push(PathBuf::from(value)),
+                "--claim" => {
+                    let parsed = value
+                        .parse()
+                        .map_err(|_| CliError::Usage(format!("invalid claim id: {value}")))?;
+                    claim_ids.push(parsed);
+                    claim_id = Some(parsed);
+                }
+                "--transaction" => {
+                    transaction_id =
+                        Some(value.parse().map_err(|_| {
+                            CliError::Usage(format!("invalid transaction id: {value}"))
+                        })?)
+                }
+                "--check" => check_name = Some(value.clone()),
+                "--invocation" => invocation = Some(value.clone()),
+                "--result" => {
+                    outcome = Some(match value.as_str() {
+                        "passed" => EvidenceOutcome::Passed,
+                        "failed" => EvidenceOutcome::Failed,
+                        _ => {
+                            return Err(CliError::Usage(format!(
+                                "invalid evidence result: {value}"
+                            )));
+                        }
+                    })
+                }
                 "--scope" => {
                     scope_strategy = match value.as_str() {
                         "declared" => ClaimScopeStrategy::Declared,
@@ -139,6 +210,12 @@ impl Options {
             observation_ids,
             dependencies,
             scope_strategy,
+            claim_ids,
+            claim_id,
+            transaction_id,
+            check_name,
+            invocation,
+            outcome,
         })
     }
 }
@@ -173,5 +250,5 @@ impl From<serde_json::Error> for CliError {
 }
 
 fn usage() -> String {
-    "usage: agent-workspace <observe|reconcile|claim|reconcile-claim> --repository PATH --workspace PATH [options]".to_owned()
+    "usage: agent-workspace <command> --repository PATH --workspace PATH [options]".to_owned()
 }

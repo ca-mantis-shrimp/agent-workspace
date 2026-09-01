@@ -91,3 +91,22 @@ revised when later scenarios expose a better boundary.
   renders `freshness_within_scope` without its `scope_assurance` silently
   reintroduces F1 — and no kernel test will catch it, because the kernel is
   behaving correctly. Whoever builds that projection inherits this obligation.
+
+## 2026-09-01 — S4 evidence invalidation and acceptance gating
+
+- Evidence records a transaction and acceptance claim, check name, exact
+  invocation, provider identity, outcome, copied claim inputs, and the complete
+  scoped freshness report. The current slice imports outcomes; executing checks
+  through an authoritative validation provider remains deferred.
+- Evidence may be recorded only for a current claim belonging to an open
+  transaction. A failed check is retained but cannot satisfy acceptance.
+- Transaction acceptance is a reconciliation boundary for every acceptance
+  claim and associated evidence item. Acceptance requires each claim to remain
+  current and to have current passing evidence; rejection is itself persisted
+  with a reason.
+- The minimal transaction boundary records the Git revision and a SHA-256
+  fingerprint over current tracked and untracked worktree contents. Mutation
+  ownership, rollback, and overlapping-write behavior remain S6 work.
+- The fixture proves both sides of the gate: unchanged passing evidence accepts,
+  while an out-of-band relevant edit makes the claim and evidence stale and
+  leaves the transaction open with a persisted rejection.

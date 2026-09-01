@@ -20,6 +20,10 @@ pub enum WorkspaceError {
     ObservationNotFound(u64),
     ClaimNotFound(u64),
     InvalidClaim(String),
+    EvidenceNotFound(u64),
+    InvalidEvidence(String),
+    TransactionNotFound(u64),
+    InvalidTransaction(String),
     CorruptLog(String),
 }
 
@@ -39,6 +43,12 @@ impl fmt::Display for WorkspaceError {
             Self::ObservationNotFound(id) => write!(formatter, "observation {id} not found"),
             Self::ClaimNotFound(id) => write!(formatter, "claim {id} not found"),
             Self::InvalidClaim(message) => write!(formatter, "invalid claim: {message}"),
+            Self::EvidenceNotFound(id) => write!(formatter, "evidence {id} not found"),
+            Self::InvalidEvidence(message) => write!(formatter, "invalid evidence: {message}"),
+            Self::TransactionNotFound(id) => write!(formatter, "transaction {id} not found"),
+            Self::InvalidTransaction(message) => {
+                write!(formatter, "invalid transaction: {message}")
+            }
             Self::CorruptLog(message) => write!(formatter, "corrupt event log: {message}"),
         }
     }
@@ -153,6 +163,44 @@ pub struct Claim {
     pub report: FreshnessReport,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceOutcome {
+    Passed,
+    Failed,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Evidence {
+    pub id: u64,
+    pub transaction_id: u64,
+    pub claim_id: u64,
+    pub check_name: String,
+    pub invocation: String,
+    pub provider: String,
+    pub outcome: EvidenceOutcome,
+    pub inputs: Vec<ClaimInput>,
+    pub report: FreshnessReport,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionState {
+    Open,
+    Accepted,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Transaction {
+    pub id: u64,
+    pub base_revision: String,
+    pub initial_worktree_fingerprint: String,
+    pub acceptance_claim_ids: Vec<u64>,
+    pub evidence_ids: Vec<u64>,
+    pub state: TransactionState,
+    pub last_rejection: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct EventRecord {
     schema_version: u32,
@@ -195,6 +243,38 @@ enum Event {
         freshness: FreshnessWithinScope,
         reason: String,
         reconciliation_fingerprint: String,
+    },
+    TransactionBegan {
+        transaction_id: u64,
+        base_revision: String,
+        initial_worktree_fingerprint: String,
+        acceptance_claim_ids: Vec<u64>,
+    },
+    EvidenceRecorded {
+        evidence_id: u64,
+        transaction_id: u64,
+        claim_id: u64,
+        check_name: String,
+        invocation: String,
+        provider: String,
+        outcome: EvidenceOutcome,
+        inputs: Vec<ClaimInput>,
+        freshness: FreshnessWithinScope,
+        reason: String,
+        reconciliation_fingerprint: String,
+    },
+    EvidenceReconciled {
+        evidence_id: u64,
+        freshness: FreshnessWithinScope,
+        reason: String,
+        reconciliation_fingerprint: String,
+    },
+    TransactionAccepted {
+        transaction_id: u64,
+    },
+    TransactionAcceptanceRejected {
+        transaction_id: u64,
+        reason: String,
     },
 }
 
@@ -416,6 +496,165 @@ impl Workspace {
             .ok_or(WorkspaceError::ClaimNotFound(claim_id))
     }
 
+    pub fn begin_transaction(
+        &self,
+        acceptance_claim_ids: &[u64],
+    ) -> Result<Transaction, WorkspaceError> {
+        if acceptance_claim_ids.is_empty() {
+            return Err(WorkspaceError::InvalidTransaction(
+                "at least one acceptance claim is required".to_owned(),
+            ));
+        }
+        let projection = self.project()?;
+        for claim_id in acceptance_claim_ids {
+            if !projection.claims.contains_key(claim_id) {
+                return Err(WorkspaceError::ClaimNotFound(*claim_id));
+            }
+        }
+        let transaction_id = projection.next_transaction_id;
+        self.append(Event::TransactionBegan {
+            transaction_id,
+            base_revision: git_output(&self.repository_root, &["rev-parse", "HEAD"])?,
+            initial_worktree_fingerprint: worktree_fingerprint(&self.repository_root)?,
+            acceptance_claim_ids: acceptance_claim_ids.to_vec(),
+        })?;
+        self.project()?
+            .transactions
+            .remove(&transaction_id)
+            .ok_or(WorkspaceError::TransactionNotFound(transaction_id))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_evidence(
+        &self,
+        transaction_id: u64,
+        claim_id: u64,
+        check_name: impl Into<String>,
+        invocation: impl Into<String>,
+        provider: impl Into<String>,
+        outcome: EvidenceOutcome,
+    ) -> Result<Evidence, WorkspaceError> {
+        let projection = self.project()?;
+        let transaction = projection
+            .transactions
+            .get(&transaction_id)
+            .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+        if transaction.state != TransactionState::Open
+            || !transaction.acceptance_claim_ids.contains(&claim_id)
+        {
+            return Err(WorkspaceError::InvalidEvidence(
+                "evidence must support an open transaction acceptance claim".to_owned(),
+            ));
+        }
+        let claim = projection
+            .claims
+            .get(&claim_id)
+            .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
+        let inputs = claim.inputs.clone();
+        let (freshness, reason, fingerprint_inputs) =
+            assess_claim_inputs(&self.repository_root, &inputs);
+        if freshness != FreshnessWithinScope::Current {
+            return Err(WorkspaceError::InvalidEvidence(
+                "claim inputs are not current".to_owned(),
+            ));
+        }
+        let evidence_id = projection.next_evidence_id;
+        self.append(Event::EvidenceRecorded {
+            evidence_id,
+            transaction_id,
+            claim_id,
+            check_name: check_name.into(),
+            invocation: invocation.into(),
+            provider: provider.into(),
+            outcome,
+            inputs,
+            freshness,
+            reason,
+            reconciliation_fingerprint: scoped_reconciliation_fingerprint(
+                &self.repository_root,
+                &fingerprint_inputs,
+            )?,
+        })?;
+        self.project()?
+            .evidence
+            .remove(&evidence_id)
+            .ok_or(WorkspaceError::EvidenceNotFound(evidence_id))
+    }
+
+    pub fn reconcile_evidence(&self, evidence_id: u64) -> Result<Evidence, WorkspaceError> {
+        let projection = self.project()?;
+        let evidence = projection
+            .evidence
+            .get(&evidence_id)
+            .ok_or(WorkspaceError::EvidenceNotFound(evidence_id))?;
+        let (freshness, reason, fingerprint_inputs) =
+            assess_claim_inputs(&self.repository_root, &evidence.inputs);
+        self.append(Event::EvidenceReconciled {
+            evidence_id,
+            freshness,
+            reason,
+            reconciliation_fingerprint: scoped_reconciliation_fingerprint(
+                &self.repository_root,
+                &fingerprint_inputs,
+            )?,
+        })?;
+        self.project()?
+            .evidence
+            .remove(&evidence_id)
+            .ok_or(WorkspaceError::EvidenceNotFound(evidence_id))
+    }
+
+    pub fn accept_transaction(&self, transaction_id: u64) -> Result<Transaction, WorkspaceError> {
+        let projection = self.project()?;
+        let transaction = projection
+            .transactions
+            .get(&transaction_id)
+            .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+        if transaction.state != TransactionState::Open {
+            return Err(WorkspaceError::InvalidTransaction(
+                "transaction is not open".to_owned(),
+            ));
+        }
+        let claim_ids = transaction.acceptance_claim_ids.clone();
+        let evidence_ids = transaction.evidence_ids.clone();
+        for claim_id in &claim_ids {
+            self.reconcile_claim(*claim_id)?;
+        }
+        for evidence_id in &evidence_ids {
+            self.reconcile_evidence(*evidence_id)?;
+        }
+
+        let projection = self.project()?;
+        let validated = claim_ids.iter().all(|claim_id| {
+            projection.claims.get(claim_id).is_some_and(|claim| {
+                claim.report.freshness_within_scope == FreshnessWithinScope::Current
+                    && evidence_ids.iter().any(|evidence_id| {
+                        projection
+                            .evidence
+                            .get(evidence_id)
+                            .is_some_and(|evidence| {
+                                evidence.claim_id == *claim_id
+                                    && evidence.outcome == EvidenceOutcome::Passed
+                                    && evidence.report.freshness_within_scope
+                                        == FreshnessWithinScope::Current
+                            })
+                    })
+            })
+        });
+        if validated {
+            self.append(Event::TransactionAccepted { transaction_id })?;
+        } else {
+            self.append(Event::TransactionAcceptanceRejected {
+                transaction_id,
+                reason: "acceptance claims lack current passing evidence".to_owned(),
+            })?;
+        }
+        self.project()?
+            .transactions
+            .remove(&transaction_id)
+            .ok_or(WorkspaceError::TransactionNotFound(transaction_id))
+    }
+
     pub fn event_log_path(&self) -> PathBuf {
         self.workspace_root.join(EVENT_LOG_NAME)
     }
@@ -462,8 +701,12 @@ impl Workspace {
 struct Projection {
     observations: BTreeMap<u64, Observation>,
     claims: BTreeMap<u64, Claim>,
+    evidence: BTreeMap<u64, Evidence>,
+    transactions: BTreeMap<u64, Transaction>,
     next_observation_id: u64,
     next_claim_id: u64,
+    next_evidence_id: u64,
+    next_transaction_id: u64,
     next_sequence: u64,
 }
 
@@ -602,6 +845,124 @@ impl Projection {
                 claim.report.operational_coverage.reconciliation_fingerprint =
                     reconciliation_fingerprint;
             }
+            Event::TransactionBegan {
+                transaction_id,
+                base_revision,
+                initial_worktree_fingerprint,
+                acceptance_claim_ids,
+            } => {
+                if self.transactions.contains_key(&transaction_id) {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "duplicate transaction {transaction_id}"
+                    )));
+                }
+                self.next_transaction_id = self.next_transaction_id.max(transaction_id + 1);
+                self.transactions.insert(
+                    transaction_id,
+                    Transaction {
+                        id: transaction_id,
+                        base_revision,
+                        initial_worktree_fingerprint,
+                        acceptance_claim_ids,
+                        evidence_ids: Vec::new(),
+                        state: TransactionState::Open,
+                        last_rejection: None,
+                    },
+                );
+            }
+            Event::EvidenceRecorded {
+                evidence_id,
+                transaction_id,
+                claim_id,
+                check_name,
+                invocation,
+                provider,
+                outcome,
+                inputs,
+                freshness,
+                reason,
+                reconciliation_fingerprint,
+            } => {
+                if self.evidence.contains_key(&evidence_id) {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "duplicate evidence {evidence_id}"
+                    )));
+                }
+                let transaction = self
+                    .transactions
+                    .get_mut(&transaction_id)
+                    .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+                let claim = self
+                    .claims
+                    .get(&claim_id)
+                    .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
+                self.next_evidence_id = self.next_evidence_id.max(evidence_id + 1);
+                transaction.evidence_ids.push(evidence_id);
+                self.evidence.insert(
+                    evidence_id,
+                    Evidence {
+                        id: evidence_id,
+                        transaction_id,
+                        claim_id,
+                        check_name,
+                        invocation,
+                        provider,
+                        outcome,
+                        inputs,
+                        report: FreshnessReport {
+                            freshness_within_scope: freshness,
+                            scope_assurance: ScopeAssurance {
+                                source: claim.report.scope_assurance.source.clone(),
+                                completeness: ScopeCompleteness::NotAsserted,
+                            },
+                            operational_coverage: OperationalCoverage {
+                                mediated_paths: claim
+                                    .inputs
+                                    .iter()
+                                    .map(|input| input.path.clone())
+                                    .collect(),
+                                reconciliation_fingerprint,
+                            },
+                            reason,
+                        },
+                    },
+                );
+            }
+            Event::EvidenceReconciled {
+                evidence_id,
+                freshness,
+                reason,
+                reconciliation_fingerprint,
+            } => {
+                let evidence = self
+                    .evidence
+                    .get_mut(&evidence_id)
+                    .ok_or(WorkspaceError::EvidenceNotFound(evidence_id))?;
+                evidence.report.freshness_within_scope = freshness;
+                evidence.report.reason = reason;
+                evidence
+                    .report
+                    .operational_coverage
+                    .reconciliation_fingerprint = reconciliation_fingerprint;
+            }
+            Event::TransactionAccepted { transaction_id } => {
+                let transaction = self
+                    .transactions
+                    .get_mut(&transaction_id)
+                    .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+                transaction.state = TransactionState::Accepted;
+                transaction.last_rejection = None;
+            }
+            Event::TransactionAcceptanceRejected {
+                transaction_id,
+                reason,
+            } => {
+                let transaction = self
+                    .transactions
+                    .get_mut(&transaction_id)
+                    .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+                transaction.last_rejection = Some(reason);
+            }
         }
         Ok(())
     }
@@ -697,6 +1058,42 @@ fn scoped_reconciliation_fingerprint(
                 .map(String::as_bytes)
                 .unwrap_or(b"<missing>"),
         );
+    }
+    Ok(hex_digest(&material))
+}
+
+fn worktree_fingerprint(repository_root: &Path) -> Result<String, WorkspaceError> {
+    let listed = git_bytes(
+        repository_root,
+        &[
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
+    )?;
+    let mut paths: Vec<_> = listed
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| path.to_vec())
+        .collect();
+    paths.sort();
+    let mut material = Vec::new();
+    for encoded_path in paths {
+        let path = PathBuf::from(String::from_utf8(encoded_path).map_err(|error| {
+            WorkspaceError::Git(format!("non-UTF-8 Git path is not yet supported: {error}"))
+        })?);
+        material.extend(path.as_os_str().as_encoded_bytes());
+        material.push(0);
+        match fs::read(repository_root.join(&path)) {
+            Ok(bytes) => material.extend(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                material.extend(b"<missing>")
+            }
+            Err(error) => return Err(WorkspaceError::Io(error)),
+        }
+        material.push(0);
     }
     Ok(hex_digest(&material))
 }
