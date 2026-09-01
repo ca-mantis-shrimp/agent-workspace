@@ -84,3 +84,10 @@ revised when later scenarios expose a better boundary.
   cases, not silently claimed coverage.
 - `--scope conservative-siblings` is a walking-skeleton switch, not a commitment
   to this strategy as the eventual agent-facing default.
+- Conservative scope makes contract invariant I2 load-bearing at the projection
+  layer. A conservative claim is honest only because it reports
+  `conservative` / `not-asserted`: a cross-directory dependency it missed is a
+  disclosed gap, not a false-current. The first projection (Pi, Neovim) that
+  renders `freshness_within_scope` without its `scope_assurance` silently
+  reintroduces F1 — and no kernel test will catch it, because the kernel is
+  behaving correctly. Whoever builds that projection inherits this obligation.
