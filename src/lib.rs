@@ -10,6 +10,9 @@ use std::process::Command;
 const EVENT_SCHEMA_VERSION: u32 = 2;
 const MINIMUM_EVENT_SCHEMA_VERSION: u32 = 1;
 const EVENT_LOG_NAME: &str = "events.jsonl";
+const MAX_RETAINED_PAYLOAD_BYTES: usize = 1024 * 1024;
+type FingerprintInput = (PathBuf, ObservationSelector, Option<String>);
+type ClaimAssessment = (FreshnessWithinScope, String, Vec<FingerprintInput>);
 
 #[derive(Debug)]
 pub enum WorkspaceError {
@@ -20,6 +23,7 @@ pub enum WorkspaceError {
     InvalidWorkingSet(String),
     Git(String),
     ObservationNotFound(u64),
+    InvalidObservation(String),
     ClaimNotFound(u64),
     InvalidClaim(String),
     EvidenceNotFound(u64),
@@ -47,6 +51,9 @@ impl fmt::Display for WorkspaceError {
             }
             Self::Git(message) => write!(formatter, "Git error: {message}"),
             Self::ObservationNotFound(id) => write!(formatter, "observation {id} not found"),
+            Self::InvalidObservation(message) => {
+                write!(formatter, "invalid observation: {message}")
+            }
             Self::ClaimNotFound(id) => write!(formatter, "claim {id} not found"),
             Self::InvalidClaim(message) => write!(formatter, "invalid claim: {message}"),
             Self::EvidenceNotFound(id) => write!(formatter, "evidence {id} not found"),
@@ -104,8 +111,17 @@ pub struct ScopeAssurance {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MediatedUnit {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub selector: ObservationSelector,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OperationalCoverage {
     pub mediated_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub mediated_units: Vec<MediatedUnit>,
     pub reconciliation_fingerprint: String,
 }
 
@@ -117,14 +133,51 @@ pub struct FreshnessReport {
     pub reason: String,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ObservationSelector {
+    #[default]
+    WholeFile,
+    ByteRange {
+        start: usize,
+        end: usize,
+    },
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Observation {
     pub id: u64,
     pub path: PathBuf,
     pub provider: String,
     pub observed_revision: String,
+    #[serde(default)]
+    pub selector: ObservationSelector,
     pub observed_input_fingerprint: String,
+    #[serde(default)]
+    pub observed_container_fingerprint: String,
+    #[serde(default)]
+    pub native_payload_reference: Option<String>,
+    #[serde(default)]
+    pub ingested_bytes: usize,
     pub report: FreshnessReport,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ObservationCapture {
+    #[serde(flatten)]
+    pub observation: Observation,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RevealedObservation {
+    pub observation_id: u64,
+    pub path: PathBuf,
+    pub provider: String,
+    pub observed_revision: String,
+    pub observed_container_fingerprint: String,
+    pub content: String,
+    pub ingested_bytes: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -138,6 +191,8 @@ pub enum ClaimInputSource {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ClaimInput {
     pub path: PathBuf,
+    #[serde(default)]
+    pub selector: ObservationSelector,
     pub recorded_input_fingerprint: String,
     pub source: ClaimInputSource,
 }
@@ -261,7 +316,15 @@ enum Event {
         path: PathBuf,
         provider: String,
         git_revision: String,
+        #[serde(default)]
+        selector: ObservationSelector,
         input_fingerprint: String,
+        #[serde(default)]
+        container_fingerprint: Option<String>,
+        #[serde(default)]
+        native_payload_reference: Option<String>,
+        #[serde(default)]
+        ingested_bytes: usize,
         #[serde(alias = "repository_fingerprint")]
         reconciliation_fingerprint: String,
     },
@@ -344,6 +407,7 @@ impl Workspace {
         let repository_root = repository_root.into().canonicalize()?;
         let workspace_root = workspace_root.into();
         fs::create_dir_all(&workspace_root)?;
+        let workspace_root = workspace_root.canonicalize()?;
         Ok(Self {
             repository_root,
             workspace_root,
@@ -419,34 +483,127 @@ impl Workspace {
         })
     }
 
-    pub fn record_file_observation(
+    pub fn capture_file_observation(
         &self,
         path: impl AsRef<Path>,
         provider: impl Into<String>,
-    ) -> Result<Observation, WorkspaceError> {
+        selector: ObservationSelector,
+        retain_native_payload: bool,
+    ) -> Result<ObservationCapture, WorkspaceError> {
         let path = validate_relative_path(path.as_ref())?;
-        let input_fingerprint = fingerprint_file(&self.repository_root.join(&path))?;
+        let resolved_path = resolve_repository_file(&self.repository_root, &path)?;
+        let container = fs::read(resolved_path)?;
+        let unit = select_observation_unit(&container, &selector)?;
+        let content = String::from_utf8(unit.to_vec()).map_err(|_| {
+            WorkspaceError::InvalidObservation("selected source is not valid UTF-8".to_owned())
+        })?;
+        let input_fingerprint = hex_digest(unit);
+        let container_fingerprint = hex_digest(&container);
+        let native_payload_reference = if retain_native_payload {
+            if container.len() > MAX_RETAINED_PAYLOAD_BYTES {
+                return Err(WorkspaceError::InvalidObservation(format!(
+                    "{}-byte payload exceeds the {}-byte retention limit",
+                    container.len(),
+                    MAX_RETAINED_PAYLOAD_BYTES
+                )));
+            }
+            Some(self.persist_native_payload(&container_fingerprint, &container)?)
+        } else {
+            None
+        };
         let git_revision = git_output(&self.repository_root, &["rev-parse", "HEAD"])?;
-        let reconciliation_fingerprint = scoped_reconciliation_fingerprint(
+        let reconciliation_fingerprint = observation_reconciliation_fingerprint(
             &self.repository_root,
-            &[(path.clone(), Some(input_fingerprint.clone()))],
+            &path,
+            &selector,
+            Some(&input_fingerprint),
+            Some(&container_fingerprint),
         )?;
         let projection = self.project()?;
         let observation_id = projection.next_observation_id;
+        let ingested_bytes = unit.len();
 
         self.append(Event::ObservationRecorded {
             observation_id,
             path,
             provider: provider.into(),
             git_revision,
+            selector,
             input_fingerprint,
+            container_fingerprint: Some(container_fingerprint),
+            native_payload_reference,
+            ingested_bytes,
             reconciliation_fingerprint,
         })?;
 
-        self.project()?
+        let observation = self
+            .project()?
             .observations
             .remove(&observation_id)
-            .ok_or(WorkspaceError::ObservationNotFound(observation_id))
+            .ok_or(WorkspaceError::ObservationNotFound(observation_id))?;
+        Ok(ObservationCapture {
+            observation,
+            content,
+        })
+    }
+
+    pub fn reveal_observation(
+        &self,
+        observation_id: u64,
+    ) -> Result<RevealedObservation, WorkspaceError> {
+        let projection = self.project()?;
+        let observation = projection
+            .observations
+            .get(&observation_id)
+            .ok_or(WorkspaceError::ObservationNotFound(observation_id))?;
+        let payload_reference =
+            observation
+                .native_payload_reference
+                .as_deref()
+                .ok_or_else(|| {
+                    WorkspaceError::InvalidObservation(
+                        "native payload was not retained for this legacy observation".to_owned(),
+                    )
+                })?;
+        if !is_sha256_hex(&observation.observed_container_fingerprint) {
+            return Err(WorkspaceError::CorruptLog(format!(
+                "invalid container fingerprint for observation {observation_id}"
+            )));
+        }
+        let expected_reference =
+            PathBuf::from("payloads").join(&observation.observed_container_fingerprint);
+        if Path::new(payload_reference) != expected_reference {
+            return Err(WorkspaceError::CorruptLog(format!(
+                "invalid native payload reference for observation {observation_id}"
+            )));
+        }
+        let absolute_payload = self.workspace_root.join(expected_reference);
+        if fs::symlink_metadata(&absolute_payload)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(WorkspaceError::CorruptLog(format!(
+                "native payload is a symlink for observation {observation_id}"
+            )));
+        }
+        let payload = fs::read(absolute_payload)?;
+        if hex_digest(&payload) != observation.observed_container_fingerprint {
+            return Err(WorkspaceError::CorruptLog(format!(
+                "native payload fingerprint mismatch for observation {observation_id}"
+            )));
+        }
+        let content = String::from_utf8(payload).map_err(|_| {
+            WorkspaceError::InvalidObservation("retained source is not valid UTF-8".to_owned())
+        })?;
+        Ok(RevealedObservation {
+            observation_id,
+            path: observation.path.clone(),
+            provider: observation.provider.clone(),
+            observed_revision: observation.observed_revision.clone(),
+            observed_container_fingerprint: observation.observed_container_fingerprint.clone(),
+            ingested_bytes: content.len(),
+            content,
+        })
     }
 
     pub fn reconcile_observation(
@@ -458,20 +615,32 @@ impl Workspace {
             .observations
             .get(&observation_id)
             .ok_or(WorkspaceError::ObservationNotFound(observation_id))?;
-        let current_fingerprint = fingerprint_file(&self.repository_root.join(&observation.path));
-        let reconciliation_fingerprint = scoped_reconciliation_fingerprint(
+        let current = read_observation_fingerprints(
             &self.repository_root,
-            &[(
-                observation.path.clone(),
-                current_fingerprint.as_ref().ok().cloned(),
-            )],
+            &observation.path,
+            &observation.selector,
+        );
+        let (current_unit, current_container) = current
+            .as_ref()
+            .map(|(unit, container)| (Some(unit.as_str()), Some(container.as_str())))
+            .unwrap_or((None, None));
+        let reconciliation_fingerprint = observation_reconciliation_fingerprint(
+            &self.repository_root,
+            &observation.path,
+            &observation.selector,
+            current_unit,
+            current_container,
         )?;
 
-        let (freshness, reason) = match &current_fingerprint {
-            Ok(fingerprint) if fingerprint == &observation.observed_input_fingerprint => (
-                FreshnessWithinScope::Current,
-                "supporting input unchanged".to_owned(),
-            ),
+        let (freshness, reason) = match &current {
+            Ok((unit, container)) if unit == &observation.observed_input_fingerprint => {
+                let reason = if container == &observation.observed_container_fingerprint {
+                    "supporting input unchanged"
+                } else {
+                    "observed unit unchanged; container changed outside mediated unit"
+                };
+                (FreshnessWithinScope::Current, reason.to_owned())
+            }
             Ok(_) => (
                 FreshnessWithinScope::Stale,
                 "supporting input changed".to_owned(),
@@ -542,9 +711,10 @@ impl Workspace {
                 .ok_or(WorkspaceError::ObservationNotFound(*observation_id))?;
             supporting_paths.push(observation.path.clone());
             inputs.insert(
-                observation.path.clone(),
+                (observation.path.clone(), observation.selector.clone()),
                 ClaimInput {
                     path: observation.path.clone(),
+                    selector: observation.selector.clone(),
                     recorded_input_fingerprint: observation.observed_input_fingerprint.clone(),
                     source: ClaimInputSource::SupportingObservation,
                 },
@@ -552,22 +722,28 @@ impl Workspace {
         }
         for dependency in declared_dependencies {
             let path = validate_relative_path(dependency)?;
-            let input_fingerprint = fingerprint_file(&self.repository_root.join(&path))?;
-            inputs.entry(path.clone()).or_insert(ClaimInput {
-                path,
-                recorded_input_fingerprint: input_fingerprint,
-                source: ClaimInputSource::DeclaredDependency,
-            });
+            let input_fingerprint = fingerprint_repository_file(&self.repository_root, &path)?;
+            inputs
+                .entry((path.clone(), ObservationSelector::WholeFile))
+                .or_insert(ClaimInput {
+                    path,
+                    selector: ObservationSelector::WholeFile,
+                    recorded_input_fingerprint: input_fingerprint,
+                    source: ClaimInputSource::DeclaredDependency,
+                });
         }
         if scope_strategy == ClaimScopeStrategy::ConservativeSiblingFiles {
             for path in conservative_sibling_dependencies(&self.repository_root, &supporting_paths)?
             {
-                let input_fingerprint = fingerprint_file(&self.repository_root.join(&path))?;
-                inputs.entry(path.clone()).or_insert(ClaimInput {
-                    path,
-                    recorded_input_fingerprint: input_fingerprint,
-                    source: ClaimInputSource::ConservativeDependency,
-                });
+                let input_fingerprint = fingerprint_repository_file(&self.repository_root, &path)?;
+                inputs
+                    .entry((path.clone(), ObservationSelector::WholeFile))
+                    .or_insert(ClaimInput {
+                        path,
+                        selector: ObservationSelector::WholeFile,
+                        recorded_input_fingerprint: input_fingerprint,
+                        source: ClaimInputSource::ConservativeDependency,
+                    });
             }
         }
         let inputs: Vec<_> = inputs.into_values().collect();
@@ -884,6 +1060,60 @@ impl Workspace {
             .ok_or(WorkspaceError::TransactionNotFound(transaction_id))
     }
 
+    fn persist_native_payload(
+        &self,
+        fingerprint: &str,
+        contents: &[u8],
+    ) -> Result<String, WorkspaceError> {
+        if !is_sha256_hex(fingerprint) {
+            return Err(WorkspaceError::CorruptLog(
+                "invalid native payload fingerprint".to_owned(),
+            ));
+        }
+        let payload_directory = self.workspace_root.join("payloads");
+        match fs::symlink_metadata(&payload_directory) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(WorkspaceError::InvalidObservation(
+                    "payload storage is not a regular directory".to_owned(),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir(&payload_directory)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        if !payload_directory
+            .canonicalize()?
+            .starts_with(&self.workspace_root)
+        {
+            return Err(WorkspaceError::InvalidObservation(
+                "payload storage escapes the workspace".to_owned(),
+            ));
+        }
+        let relative = PathBuf::from("payloads").join(fingerprint);
+        let absolute = payload_directory.join(fingerprint);
+        match fs::symlink_metadata(&absolute) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                return Err(WorkspaceError::CorruptLog(format!(
+                    "native payload is not a regular file for {fingerprint}"
+                )));
+            }
+            Ok(_) => {
+                if fingerprint_file(&absolute)? != fingerprint {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "native payload collision for {fingerprint}"
+                    )));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                write_file_atomically(&absolute, contents)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        Ok(relative.to_string_lossy().into_owned())
+    }
+
     pub fn event_log_path(&self) -> PathBuf {
         self.workspace_root.join(EVENT_LOG_NAME)
     }
@@ -987,7 +1217,11 @@ impl Projection {
                 path,
                 provider,
                 git_revision,
+                selector,
                 input_fingerprint,
+                container_fingerprint,
+                native_payload_reference,
+                ingested_bytes,
                 reconciliation_fingerprint,
             } => {
                 if self.observations.contains_key(&observation_id) {
@@ -1003,15 +1237,25 @@ impl Projection {
                         path: path.clone(),
                         provider,
                         observed_revision: git_revision,
+                        selector: selector.clone(),
+                        observed_container_fingerprint: container_fingerprint
+                            .unwrap_or_else(|| input_fingerprint.clone()),
                         observed_input_fingerprint: input_fingerprint,
+                        native_payload_reference,
+                        ingested_bytes,
                         report: FreshnessReport {
                             freshness_within_scope: FreshnessWithinScope::Current,
                             scope_assurance: ScopeAssurance {
                                 source: ScopeSource::Declared,
-                                completeness: ScopeCompleteness::AssertedComplete,
+                                completeness: if selector == ObservationSelector::WholeFile {
+                                    ScopeCompleteness::AssertedComplete
+                                } else {
+                                    ScopeCompleteness::NotAsserted
+                                },
                             },
                             operational_coverage: OperationalCoverage {
-                                mediated_paths: vec![path],
+                                mediated_paths: vec![path.clone()],
+                                mediated_units: vec![MediatedUnit { path, selector }],
                                 reconciliation_fingerprint,
                             },
                             reason: "supporting input recorded".to_owned(),
@@ -1061,6 +1305,13 @@ impl Projection {
                 }
                 self.next_claim_id = self.next_claim_id.max(claim_id + 1);
                 let mediated_paths = inputs.iter().map(|input| input.path.clone()).collect();
+                let mediated_units = inputs
+                    .iter()
+                    .map(|input| MediatedUnit {
+                        path: input.path.clone(),
+                        selector: input.selector.clone(),
+                    })
+                    .collect();
                 let assurance_source = scope_strategy.assurance_source();
                 self.claims.insert(
                     claim_id,
@@ -1078,6 +1329,7 @@ impl Projection {
                             },
                             operational_coverage: OperationalCoverage {
                                 mediated_paths,
+                                mediated_units,
                                 reconciliation_fingerprint,
                             },
                             reason,
@@ -1176,6 +1428,14 @@ impl Projection {
                                     .inputs
                                     .iter()
                                     .map(|input| input.path.clone())
+                                    .collect(),
+                                mediated_units: claim
+                                    .inputs
+                                    .iter()
+                                    .map(|input| MediatedUnit {
+                                        path: input.path.clone(),
+                                        selector: input.selector.clone(),
+                                    })
                                     .collect(),
                                 reconciliation_fingerprint,
                             },
@@ -1283,16 +1543,14 @@ fn conservative_sibling_dependencies(
     Ok(dependencies.into_iter().collect())
 }
 
-fn assess_claim_inputs(
-    repository_root: &Path,
-    inputs: &[ClaimInput],
-) -> (FreshnessWithinScope, String, Vec<(PathBuf, Option<String>)>) {
+fn assess_claim_inputs(repository_root: &Path, inputs: &[ClaimInput]) -> ClaimAssessment {
     let mut freshness = FreshnessWithinScope::Current;
     let mut reason = "recorded claim inputs unchanged".to_owned();
     let mut fingerprint_inputs = Vec::with_capacity(inputs.len());
 
     for input in inputs {
-        let current = fingerprint_file(&repository_root.join(&input.path));
+        let current = read_observation_fingerprints(repository_root, &input.path, &input.selector)
+            .map(|(unit, _)| unit);
         match &current {
             Ok(fingerprint) if fingerprint == &input.recorded_input_fingerprint => {}
             Ok(_) => {
@@ -1309,21 +1567,114 @@ fn assess_claim_inputs(
             }
             Err(_) => {}
         }
-        fingerprint_inputs.push((input.path.clone(), current.ok()));
+        fingerprint_inputs.push((input.path.clone(), input.selector.clone(), current.ok()));
     }
 
     (freshness, reason, fingerprint_inputs)
 }
 
-fn scoped_reconciliation_fingerprint(
+fn resolve_repository_file(
     repository_root: &Path,
-    inputs: &[(PathBuf, Option<String>)],
+    relative_path: &Path,
+) -> Result<PathBuf, WorkspaceError> {
+    let resolved = repository_root.join(relative_path).canonicalize()?;
+    if !resolved.starts_with(repository_root) {
+        return Err(WorkspaceError::InvalidPath(relative_path.to_owned()));
+    }
+    if !resolved.is_file() {
+        return Err(WorkspaceError::InvalidObservation(format!(
+            "{} is not a regular file",
+            relative_path.display()
+        )));
+    }
+    Ok(resolved)
+}
+
+fn fingerprint_repository_file(
+    repository_root: &Path,
+    relative_path: &Path,
+) -> Result<String, WorkspaceError> {
+    fingerprint_file(&resolve_repository_file(repository_root, relative_path)?)
+}
+
+fn select_observation_unit<'a>(
+    container: &'a [u8],
+    selector: &ObservationSelector,
+) -> Result<&'a [u8], WorkspaceError> {
+    match selector {
+        ObservationSelector::WholeFile => Ok(container),
+        ObservationSelector::ByteRange { start, end } => {
+            if start > end || *end > container.len() {
+                return Err(WorkspaceError::InvalidObservation(format!(
+                    "byte range {start}:{end} is outside a {}-byte file",
+                    container.len()
+                )));
+            }
+            let text = std::str::from_utf8(container).map_err(|_| {
+                WorkspaceError::InvalidObservation("source is not valid UTF-8".to_owned())
+            })?;
+            if !text.is_char_boundary(*start) || !text.is_char_boundary(*end) {
+                return Err(WorkspaceError::InvalidObservation(format!(
+                    "byte range {start}:{end} does not align to UTF-8 boundaries"
+                )));
+            }
+            Ok(&container[*start..*end])
+        }
+    }
+}
+
+fn read_observation_fingerprints(
+    repository_root: &Path,
+    path: &Path,
+    selector: &ObservationSelector,
+) -> Result<(String, String), WorkspaceError> {
+    let container = fs::read(resolve_repository_file(repository_root, path)?)?;
+    let unit = select_observation_unit(&container, selector)?;
+    Ok((hex_digest(unit), hex_digest(&container)))
+}
+
+fn observation_reconciliation_fingerprint(
+    repository_root: &Path,
+    path: &Path,
+    selector: &ObservationSelector,
+    unit_fingerprint: Option<&str>,
+    container_fingerprint: Option<&str>,
 ) -> Result<String, WorkspaceError> {
     let revision = git_output(repository_root, &["rev-parse", "HEAD"])?;
     let mut material = revision.into_bytes();
-    for (path, input_fingerprint) in inputs {
+    material.push(0);
+    material.extend(path.as_os_str().as_encoded_bytes());
+    material.push(0);
+    append_selector_fingerprint(&mut material, selector);
+    material.push(0);
+    material.extend(unit_fingerprint.unwrap_or("<missing>").as_bytes());
+    material.push(0);
+    material.extend(container_fingerprint.unwrap_or("<missing>").as_bytes());
+    Ok(hex_digest(&material))
+}
+
+fn append_selector_fingerprint(material: &mut Vec<u8>, selector: &ObservationSelector) {
+    match selector {
+        ObservationSelector::WholeFile => material.extend(b"whole_file"),
+        ObservationSelector::ByteRange { start, end } => {
+            material.extend(b"byte_range");
+            material.extend(start.to_le_bytes());
+            material.extend(end.to_le_bytes());
+        }
+    }
+}
+
+fn scoped_reconciliation_fingerprint(
+    repository_root: &Path,
+    inputs: &[FingerprintInput],
+) -> Result<String, WorkspaceError> {
+    let revision = git_output(repository_root, &["rev-parse", "HEAD"])?;
+    let mut material = revision.into_bytes();
+    for (path, selector, input_fingerprint) in inputs {
         material.push(0);
         material.extend(path.as_os_str().as_encoded_bytes());
+        material.push(0);
+        append_selector_fingerprint(&mut material, selector);
         material.push(0);
         material.extend(
             input_fingerprint
@@ -1433,6 +1784,10 @@ fn git_bytes(repository_root: &Path, arguments: &[&str]) -> Result<Vec<u8>, Work
         ));
     }
     Ok(output.stdout)
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn hex_digest(bytes: &[u8]) -> String {

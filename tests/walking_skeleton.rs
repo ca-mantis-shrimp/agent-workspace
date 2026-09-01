@@ -1,6 +1,7 @@
 use agent_workspace::{
-    Claim, ClaimInputSource, Evidence, FreshnessWithinScope, Observation, ScopeCompleteness,
-    ScopeSource, Transaction, TransactionState, WorkspaceStatus,
+    Claim, ClaimInputSource, Evidence, FreshnessWithinScope, Observation, ObservationCapture,
+    ObservationSelector, RevealedObservation, ScopeCompleteness, ScopeSource, Transaction,
+    TransactionState, WorkspaceStatus,
 };
 use serde_json::Value;
 use std::fs;
@@ -136,11 +137,21 @@ fn schema_one_fingerprint_records_still_replay() {
     ]);
     let recorded: Observation = serde_json::from_slice(&recorded.stdout).unwrap();
     let event_log_path = workspace.join("events.jsonl");
-    let legacy_log = fs::read_to_string(&event_log_path)
-        .unwrap()
-        .replace("\"schema_version\":2", "\"schema_version\":1")
-        .replace("reconciliation_fingerprint", "repository_fingerprint");
-    fs::write(&event_log_path, legacy_log).unwrap();
+    let mut legacy_record: Value =
+        serde_json::from_str(fs::read_to_string(&event_log_path).unwrap().trim()).unwrap();
+    legacy_record["schema_version"] = Value::from(1);
+    let event = legacy_record["event"].as_object_mut().unwrap();
+    let reconciliation = event.remove("reconciliation_fingerprint").unwrap();
+    event.insert("repository_fingerprint".to_owned(), reconciliation);
+    event.remove("selector");
+    event.remove("container_fingerprint");
+    event.remove("native_payload_reference");
+    event.remove("ingested_bytes");
+    fs::write(
+        &event_log_path,
+        format!("{}\n", serde_json::to_string(&legacy_record).unwrap()),
+    )
+    .unwrap();
     fs::write(
         fixture.repository.join("src/lib.rs"),
         "pub fn foo() -> i32 { 2 }\n",
@@ -161,6 +172,23 @@ fn schema_one_fingerprint_records_still_replay() {
         reconciled.report.freshness_within_scope,
         FreshnessWithinScope::Stale
     );
+    assert_eq!(reconciled.selector, ObservationSelector::WholeFile);
+    assert_eq!(
+        reconciled.observed_container_fingerprint,
+        reconciled.observed_input_fingerprint
+    );
+    assert_eq!(reconciled.ingested_bytes, 0);
+    assert_eq!(reconciled.native_payload_reference, None);
+    let reveal = invoke_failure(&[
+        "reveal",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--observation",
+        &recorded.id.to_string(),
+    ]);
+    assert!(String::from_utf8_lossy(&reveal.stderr).contains("legacy observation"));
     let records: Vec<Value> = fs::read_to_string(event_log_path)
         .unwrap()
         .lines()
@@ -909,6 +937,332 @@ fn multi_path_revert_conflict_changes_nothing() {
     assert_eq!(status.transactions[0].state, TransactionState::Open);
 }
 
+#[test]
+fn s7_bounded_perception_reduces_ingestion_with_equal_outcome_and_reveal() {
+    let source = bounded_task_source();
+    let raw = GitFixture::with_task_source(&source);
+    let assisted = GitFixture::with_task_source(&source);
+    let raw_workspace = raw.root.path().join("raw-workspace");
+    let assisted_workspace = assisted.root.path().join("assisted-workspace");
+
+    let raw_output = invoke(&[
+        "observe",
+        "--repository",
+        raw.repository.to_str().unwrap(),
+        "--workspace",
+        raw_workspace.to_str().unwrap(),
+        "--path",
+        "src/task.rs",
+    ]);
+    let raw_capture: ObservationCapture = serde_json::from_slice(&raw_output.stdout).unwrap();
+    assert_eq!(raw_capture.content, source);
+    assert_eq!(raw_capture.observation.ingested_bytes, source.len());
+    assert_eq!(raw_capture.observation.native_payload_reference, None);
+    assert!(!raw_workspace.join("payloads").exists());
+    assert_eq!(
+        raw_capture.observation.selector,
+        ObservationSelector::WholeFile
+    );
+
+    let signature = "fn foo(value: i32) -> i32";
+    let start = source.find(signature).unwrap();
+    let end = start + signature.len();
+    let range = format!("{start}:{end}");
+    let assisted_output = invoke(&[
+        "observe",
+        "--repository",
+        assisted.repository.to_str().unwrap(),
+        "--workspace",
+        assisted_workspace.to_str().unwrap(),
+        "--path",
+        "src/task.rs",
+        "--range",
+        &range,
+        "--retain-payload",
+        "true",
+    ]);
+    let assisted_capture: ObservationCapture =
+        serde_json::from_slice(&assisted_output.stdout).unwrap();
+    assert_eq!(assisted_capture.content, signature);
+    assert_eq!(assisted_capture.observation.ingested_bytes, signature.len());
+    assert!(assisted_capture.observation.ingested_bytes < raw_capture.observation.ingested_bytes);
+    assert_eq!(
+        assisted_capture
+            .observation
+            .report
+            .scope_assurance
+            .completeness,
+        ScopeCompleteness::NotAsserted
+    );
+
+    complete_bounded_task(&raw.repository, &source, &raw_capture.content);
+    complete_bounded_task(&assisted.repository, &source, &assisted_capture.content);
+
+    let revealed_after_edit = invoke(&[
+        "reveal",
+        "--repository",
+        assisted.repository.to_str().unwrap(),
+        "--workspace",
+        assisted_workspace.to_str().unwrap(),
+        "--observation",
+        &assisted_capture.observation.id.to_string(),
+    ]);
+    let revealed_after_edit: RevealedObservation =
+        serde_json::from_slice(&revealed_after_edit.stdout).unwrap();
+    assert_eq!(revealed_after_edit.content, source);
+    assert_eq!(revealed_after_edit.ingested_bytes, source.len());
+    assert_eq!(
+        revealed_after_edit.observed_container_fingerprint,
+        assisted_capture.observation.observed_container_fingerprint
+    );
+
+    let reconciled = invoke(&[
+        "reconcile",
+        "--repository",
+        assisted.repository.to_str().unwrap(),
+        "--workspace",
+        assisted_workspace.to_str().unwrap(),
+        "--id",
+        &assisted_capture.observation.id.to_string(),
+    ]);
+    let reconciled: Observation = serde_json::from_slice(&reconciled.stdout).unwrap();
+    assert_eq!(
+        reconciled.report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+    assert_eq!(
+        reconciled.report.reason,
+        "observed unit unchanged; container changed outside mediated unit"
+    );
+    assert_ne!(
+        reconciled
+            .report
+            .operational_coverage
+            .reconciliation_fingerprint,
+        assisted_capture
+            .observation
+            .report
+            .operational_coverage
+            .reconciliation_fingerprint
+    );
+
+    let claim = invoke(&[
+        "claim",
+        "--repository",
+        assisted.repository.to_str().unwrap(),
+        "--workspace",
+        assisted_workspace.to_str().unwrap(),
+        "--statement",
+        "foo accepts and returns i32",
+        "--observation",
+        &assisted_capture.observation.id.to_string(),
+    ]);
+    let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
+    assert_eq!(
+        claim.report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+    assert_eq!(
+        claim.inputs[0].selector,
+        assisted_capture.observation.selector
+    );
+
+    let changed_signature = fs::read_to_string(assisted.repository.join("src/task.rs"))
+        .unwrap()
+        .replace("fn foo(value: i32) -> i32", "fn foo(value: i64) -> i64");
+    fs::write(assisted.repository.join("src/task.rs"), changed_signature).unwrap();
+    let stale = invoke(&[
+        "reconcile-claim",
+        "--repository",
+        assisted.repository.to_str().unwrap(),
+        "--workspace",
+        assisted_workspace.to_str().unwrap(),
+        "--id",
+        &claim.id.to_string(),
+    ]);
+    let stale: Claim = serde_json::from_slice(&stale.stdout).unwrap();
+    assert_eq!(
+        stale.report.freshness_within_scope,
+        FreshnessWithinScope::Stale
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn bounded_observation_rejects_repository_and_payload_symlink_escapes() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = GitFixture::new();
+    let outside_source = fixture.root.path().join("outside-secret.rs");
+    fs::write(&outside_source, "const SECRET: &str = \"do-not-retain\";\n").unwrap();
+    symlink(&outside_source, fixture.repository.join("src/leak.rs")).unwrap();
+    let workspace = fixture.root.path().join("workspace-state");
+
+    let escaped_source = invoke_failure(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/leak.rs",
+        "--retain-payload",
+        "true",
+    ]);
+    assert!(
+        String::from_utf8_lossy(&escaped_source.stderr)
+            .contains("path must be repository-relative")
+    );
+
+    fs::create_dir_all(&workspace).unwrap();
+    let outside_payloads = fixture.root.path().join("outside-payloads");
+    fs::create_dir(&outside_payloads).unwrap();
+    symlink(&outside_payloads, workspace.join("payloads")).unwrap();
+    let escaped_payload = invoke_failure(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+        "--retain-payload",
+        "true",
+    ]);
+    assert!(
+        String::from_utf8_lossy(&escaped_payload.stderr)
+            .contains("payload storage is not a regular directory")
+    );
+    assert_eq!(fs::read_dir(outside_payloads).unwrap().count(), 0);
+}
+
+#[test]
+fn equal_bytes_at_different_ranges_have_distinct_coverage() {
+    let source = "fn foo(value: i32) -> i32 { value }\nfn bar(value: i32) -> i32 { value }\n";
+    let fixture = GitFixture::with_task_source(source);
+    let workspace = fixture.root.path().join("workspace-state");
+    let first = source.find("i32").unwrap();
+    let second = source[first + 3..].find("i32").unwrap() + first + 3;
+
+    let mut captures = Vec::new();
+    for start in [first, second] {
+        let range = format!("{start}:{}", start + 3);
+        let output = invoke(&[
+            "observe",
+            "--repository",
+            fixture.repository.to_str().unwrap(),
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--path",
+            "src/task.rs",
+            "--range",
+            &range,
+        ]);
+        captures.push(serde_json::from_slice::<ObservationCapture>(&output.stdout).unwrap());
+    }
+
+    assert_eq!(
+        captures[0].observation.observed_input_fingerprint,
+        captures[1].observation.observed_input_fingerprint
+    );
+    assert_ne!(
+        captures[0]
+            .observation
+            .report
+            .operational_coverage
+            .mediated_units,
+        captures[1]
+            .observation
+            .report
+            .operational_coverage
+            .mediated_units
+    );
+    assert_ne!(
+        captures[0]
+            .observation
+            .report
+            .operational_coverage
+            .reconciliation_fingerprint,
+        captures[1]
+            .observation
+            .report
+            .operational_coverage
+            .reconciliation_fingerprint
+    );
+
+    let claims: Vec<Claim> = captures
+        .iter()
+        .map(|capture| {
+            let observation_id = capture.observation.id.to_string();
+            let output = invoke(&[
+                "claim",
+                "--repository",
+                fixture.repository.to_str().unwrap(),
+                "--workspace",
+                workspace.to_str().unwrap(),
+                "--statement",
+                "selected type is i32",
+                "--observation",
+                &observation_id,
+            ]);
+            serde_json::from_slice(&output.stdout).unwrap()
+        })
+        .collect();
+    assert_ne!(
+        claims[0]
+            .report
+            .operational_coverage
+            .reconciliation_fingerprint,
+        claims[1]
+            .report
+            .operational_coverage
+            .reconciliation_fingerprint
+    );
+}
+
+fn bounded_task_source() -> String {
+    let mut source = "fn foo(value: i32) -> i32 { value + 1 }\n".to_owned();
+    for index in 0..100 {
+        source.push_str(&format!(
+            "fn padding_{index}(value: i32) -> i32 {{ value + {index} }}\n"
+        ));
+    }
+    source.push_str("fn main() {}\n");
+    source
+}
+
+fn complete_bounded_task(repository: &Path, source: &str, perceived_source: &str) {
+    let declaration = perceived_source
+        .split_once("fn ")
+        .map(|(_, declaration)| declaration)
+        .unwrap();
+    let function_name = declaration.split_once('(').map(|(name, _)| name).unwrap();
+    let return_type = declaration
+        .split_once("->")
+        .map(|(_, return_type)| return_type.trim())
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap();
+    let task_main = format!("fn main() {{ let _: {return_type} = {function_name}(41); }}");
+    let completed = source.replace("fn main() {}", &task_main);
+    let source_path = repository.join("src/task.rs");
+    fs::write(&source_path, completed).unwrap();
+    let binary = repository.join("task-bin");
+    let compile = Command::new("rustc")
+        .arg(&source_path)
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .unwrap();
+    assert!(
+        compile.status.success(),
+        "task did not compile: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    assert!(Command::new(binary).status().unwrap().success());
+}
+
 fn invoke_failure(arguments: &[&str]) -> Output {
     let output = Command::new(env!("CARGO_BIN_EXE_agent-workspace"))
         .args(arguments)
@@ -939,15 +1293,24 @@ struct GitFixture {
 
 impl GitFixture {
     fn new() -> Self {
+        Self::with_files(&[
+            ("src/lib.rs", "pub fn foo() -> i32 { 1 }\n"),
+            ("src/helper.rs", "pub fn helper() -> i32 { 1 }\n"),
+        ])
+    }
+
+    fn with_task_source(source: &str) -> Self {
+        Self::with_files(&[("src/task.rs", source)])
+    }
+
+    fn with_files(files: &[(&str, &str)]) -> Self {
         let root = TempDir::new().unwrap();
         let repository = root.path().join("repository");
-        fs::create_dir_all(repository.join("src")).unwrap();
-        fs::write(repository.join("src/lib.rs"), "pub fn foo() -> i32 { 1 }\n").unwrap();
-        fs::write(
-            repository.join("src/helper.rs"),
-            "pub fn helper() -> i32 { 1 }\n",
-        )
-        .unwrap();
+        for (path, contents) in files {
+            let path = repository.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        }
 
         git(&repository, &["init", "--quiet"]);
         git(

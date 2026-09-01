@@ -61,9 +61,10 @@ clearhead query index unscheduled
 
 The executable contract is now recorded in the
 [executable contract](docs/executable-contract.md). The active action is
-`kernel`. Walking-skeleton scenarios S1–S6 now cover observation staleness,
-scoped claims, evidence gating, restart-safe status, and clean-base reversible
-file transactions. Implementation choices settled by running code are recorded
+`kernel`. Walking-skeleton scenarios S1–S7 now cover observation staleness,
+scoped claims, evidence gating, restart-safe status, clean-base reversible file
+transactions, and byte-accounted bounded perception with reveal-on-demand.
+Implementation choices settled by running code are recorded
 in
 [`docs/implementation-notes.md`](docs/implementation-notes.md).
 

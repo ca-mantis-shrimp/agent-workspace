@@ -228,6 +228,54 @@ revised when later scenarios expose a better boundary.
   the owned after-state. The conflict fixture proves an overlapping edit leaves
   every path untouched and the transaction open.
 
+## 2026-09-01 — S7 bounded perception
+
+- A bounded filesystem observation uses a zero-based, half-open UTF-8 byte range.
+  This is deliberately a provider-neutral experiment, not yet a semantic symbol
+  selector or relocation mechanism.
+- Every new observation records two SHA-256 fingerprints: the selected unit and
+  its whole-file container. Unit bytes drive `freshness_within_scope`; a change
+  elsewhere in the container leaves the bounded observation `current` but changes
+  its reconciliation fingerprint, reports the outside-unit drift in the reason,
+  and keeps scope completeness `not-asserted`. A unit change is `stale`.
+- Supporting claims copy the observation selector with the unit fingerprint, so
+  a bounded claim reconciles the same mediated unit rather than accidentally
+  comparing its range hash with a whole-file hash. Operational coverage now names
+  `mediated_units` as path-plus-selector as well as compatibility-oriented paths,
+  and claim/evidence reconciliation fingerprints hash selectors. Equal bytes at
+  different ranges are therefore not represented as the same scope. Declared and
+  conservative dependencies remain whole-file inputs.
+- `observe` returns the selected UTF-8 content and an `ingested_bytes` count. The
+  accounting boundary is source-content bytes returned to the caller; JSON
+  metadata, event-log bytes, filesystem reads, and retained payload storage are
+  excluded. `reveal --observation <id>` returns the exact observed container and
+  its own byte count.
+- Full provider detail is retained only with explicit `--retain-payload true`,
+  capped at one MiB, in a content-addressed `payloads/<sha256>` store outside the
+  JSONL log. Default observation does not retain the container. The event carries
+  any relative payload reference plus provider, revision, and container hash.
+  Repository reads require canonical containment, and payload directories/files
+  are rejected when symlinked. Legacy observations replay with whole-file
+  selectors but have no retained payload, so reveal fails explicitly rather than
+  returning current bytes as if they were historical provider output.
+- The outcome-equivalent fixture compiles and runs the same generated Rust task
+  in raw and assisted arms. Each edit is constructed from the source content its
+  arm actually received. The raw arm receives the entire source; the assisted arm
+  receives only `foo`'s callable signature, ingests fewer bytes, and still
+  produces the same passing executable. The optional reveal probe occurs after
+  the measured task boundary and reproduces the pre-edit full source; counting a
+  reveal as part of the assisted task would correctly erase its byte advantage.
+  An outside-range task edit preserves scoped freshness while changing the
+  container reconciliation, and a later signature edit stales a supporting
+  bounded claim.
+- This proves the byte-accounted range experiment, not useful semantic
+  navigation. Range shifts, ambiguous relocation, token accounting, tree-sitter
+  providers, and empirical agent task trials remain later work.
+- Explicitly retaining whole source containers still creates S13/privacy debt:
+  size bounding and opt-in prevent default/unbounded retention, but no secret
+  redaction exists. Retention must not be enabled for secret-bearing provider
+  output until that scenario is implemented.
+
 ## 2026-09-01 — CLI ergonomics, surfaced by first dogfooding pass
 
 A hands-on shakeout of the full CLI loop (`bind-objective → observe → claim →

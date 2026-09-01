@@ -1,4 +1,6 @@
-use agent_workspace::{ClaimScopeStrategy, EvidenceOutcome, Workspace, WorkspaceError};
+use agent_workspace::{
+    ClaimScopeStrategy, EvidenceOutcome, ObservationSelector, Workspace, WorkspaceError,
+};
 use serde::Serialize;
 use std::env;
 use std::path::PathBuf;
@@ -51,7 +53,20 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 .path
                 .ok_or_else(|| CliError::Usage("observe requires --path".to_owned()))?;
             let provider = options.provider.unwrap_or_else(|| "filesystem".to_owned());
-            print_json(&workspace.record_file_observation(path, provider)?)?;
+            print_json(&workspace.capture_file_observation(
+                path,
+                provider,
+                options.selector.unwrap_or_default(),
+                options.retain_payload,
+            )?)?;
+        }
+        "reveal" => {
+            let observation_id = options
+                .observation_ids
+                .first()
+                .copied()
+                .ok_or_else(|| CliError::Usage("reveal requires --observation".to_owned()))?;
+            print_json(&workspace.reveal_observation(observation_id)?)?;
         }
         "reconcile" => {
             let id = options
@@ -157,6 +172,8 @@ struct Options {
     external_reference: Option<String>,
     reason: Option<String>,
     contents: Option<String>,
+    selector: Option<ObservationSelector>,
+    retain_payload: bool,
 }
 
 impl Options {
@@ -180,6 +197,8 @@ impl Options {
         let mut external_reference = None;
         let mut reason = None;
         let mut contents = None;
+        let mut selector = None;
+        let mut retain_payload = false;
         let mut index = 0;
 
         while index < arguments.len() {
@@ -218,6 +237,12 @@ impl Options {
                 "--reference" => external_reference = Some(value.clone()),
                 "--reason" => reason = Some(value.clone()),
                 "--content" => contents = Some(value.clone()),
+                "--range" => selector = Some(parse_byte_range(value)?),
+                "--retain-payload" => {
+                    retain_payload = value.parse().map_err(|_| {
+                        CliError::Usage(format!("invalid retain-payload value: {value}"))
+                    })?
+                }
                 "--result" => {
                     outcome = Some(match value.as_str() {
                         "passed" => EvidenceOutcome::Passed,
@@ -274,6 +299,8 @@ impl Options {
             external_reference,
             reason,
             contents,
+            selector,
+            retain_payload,
         })
     }
 }
@@ -305,6 +332,19 @@ impl From<serde_json::Error> for CliError {
     fn from(error: serde_json::Error) -> Self {
         Self::Json(error)
     }
+}
+
+fn parse_byte_range(value: &str) -> Result<ObservationSelector, CliError> {
+    let (start, end) = value
+        .split_once(':')
+        .ok_or_else(|| CliError::Usage(format!("invalid byte range: {value}")))?;
+    let start = start
+        .parse()
+        .map_err(|_| CliError::Usage(format!("invalid byte range start: {start}")))?;
+    let end = end
+        .parse()
+        .map_err(|_| CliError::Usage(format!("invalid byte range end: {end}")))?;
+    Ok(ObservationSelector::ByteRange { start, end })
 }
 
 fn usage() -> String {
