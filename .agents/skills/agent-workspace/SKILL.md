@@ -40,7 +40,16 @@ agent-workspace status --repository . --workspace .agent-workspace
 3. `claim --statement "..." --observation <id> --scope declared` — assert the
    belief, citing the observations that back it. Add `--dependency <path>` for a
    file the claim depends on but you didn't directly observe.
-4. `status` — check freshness *before acting* on any claim.
+3b. When a claim is genuinely outdated — not merely drift-stale — replace it:
+   record the successor claim, then `supersede-claim --id <old> --claim <new>
+   --reason "why"`. Supersession is for decisions that no longer hold or
+   assessments that were consumed, never for input drift (that is what
+   `stale` is for). Superseded claims leave the active projection but stay
+   readable history with their replacement link and reason.
+4. `status` — check freshness *before acting* on any claim. Distinguish
+   `claims` (live beliefs) from `superseded_claims` (retired history): a
+   superseded claim is not evidence of anything current, even when its recorded
+   freshness says `current`.
 5. To make a reversible clean-base experiment: `begin-transaction --claim
    <id>`, then `apply --id <tx> --path <file> --content "..."`, and use
    `revert-transaction` when needed. Post-mutation acceptance is not yet a sound

@@ -206,3 +206,34 @@ without a supersession/checkpoint notion), which is the slice after.
 
 Strategic track in parallel (not kernel): **auto-capture in the adapter**, because
 until recording is free the continuity tax is merely relocated to whoever narrates.
+
+## Third run — the supersession slice, decided and implemented across two agents
+
+The Opus reviewer's decision claim survived a compaction boundary intact. The
+next agent recovered the slice, its rationale, and its exhibit from `status` and
+this document alone, implemented it, took an independent review that found two
+real P1s, fixed both, and then used the new feature to curate the live
+workspace — superseding all twelve drifted ghost claims with explicit reasons
+and replacement links. The workspace now presents exactly two active claims,
+both current, plus reasoned history.
+
+This is the first full **decision → implement → review → curate** cycle carried
+across three agents (Pi implementing, Opus reviewing, Pi resuming) with the
+human saying only "keep going." The connective tissue was the workspace, not
+chat history. That is the strongest evidence to date for the product thesis —
+and it came from a lifecycle verb, not from more freshness machinery.
+
+Two lessons worth keeping:
+
+- **A tidy test can hide the bug.** The first supersession test pre-reconciled
+  both old claims, which routed it around the exact defect the reviewer found:
+  a retired claim could have permanently displayed a false `current`. Tests
+  should exercise the untidy default path, not the disciplined one.
+- **The curation tax changed shape but did not vanish.** Supersession made
+  cleanup *possible*; executing it was still roughly twenty narrated CLI
+  invocations. The gap between "the state model supports the right action" and
+  "the action is free" is precisely the adapter auto-capture track.
+
+The stale-objective problem also recurred: the durable objective still read
+"implement S7" after S7 was done, and rebinding was a manual, undurable judgment
+call. Objective completion/replacement is the remaining lifecycle gap.
