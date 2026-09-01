@@ -1,132 +1,176 @@
-# Executable Contract — Agent Workspace MVP (2026-09-01)
+# Executable Contract — Agent Workspace MVP (rev. 2, 2026-09-01)
 
-*Infrastructure-agnostic behavioral contract. It precedes the choice of storage/language, per
-the charter's `contract` action. Every scenario is a concrete, checkable behavior — the walking
-skeleton made rigorous — and every failure-model item is something that must **never** be
-observed. It synthesizes [`design-note-agent-perspective.md`](design-note-agent-perspective.md)
-and [`response-to-agent-perspective.md`](response-to-agent-perspective.md); it does not restate
-the mechanics already in [`initial-design.md`](initial-design.md).*
+*Revision 2 closes the design phase. It folds in both critiques
+([response-to-agent-perspective](response-to-agent-perspective.md),
+[response-to-executable-contract](response-to-executable-contract.md)) and is the doc of
+record from which the walking skeleton begins. Infrastructure-agnostic: it precedes the choice
+of storage/language. Every scenario is a concrete, checkable behavior; every failure-model item
+must **never** be observed. Further doc-only refinement is explicitly out of scope — open
+questions in §5 are settled by running code, not another pass.*
 
-## 1. Vocabulary
+## 0. Normative imports
 
-- **Observation** — automatically captured provider output or bounded source material, carrying
-  reproducible input fingerprints. Not an interpretation.
-- **Claim** — an actor's interpretation, referencing its supporting observations and carrying a
-  **dependency scope**: explicitly declared, or a conservative default when undeclared.
-- **Evidence** — the outcome of a named check, bound to its exact invocation and relevant
-  inputs, supporting stated acceptance claims.
-- **Freshness state** — one of:
-  - **`current`** — supported by tracked inputs whose relevant fingerprints still match. A
-    *positive, reproducible* claim.
-  - **`stale`** — a supporting input changed, or semantic relocation no longer resolves
-    unambiguously.
-  - **`unknown`** — the workspace lacks enough tracked information to assert either.
-- **Coverage boundary** — the set of paths/operations the workspace is currently observing.
-  Visible in status; may shrink when out-of-band activity occurs.
+Binding by reference (not restated here): `workspace-mvp.md` §*Authority boundaries*,
+§*Constraints*, and §*Non-goals for this charter*; and its §*Core concepts* definitions of
+objective, workstream, semantic location, finding, and checkpoint. `initial-design.md` is
+rationale and background — **not** binding except where a section is named. Where this contract
+sharpens an imported term, this contract governs.
+
+## 1. Vocabulary this contract owns
+
+- **Observation** — auto-captured provider output or bounded source, with reproducible input
+  fingerprints. Not an interpretation.
+- **Claim** — an actor's interpretation, referencing supporting observations and carrying a
+  **dependency scope** (declared, or a conservative default when undeclared).
+- **Evidence** — a named check bound to its exact invocation and relevant inputs, supporting
+  stated acceptance claims.
+
+**Three orthogonal reports** (this replaces the single freshness enum of rev. 1, which unsafely
+braided three kinds of knowledge):
+
+1. **Freshness within scope** — `current` | `stale` | `unknown`.
+2. **Scope assurance** — `declared` | `derived` | `conservative`, plus a completeness flag
+   (`asserted-complete` | `not-asserted`).
+3. **Operational coverage** — the set of mediated paths/operations, and the repository
+   fingerprint at the last reconciliation boundary.
+
+A result is always the *triple*, never dimension 1 alone.
+
+- **Reconciliation boundary** — a defined point at which the workspace re-reads *the inputs
+  relevant to what is being queried* (scoped, to preserve laziness — never a whole-repo scan)
+  and recomputes verdicts. The boundaries are: (a) before returning any freshness verdict;
+  (b) before validation or transaction acceptance; (c) on opening or resuming a workstream;
+  (d) after a mediated mutation; (e) on an optional watcher event.
+- **Transaction boundary** — a revision identity *and* a captured initial worktree state (or
+  equivalent transaction-owned delta boundary).
 
 ## 2. Invariants (must always hold)
 
-1. **`current` is never inferred from silence.** Absence of a stale warning must never establish
-   freshness; `current` is only ever a positive, reproducible claim over tracked inputs.
-2. **No `current` over an untracked dependency.** If a relevant dependency cannot be excluded,
-   the verdict is `unknown` (or conservatively `stale`) — never `current`.
-3. **Layered invalidation.** A claim's freshness is bounded by *both* its supporting
-   observations *and* its dependency scope; a claim may be `stale` while its observed span is
-   byte-identical.
-4. **Evidence expires with inputs.** Validation evidence cannot support a transaction after its
+1. **`current` is positive and scoped.** `current` means every input in the claim's *recorded*
+   dependency scope was reconciled against current repository state at a named boundary and
+   still matches. It asserts freshness **within recorded scope only** — never objective truth,
+   never completeness of that scope.
+2. **No unqualified truth escapes.** A `current` verdict must always travel with its scope
+   assurance and its reconciliation fingerprint. Client projections must not present `current`
+   without them. *(This is the executable replacement for rev. 1's non-executable "no `current`
+   over an untracked dependency": we cannot prove no undeclared dependency exists, so we instead
+   refuse to hide the scope.)*
+3. **Verdicts name their reconciliation.** Every verdict identifies the fingerprint it was
+   computed against; if current state is unreconciled, the verdict is `unknown`, never inherited
+   from a prior session.
+4. **Reads do not mutate freshness.** A raw (unmediated) read changes no tracked record's
+   freshness; it yields a belief with *absent provenance*, not staleness.
+5. **Mutations degrade only at boundaries.** A raw edit or revision change is detected at the
+   next reconciliation boundary touching the affected inputs; until then, dependent claims that
+   cannot be reconciled are `unknown`, never `current`.
+6. **Layered invalidation.** Claim freshness is bounded by *both* its observations *and* its
+   dependency scope; a claim may be `stale` while its observed span is byte-identical.
+7. **Evidence expires with inputs.** Validation evidence cannot support a transaction after its
    relevant inputs change.
-5. **No silent rebinding.** Failed semantic relocation yields `stale`/ambiguous, never a guessed
-   new binding reported as `current`.
-6. **Provenance survives normalization.** Every normalized record retains provider identity plus
-   enough native detail (or a content-addressed reference) to reconstruct what the provider said.
-7. **Transactions name their base.** A transaction always records its base revision and can
-   expose the exact delta from it.
-8. **Out-of-band activity degrades honestly.** Raw reads/edits/revision changes must reduce
-   coverage or trigger conservative invalidation — never leave a false `current` — and the loss
-   of coverage must be visible in status.
-9. **Restart from records, not chat.** Restart reconstructs objective, working set, claims,
-   transaction, evidence, and freshness from durable records, not conversation history.
-10. **Stopping is success.** Checkpoint and handoff are valid *successful* lifecycle outcomes,
-    not incomplete-failure states.
-11. **Failure ≠ empty; secrets excluded.** Provider failure is recorded distinctly from a
-    successful empty result; secrets and unbounded output are not stored by default.
+8. **No silent rebinding.** Failed semantic relocation yields `stale`/ambiguous, never a guessed
+   binding reported as `current`.
+9. **Provenance survives normalization.** Every record retains provider identity plus enough
+   native detail (or a content-addressed reference) to reconstruct what the provider said.
+10. **Transactions are safely reversible.** A transaction records a revision identity *and* its
+    initial worktree state. Revert restores only transaction-owned mutations and reconstructs
+    the initial worktree; on ambiguity from overlapping later mutations it **halts with a
+    conflict** — never destroys unrelated work, never reports success on a partial revert.
+11. **Restart from records.** Restart reconstructs objective, working set, claims, transaction,
+    evidence, and the full report triple from durable records, not chat history.
+12. **Stopping is success.** Checkpoint and handoff are valid successful lifecycle outcomes.
+13. **Failure ≠ empty; secrets excluded.** Provider failure is recorded distinctly from a
+    successful empty result; secrets and unbounded output are not stored by default (retention
+    and redaction per imported §*Constraints*).
 
 ## 3. Failure model (must NEVER be observed)
 
-- **F1 — False-current** *(most dangerous)*: a `current` verdict for a claim whose supporting
-  bytes, or whose relevant-but-untracked dependency, changed.
+- **F1 — False-current** *(most dangerous)*: `current` for a claim whose in-scope inputs
+  changed, or whose scope is marked `asserted-complete` yet a relevant dependency was excluded.
 - **F2 — Silent rebind**: relocation guesses a span and reports `current`.
-- **F3 — Silence as assurance**: an uncovered region reads as `current`, or coverage loss is not
-  surfaced as `unknown`.
+- **F3 — Silence as assurance**: coverage loss not surfaced; an uncovered region read as
+  `current`.
 - **F4 — Zombie evidence**: stale evidence counts as current validation.
-- **F5 — Chat-only state**: any state that cannot be recovered after restart without chat history.
+- **F5 — Chat-only state**: state unrecoverable after restart without chat history.
 - **F6 — Erased provenance**: normalization discards provider identity or native detail.
-- **F7 — Bookkeeping tax**: a bookkeeping-only verb required on the critical path (the adoption
-  failure mode).
+- **F7 — Bookkeeping tax**: a bookkeeping-only verb required on the critical path.
+- **F8 — Destructive revert**: rollback that removes/overwrites non-transaction-owned work, or
+  reports success on an ambiguous revert.
+- **F9 — Inherited verdict**: a freshness verdict served without reconciliation against current
+  state.
 
 ## 4. Scenarios (executable — Given / When / Then)
 
-**S1 — Observation goes stale after an edit** *(core skeleton)*
-Given a tiny Git fixture at revision R and an observation of symbol `foo` recorded at R,
-when `foo`'s bytes change to R′, then the observation becomes `stale` with reason
-*supporting input changed*.
+**S1 — Observation stale after edit** *(core)*: Given an observation of `foo` recorded at R,
+when `foo`'s bytes change and a reconciliation boundary is crossed, then the observation is
+`stale` (*supporting input changed*).
 
-**S2 — Bypass yields `unknown`, never false-current** *(soundness of the coverage model)*
-Given the workspace observing path A only, when a raw out-of-band edit changes uncovered path B,
-then any claim depending on B (and B itself) is `unknown`, status shows reduced coverage, and
-**no** record anywhere flips to `current` as a result.
+**S2 — Scoped invalidation, honestly bounded**: Given a claim whose *declared* scope includes
+path B, when an out-of-band edit changes B and a named boundary is crossed, then the claim is
+`stale` within scope. **Variant:** if B is *not* in the declared scope, the claim stays
+`current within scope` but the coverage report shows B unobserved — proving scope honesty rather
+than false assurance.
 
-**S3 — Inference-dependency guard** *(the false-current case)*
-Given a claim "empty emails are rejected" over an observation of `validate_user`, whose
-conservative dependency scope includes helper `is_blank` in another file, when `is_blank`
-changes but `validate_user`'s bytes do not, then the claim is `stale` (or at worst `unknown`) —
-never `current`.
+**S3 — Inference-dependency guard**: Given a claim "empty emails rejected" over `validate_user`
+whose conservative scope includes helper `is_blank` in another file, when `is_blank` changes but
+`validate_user`'s bytes do not, then the claim is `stale` (or `unknown`) — never `current`.
 
-**S4 — Evidence invalidation gates acceptance**
-Given evidence from `test X` bound to inputs at R supporting acceptance claim C, when a relevant
-input changes, then the evidence is `stale`, C is no longer validated, and the transaction
-cannot be accepted on it.
+**S4 — Evidence invalidation gates acceptance**: Given evidence supporting acceptance claim C,
+when a relevant input changes, then the evidence is `stale`, C is unvalidated, and the
+transaction cannot be accepted on it.
 
-**S5 — Restart recovery**
-Given a recorded objective, working set, one open transaction, one claim, and one evidence item,
-when the process restarts with no chat history, then the same coherent status — including
-freshness states — is reconstructed from durable records.
+**S5 — Restart recovery**: Given recorded objective, working set, open transaction, claim, and
+evidence, when the process restarts with no chat history, then the same report triples are
+reconstructed from durable records.
 
-**S6 — Reversible transaction**
-Given a transaction opened at base R with a mutation, when it is reverted, then the repository is
-restored to R and affected claims/evidence re-evaluate their freshness.
+**S6 — Reversible transaction (clean base)**: Given a transaction at clean base R with a
+mutation, when reverted, then the repository is restored to R and affected claims/evidence
+re-reconcile.
 
-**S7 — Bounded perception costs less context** *(the inversion, made testable)*
-Given a large file, when the agent requests it through the workspace, then it receives structure
-(outline/signatures) by default and unfolds only a requested span; and workspace-assisted
-reading ingests measurably fewer bytes than the raw read for the same task.
+**S7 — Bounded perception, outcome-equivalent**: Given a fixed repository task, when performed
+raw vs. workspace-assisted, then *both complete the task successfully*, the assisted path
+ingests fewer bytes/tokens under a defined accounting boundary, and full provider detail remains
+retrievable on demand. *(Returning an outline that reduces bytes but fails the task does not
+pass.)*
 
-**S8 — Provenance retained**
-Given a normalized finding from an analyzer, then the provider identity and native payload (or
-its content-addressed reference) remain retrievable.
+**S8 — Provenance retained**: Given a normalized finding, then provider identity and native
+payload (or CAS reference) remain retrievable.
 
-## 5. Deferred to implementation (not resolved here)
+**S9 — Dirty-worktree rollback**: Given a transaction begun from a worktree with *unrelated*
+pre-existing changes, when reverted, then transaction-owned mutations are removed **and the
+unrelated pre-existing changes survive intact**.
 
-- Smallest safe input fingerprint per evidence type (command / target / file / repository level).
-- The conservative dependency scope default for undeclared claims (whole-file? one-hop
-  call-graph?) — trades false-current against alarm fatigue; **must be measured, not assumed**.
+**S10 — Concurrent overlapping edit**: Given a transaction and a later overlapping out-of-band
+edit that makes ownership ambiguous, when revert is attempted, then it **halts with a conflict**
+and destroys nothing.
+
+**S11 — Ambiguous relocation**: Given an edit after which a symbol's span cannot be resolved
+unambiguously, then the affected observation is `stale`/ambiguous — never silently rebound.
+
+**S12 — Provider failure vs. empty**: Given a provider that errors, then the record is a failure
+distinct from a successful empty result.
+
+**S13 — Secret-bearing output**: Given tool output containing a secret, then it is not persisted
+to durable state by default (redaction/retention per imported §*Constraints*).
+
+## 5. Deferred to implementation (settled by the skeleton, not by more design)
+
+- **The conservative dependency-scope default** for undeclared claims (whole-file? one-hop
+  call-graph?) — the empirical crux: it trades F1 against alarm fatigue and **must be measured**.
+- Fingerprint granularity per evidence type (command / target / file / repository).
 - How the coverage boundary is declared and discovered.
 - The Pi interface form (extension / MCP server / direct package).
-- Cognitive proprioception and motivational braking remain **documented research questions**,
-  explicitly out of MVP scope.
+- Cognitive proprioception and motivational braking — a **research question**, out of MVP scope.
 
-## 6. Acceptance (behavioral, not architectural)
+## 6. Acceptance
 
-A first implementation of Git + tree-sitter + retained tool results + careful joins is
-acceptable; algorithmic novelty is not the criterion. The MVP earns continuation only if, on
-dogfooded maintenance tasks, workspace-assisted operation measurably:
+**Tier A — contract-level (binary, must pass before closure):** zero occurrences of F1–F9 over a
+**fixed adversarial fixture suite**. Every safety invariant has at least one scenario above.
 
-- drives **false-current (F1) to ~zero**;
-- reduces bytes/tokens ingested and repeated reads;
-- recovers faster after restart;
-- does so **without** hiding provider detail (F6) or requiring bookkeeping-only verbs (F7);
-- while keeping conservative-invalidation (alarm-fatigue) rates low enough to stay usable.
-
-Metrics extend `initial-design.md` §8 with explicit **false-current** and
-**conservative-invalidation** rates. If the composition does not move these numbers, it has not
-earned continuation regardless of sophistication.
+**Tier B — dogfooding (empirical, earns continuation):** on representative maintenance tasks,
+report *with sample size and known instrumentation gaps*: observed false-current rate; bytes/
+tokens ingested vs. raw on a fixed outcome-equivalent task; repeated reads; restart-recovery
+time; and the conservative-invalidation (alarm-fatigue) rate — which must stay low enough to
+remain usable. A first implementation of Git + tree-sitter + retained tool results + careful
+joins is acceptable; **algorithmic novelty is not the criterion — measured behavioral change
+is.** If these numbers do not move, the workspace has not earned continuation regardless of
+sophistication.
