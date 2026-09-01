@@ -155,3 +155,54 @@ The responsibility boundary remains firm: agents and adapters maintain this
 state; the human inspects, corrects, and chooses ends. If the human must narrate
 observations or curate agent claims, the workspace has transferred rather than
 removed the continuity tax.
+
+## Reviewer's addendum — Opus, reviewing run 2 (2026-09-01)
+
+I reviewed the second-run section above and largely sign it. What matters most is
+that its two loudest defects — *status-is-a-projection-not-orientation* (both
+agents reflexively piped `status` through a filter) and *recording-is-bookkeeping*
+(F7) — were reached **independently** by two agents. Independent convergence
+promotes them from opinion to confirmed defect. Two amendments where I differ:
+
+**One `stale`, three jobs.** The report treats "conservative invalidation noise"
+and "no supersession lifecycle" as separate bullets. They are one gap: `stale` is a
+single verdict doing three incompatible jobs. From this session's own delta:
+
+- claim 0 ("S1–S6 implemented") — stale because `lib.rs` changed, *still true* → **re-verify, likely fine**;
+- claim 3 ("S7 not ready") — stale, *now false* → **retire**;
+- a formatter-only edit — stale, *semantically null* → **ignore**.
+
+A cold reader cannot tell these apart, so they either re-verify dead beliefs
+(waste) or trust noise (danger). Supersession is therefore not tidiness — it is
+**handoff correctness**. A superseded claim must carry a *reason*
+(`superseded-by(id)` vs `input-drifted`), not just a flag. (Separating job 1 from
+job 3 additionally needs semantic units — deferred, out of this slice's scope.)
+
+**Prioritization dissent.** The report's own principle is "make existing mechanisms
+operational rather than adding vocabulary," yet it lists automatic capture as #3.
+Auto-capture *is* the operationalizing move and the root of the adoption problem
+both runs found; if that list is priority-ordered, it belongs first. Items 1, 2,
+and 4 polish a surface a time-pressured agent still skips until #3 makes recording
+free — exactly what happened in run 1. Caveat that reconciles us: auto-capture is
+**adapter-layer** work, not a kernel slice, so it is a parallel strategic track
+rather than the next walking-skeleton step.
+
+**Concrete instance of "validation didn't become durable evidence."** Claim 7
+("S7 is implemented") is a bare descriptive claim with **zero attached evidence**.
+Confirming it required me to re-run the suite (16 green); the workspace did not
+retain that as evidence bound to the claim, so the next cold reader re-verifies
+from scratch. That is the open descriptive-vs-normative acceptance seam made
+concrete: your strongest support cannot anchor your most important claim.
+
+## Next target (Opus's call)
+
+**Next kernel slice: claim supersession-with-reason.** Smallest change that fixes a
+*correctness* (not cosmetic) defect — the stale ghosts (claims 0–5) sitting beside
+their live successors (6–11) in this very workspace are the exhibit. Falsifiable:
+a superseded claim reads distinctly from a drift-stale one, and a retired belief
+leaves the live working set. It is also the prerequisite for the delta-oriented
+cold-resume view both runs asked for (no meaningful "changes since checkpoint"
+without a supersession/checkpoint notion), which is the slice after.
+
+Strategic track in parallel (not kernel): **auto-capture in the adapter**, because
+until recording is free the continuity tax is merely relocated to whoever narrates.
