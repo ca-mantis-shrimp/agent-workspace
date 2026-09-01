@@ -110,3 +110,38 @@ revised when later scenarios expose a better boundary.
 - The fixture proves both sides of the gate: unchanged passing evidence accepts,
   while an out-of-band relevant edit makes the claim and evidence stale and
   leaves the transaction open with a persisted rejection.
+- **Open seam for S6 — mutation vs. acceptance timing.** Acceptance requires each
+  claim `current`, but a change transaction mutates files, and mutating a file
+  invalidates any acceptance claim scoped to it. The S4 stale fixture is literally
+  this — editing the claim's own input blocks acceptance. As built, only
+  transactions whose acceptance claims concern *untouched* files can ever accept; a
+  transaction that changes the code it claims about self-invalidates. Conservative
+  scope worsens it: a claim scoped to a directory dies on the transaction's own edit
+  to any same-extension sibling.
+- **Recommended resolution (guidance for S6, not yet binding).** Compute
+  acceptance-claim freshness relative to the transaction's *owned post-mutation
+  baseline*, not the original observation fingerprints. When the transaction applies
+  its owned mutations, re-fingerprint the affected inputs (including any
+  conservative-sibling expansion) to establish that baseline and anchor the
+  acceptance claims/evidence to it. A claim is then `stale` at acceptance only if an
+  input changed *relative to that baseline* — i.e. an out-of-band edit after the
+  transaction settled. The transaction's own owned edits are expected and must not
+  count as staleness; only drift outside the ownership boundary should. This is
+  precisely what S6's mutation-ownership / transaction-owned delta boundary is for:
+  it is the mechanism that lets acceptance subtract the transaction's own changes
+  from the staleness computation. The alternative — instructing the agent to
+  re-observe after each edit — is a workflow band-aid that cannot distinguish the
+  transaction's change from a concurrent out-of-band one, which is the exact
+  distinction the ownership boundary exists to make.
+- **Qualification for S6 — ownership must not silently rebase belief or
+  evidence.** The seam above is real, but automatically replacing a descriptive
+  claim's or existing evidence item's input fingerprints with the post-mutation
+  baseline would make old support appear current for new code. S6 must distinguish
+  a durable, normative acceptance criterion (what the result should satisfy) from
+  a descriptive claim about observed code (what was found to be true). Owned
+  mutations establish the candidate post-state and its drift boundary; they do
+  not refresh prior observations or evidence. Validation must run against that
+  candidate state and produce new evidence anchored to it. Any later mutation —
+  owned or out of band — invalidates that evidence and requires validation again.
+  Transaction ownership is then used to distinguish safe rollback and concurrent
+  drift, not to exempt pre-mutation evidence from freshness rules.
