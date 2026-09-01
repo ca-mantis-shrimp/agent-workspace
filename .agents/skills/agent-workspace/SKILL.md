@@ -32,6 +32,19 @@ needed. Read `freshness_within_scope` on every claim:
 agent-workspace status --repository . --workspace .agent-workspace
 ```
 
+If a checkpoint exists, follow `status` with `delta` — the concise resume
+surface. It shows only what changed since the last line was drawn: objective
+shifts, and claims recorded / superseded / staled, plus new observations and
+transactions. `status` is the full projection; `delta` is "what changed since I
+was last here."
+
+```
+agent-workspace delta --repository . --workspace .agent-workspace
+```
+
+`delta` defaults to the most recent checkpoint; pass `--since <label>` to diff
+against a specific one.
+
 ## The loop
 
 1. `bind-objective --intent "..."` — declare what you're doing.
@@ -55,6 +68,11 @@ agent-workspace status --repository . --workspace .agent-workspace
    `revert-transaction` when needed. Post-mutation acceptance is not yet a sound
    workflow: descriptive claims become stale after the owned edit, and the
    separate acceptance-criterion model is still pending.
+6. When you finish an objective or switch to a new one, `checkpoint --label
+   <name> [--note "..."]` *before* you `bind-objective` the next. The checkpoint
+   snapshots the objective in force, so rebinding records the transition instead
+   of silently overwriting the completed one — and it becomes the baseline the
+   next session's `delta` diffs against. Labels must be unique.
 
 ## Scope honesty
 
