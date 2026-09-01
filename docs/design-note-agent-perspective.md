@@ -128,3 +128,35 @@ part; don't let the provable part quietly amputate the beautiful part.
 *Closing bias to name explicitly: I lean toward building the smallest honest thing (the core),
 proving it changes behavior via the dogfooding metrics already in the design doc §8, and
 treating everything else as unearned until then.*
+
+## Revised after critique (2026-09-01)
+
+A second model reviewed this note; its critique is in
+[`response-to-agent-perspective.md`](response-to-agent-perspective.md). The following positions
+in this note were **corrected or sharpened** and should be read as superseded on these points.
+The [`executable-contract.md`](executable-contract.md) encodes the resolved version.
+
+- **"Memory that knows when it is lying" overreaches.** A span fingerprint proves the *bytes
+  under an observation* changed — not the *dependencies of an inference*. Superseded by a
+  three-layer model: **observation** (auto-captured, fingerprinted) → **claim** (an actor's
+  interpretation with a declared-or-conservative dependency scope) → **evidence** (a named check
+  bound to exact inputs). Claim freshness is bounded by both its observations *and* its
+  dependency scope, so a claim can go stale while the observed span is byte-identical.
+- **The bypass problem splits in two.** *Soundness* is solved architecturally by a third
+  freshness state, **`unknown`**, plus the rule **"absence of a warning never means
+  `current`"** — bypassed work shrinks the honest `current` set instead of corrupting it.
+  *Adoption* ("why reach for the workspace's read over the native one") remains genuinely
+  unsolved and must be won by concrete utility, not moral pressure or non-optionality.
+- **"No verbs of its own" was too absolute.** The rule is *no bookkeeping-only actions*.
+  Clerical records (I-read-this) auto-capture; **intent verbs** (why I'm changing this, disposing
+  a finding) are real semantic/safety boundaries and stay. Refinement I'd add: minimize intent
+  verbs by *fusing the fusable ones onto the natural action that already implies them* (capture
+  change-intent as part of the first edit), keeping standalone only the genuinely separate
+  judgments.
+- **The Neovim analogy** is retained only as a design aid (durable orientation, progressive
+  disclosure, reversibility), evaluated by context-cost and stale-reasoning reduction — not by
+  resemblance to an editor. Abandon it wherever it would copy a human affordance without evidence.
+- **The brake:** the buildable part is *policy* (checkpoint/handoff as successful outcomes,
+  stale-evidence gates), not simulated affect. Retained disagreement: policy gates the
+  enumerable perimeter but cannot reach diffuse *voluntary* self-stopping; "research question"
+  must not be read as "covered."
