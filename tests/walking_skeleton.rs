@@ -1,6 +1,6 @@
 use agent_workspace::{
     Claim, ClaimInputSource, Evidence, FreshnessWithinScope, Observation, ScopeCompleteness,
-    ScopeSource, Transaction, TransactionState,
+    ScopeSource, Transaction, TransactionState, WorkspaceStatus,
 };
 use serde_json::Value;
 use std::fs;
@@ -590,6 +590,118 @@ fn current_passing_evidence_accepts_transaction() {
     ]);
     let accepted: Transaction = serde_json::from_slice(&accepted.stdout).unwrap();
     assert_eq!(accepted.state, TransactionState::Accepted);
+}
+
+#[test]
+fn s5_restart_recovers_objective_working_set_and_open_work() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    invoke(&[
+        "bind-objective",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--intent",
+        "prove restart recovery",
+        "--reference",
+        "clearhead:kernel",
+    ]);
+    let observation = invoke(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&observation.stdout).unwrap();
+    invoke(&[
+        "focus",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--observation",
+        &observation.id.to_string(),
+        "--reason",
+        "acceptance target",
+    ]);
+    let claim = invoke(&[
+        "claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--statement",
+        "foo returns one",
+        "--observation",
+        &observation.id.to_string(),
+    ]);
+    let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
+    let transaction = invoke(&[
+        "begin-transaction",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--claim",
+        &claim.id.to_string(),
+    ]);
+    let transaction: Transaction = serde_json::from_slice(&transaction.stdout).unwrap();
+    invoke(&[
+        "evidence",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--transaction",
+        &transaction.id.to_string(),
+        "--claim",
+        &claim.id.to_string(),
+        "--check",
+        "fixture-check",
+        "--invocation",
+        "fixture check",
+        "--result",
+        "passed",
+    ]);
+
+    let resumed = invoke(&[
+        "status",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+    ]);
+    let resumed: WorkspaceStatus = serde_json::from_slice(&resumed.stdout).unwrap();
+    assert_eq!(
+        resumed
+            .objective
+            .as_ref()
+            .map(|objective| objective.intent.as_str()),
+        Some("prove restart recovery")
+    );
+    assert_eq!(resumed.working_set[0].observation_id, observation.id);
+    assert_eq!(resumed.observations.len(), 1);
+    assert_eq!(resumed.claims.len(), 1);
+    assert_eq!(resumed.evidence.len(), 1);
+    assert_eq!(resumed.transactions[0].state, TransactionState::Open);
+    assert_eq!(
+        resumed.evidence[0].report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+
+    let resumed_again = invoke(&[
+        "status",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+    ]);
+    let resumed_again: WorkspaceStatus = serde_json::from_slice(&resumed_again.stdout).unwrap();
+    assert_eq!(resumed, resumed_again);
 }
 
 fn invoke(arguments: &[&str]) -> Output {

@@ -163,3 +163,22 @@ revised when later scenarios expose a better boundary.
   walking-skeleton scaffolding and must be migrated before S6 acceptance semantics
   are considered complete. No descriptive claim may become current merely because
   a criterion or transaction was rebased.
+
+## 2026-09-01 — S5 restart recovery
+
+- Objective binding and working-set focus are now durable events. The initial
+  working set is deliberately small: observation IDs plus explicit reasons for
+  focus, ordered deterministically by ID.
+- `status` is the resume boundary. It replays the log in a fresh process,
+  reconciles every observation, claim, and evidence item against current inputs,
+  persists those reconciliation results, and returns one coherent projection of
+  objective, working set, observations, claims, evidence, and transactions.
+- The acceptance fixture invokes every operation as a separate process, then
+  resumes twice and receives equal status projections. This proves recovery from
+  durable records rather than in-memory state or chat history.
+- Reconciliation currently appends events on every status request, even when
+  verdicts do not change. Compaction, no-op event suppression, and materialized
+  checkpoints remain kernel work; the append-only log is still authoritative.
+- This is restart coherence, not yet a useful orientation experience. Manual
+  dogfooding should begin once checkpointing and the S6 transaction boundary can
+  preserve a real in-progress change safely.

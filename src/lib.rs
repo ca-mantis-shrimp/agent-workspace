@@ -16,6 +16,8 @@ pub enum WorkspaceError {
     Io(std::io::Error),
     Json(serde_json::Error),
     InvalidPath(PathBuf),
+    InvalidObjective(String),
+    InvalidWorkingSet(String),
     Git(String),
     ObservationNotFound(u64),
     ClaimNotFound(u64),
@@ -38,6 +40,10 @@ impl fmt::Display for WorkspaceError {
                     "path must be repository-relative: {}",
                     path.display()
                 )
+            }
+            Self::InvalidObjective(message) => write!(formatter, "invalid objective: {message}"),
+            Self::InvalidWorkingSet(message) => {
+                write!(formatter, "invalid working set entry: {message}")
             }
             Self::Git(message) => write!(formatter, "Git error: {message}"),
             Self::ObservationNotFound(id) => write!(formatter, "observation {id} not found"),
@@ -164,6 +170,18 @@ pub struct Claim {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Objective {
+    pub intent: String,
+    pub external_reference: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkingSetEntry {
+    pub observation_id: u64,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceOutcome {
     Passed,
@@ -201,6 +219,16 @@ pub struct Transaction {
     pub last_rejection: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkspaceStatus {
+    pub objective: Option<Objective>,
+    pub working_set: Vec<WorkingSetEntry>,
+    pub observations: Vec<Observation>,
+    pub claims: Vec<Claim>,
+    pub evidence: Vec<Evidence>,
+    pub transactions: Vec<Transaction>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct EventRecord {
     schema_version: u32,
@@ -211,6 +239,14 @@ struct EventRecord {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Event {
+    ObjectiveBound {
+        intent: String,
+        external_reference: Option<String>,
+    },
+    ObservationFocused {
+        observation_id: u64,
+        reason: String,
+    },
     ObservationRecorded {
         observation_id: u64,
         path: PathBuf,
@@ -295,6 +331,75 @@ impl Workspace {
         Ok(Self {
             repository_root,
             workspace_root,
+        })
+    }
+
+    pub fn bind_objective(
+        &self,
+        intent: impl Into<String>,
+        external_reference: Option<String>,
+    ) -> Result<Objective, WorkspaceError> {
+        let intent = intent.into();
+        if intent.trim().is_empty() {
+            return Err(WorkspaceError::InvalidObjective(
+                "intent must not be empty".to_owned(),
+            ));
+        }
+        self.append(Event::ObjectiveBound {
+            intent,
+            external_reference,
+        })?;
+        self.project()?.objective.ok_or_else(|| {
+            WorkspaceError::CorruptLog("objective event was not projected".to_owned())
+        })
+    }
+
+    pub fn focus_observation(
+        &self,
+        observation_id: u64,
+        reason: impl Into<String>,
+    ) -> Result<WorkingSetEntry, WorkspaceError> {
+        let reason = reason.into();
+        if reason.trim().is_empty() {
+            return Err(WorkspaceError::InvalidWorkingSet(
+                "focus reason must not be empty".to_owned(),
+            ));
+        }
+        if !self.project()?.observations.contains_key(&observation_id) {
+            return Err(WorkspaceError::ObservationNotFound(observation_id));
+        }
+        self.append(Event::ObservationFocused {
+            observation_id,
+            reason,
+        })?;
+        self.project()?
+            .working_set
+            .remove(&observation_id)
+            .ok_or_else(|| WorkspaceError::CorruptLog("focus event was not projected".to_owned()))
+    }
+
+    pub fn resume_status(&self) -> Result<WorkspaceStatus, WorkspaceError> {
+        let projection = self.project()?;
+        let observation_ids: Vec<_> = projection.observations.keys().copied().collect();
+        let claim_ids: Vec<_> = projection.claims.keys().copied().collect();
+        let evidence_ids: Vec<_> = projection.evidence.keys().copied().collect();
+        for observation_id in observation_ids {
+            self.reconcile_observation(observation_id)?;
+        }
+        for claim_id in claim_ids {
+            self.reconcile_claim(claim_id)?;
+        }
+        for evidence_id in evidence_ids {
+            self.reconcile_evidence(evidence_id)?;
+        }
+        let projection = self.project()?;
+        Ok(WorkspaceStatus {
+            objective: projection.objective,
+            working_set: projection.working_set.into_values().collect(),
+            observations: projection.observations.into_values().collect(),
+            claims: projection.claims.into_values().collect(),
+            evidence: projection.evidence.into_values().collect(),
+            transactions: projection.transactions.into_values().collect(),
         })
     }
 
@@ -699,6 +804,8 @@ impl Workspace {
 
 #[derive(Default)]
 struct Projection {
+    objective: Option<Objective>,
+    working_set: BTreeMap<u64, WorkingSetEntry>,
     observations: BTreeMap<u64, Observation>,
     claims: BTreeMap<u64, Claim>,
     evidence: BTreeMap<u64, Evidence>,
@@ -727,6 +834,30 @@ impl Projection {
         self.next_sequence += 1;
 
         match record.event {
+            Event::ObjectiveBound {
+                intent,
+                external_reference,
+            } => {
+                self.objective = Some(Objective {
+                    intent,
+                    external_reference,
+                });
+            }
+            Event::ObservationFocused {
+                observation_id,
+                reason,
+            } => {
+                if !self.observations.contains_key(&observation_id) {
+                    return Err(WorkspaceError::ObservationNotFound(observation_id));
+                }
+                self.working_set.insert(
+                    observation_id,
+                    WorkingSetEntry {
+                        observation_id,
+                        reason,
+                    },
+                );
+            }
             Event::ObservationRecorded {
                 observation_id,
                 path,

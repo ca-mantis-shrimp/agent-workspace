@@ -22,6 +22,30 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
     let workspace = Workspace::open(&options.repository, &options.workspace)?;
 
     match command.as_str() {
+        "bind-objective" => {
+            print_json(&workspace.bind_objective(
+                options.intent.ok_or_else(|| {
+                    CliError::Usage("bind-objective requires --intent".to_owned())
+                })?,
+                options.external_reference,
+            )?)?;
+        }
+        "focus" => {
+            let observation_id = options
+                .observation_ids
+                .first()
+                .copied()
+                .ok_or_else(|| CliError::Usage("focus requires --observation".to_owned()))?;
+            print_json(
+                &workspace.focus_observation(
+                    observation_id,
+                    options
+                        .reason
+                        .ok_or_else(|| CliError::Usage("focus requires --reason".to_owned()))?,
+                )?,
+            )?;
+        }
+        "status" => print_json(&workspace.resume_status()?)?,
         "observe" => {
             let path = options
                 .path
@@ -111,6 +135,9 @@ struct Options {
     check_name: Option<String>,
     invocation: Option<String>,
     outcome: Option<EvidenceOutcome>,
+    intent: Option<String>,
+    external_reference: Option<String>,
+    reason: Option<String>,
 }
 
 impl Options {
@@ -130,6 +157,9 @@ impl Options {
         let mut check_name = None;
         let mut invocation = None;
         let mut outcome = None;
+        let mut intent = None;
+        let mut external_reference = None;
+        let mut reason = None;
         let mut index = 0;
 
         while index < arguments.len() {
@@ -164,6 +194,9 @@ impl Options {
                 }
                 "--check" => check_name = Some(value.clone()),
                 "--invocation" => invocation = Some(value.clone()),
+                "--intent" => intent = Some(value.clone()),
+                "--reference" => external_reference = Some(value.clone()),
+                "--reason" => reason = Some(value.clone()),
                 "--result" => {
                     outcome = Some(match value.as_str() {
                         "passed" => EvidenceOutcome::Passed,
@@ -216,6 +249,9 @@ impl Options {
             check_name,
             invocation,
             outcome,
+            intent,
+            external_reference,
+            reason,
         })
     }
 }
