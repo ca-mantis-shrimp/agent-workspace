@@ -1,0 +1,6 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ClearHeadToDo-Devs/specifications/master/schemas/workspace.schema.json",
+  "created_at": "2026-08-31",
+  "workspace_id": "01a05b72-fb0a-7542-af05-ee218c41c02b",
+  "workspace_name": "agent-workspace"
+}
