@@ -59,7 +59,12 @@ clearhead read actions
 clearhead query index unscheduled
 ```
 
-The first action is `contract`: write an executable contract and failure model before choosing implementation infrastructure.
+The executable contract is now recorded in the
+[executable contract](docs/executable-contract.md). The active action is
+`kernel`; its first walking-skeleton slice implements scenario S1, observation
+staleness after an out-of-band edit. Implementation choices settled by running
+code are recorded in
+[`docs/implementation-notes.md`](docs/implementation-notes.md).
 
 ## Principles
 
