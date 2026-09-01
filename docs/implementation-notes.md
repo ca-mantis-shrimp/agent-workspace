@@ -145,3 +145,21 @@ revised when later scenarios expose a better boundary.
   owned or out of band — invalidates that evidence and requires validation again.
   Transaction ownership is then used to distinguish safe rollback and concurrent
   drift, not to exempt pre-mutation evidence from freshness rules.
+- **Open modeling question for S6 — descriptive vs. normative.** Today there is one
+  `Claim`, and it is purely descriptive (a statement over supporting observations
+  and inputs). The qualification above needs the normative acceptance criterion and
+  the descriptive claim to be *distinguishable in the model*, not only in prose —
+  otherwise one structure will be made to carry both meanings and the distinction
+  will erode where it matters most. Whether that is a separate type, a flag, or a
+  relation is left to whoever builds S6; the requirement is only that acceptance can
+  tell "what the result must satisfy" from "what was observed to be true."
+- **S6 modeling direction — use a separate acceptance-criterion type.** A flag on
+  `Claim` would leave one structure with incompatible validity rules. A descriptive
+  claim is current or stale relative to observations; an acceptance criterion is
+  normative and is satisfied or unsatisfied by current evidence against a specific
+  transaction candidate state. Transactions should reference criterion IDs, and
+  evidence should state which criterion it supports while retaining its own input
+  freshness. The current S4 `acceptance_claim_ids` field is therefore provisional
+  walking-skeleton scaffolding and must be migrated before S6 acceptance semantics
+  are considered complete. No descriptive claim may become current merely because
+  a criterion or transaction was rebased.
