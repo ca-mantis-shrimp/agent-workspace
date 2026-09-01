@@ -1,4 +1,6 @@
-use agent_workspace::{Claim, FreshnessWithinScope, Observation, ScopeCompleteness, ScopeSource};
+use agent_workspace::{
+    Claim, ClaimInputSource, FreshnessWithinScope, Observation, ScopeCompleteness, ScopeSource,
+};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -280,6 +282,121 @@ fn s2_out_of_scope_change_keeps_scoped_claim_current_and_visible() {
             .operational_coverage
             .reconciliation_fingerprint
     );
+}
+
+#[test]
+fn pre_s3_claim_events_replay_with_declared_scope() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let observation = invoke(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&observation.stdout).unwrap();
+    let claim = invoke(&[
+        "claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--statement",
+        "foo returns one",
+        "--observation",
+        &observation.id.to_string(),
+    ]);
+    let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
+    let event_log_path = workspace.join("events.jsonl");
+    let old_log = fs::read_to_string(&event_log_path)
+        .unwrap()
+        .replace("\"scope_strategy\":\"declared\",", "");
+    fs::write(&event_log_path, old_log).unwrap();
+
+    let reconciled = invoke(&[
+        "reconcile-claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &claim.id.to_string(),
+    ]);
+    let reconciled: Claim = serde_json::from_slice(&reconciled.stdout).unwrap();
+    assert_eq!(
+        reconciled.report.scope_assurance.source,
+        ScopeSource::Declared
+    );
+    assert_eq!(
+        reconciled.report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+}
+
+#[test]
+fn s3_conservative_sibling_scope_invalidates_on_helper_change() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let observation = invoke(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&observation.stdout).unwrap();
+    let claim = invoke(&[
+        "claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--statement",
+        "foo depends on helper behavior",
+        "--observation",
+        &observation.id.to_string(),
+        "--scope",
+        "conservative-siblings",
+    ]);
+    let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
+    assert_eq!(
+        claim.report.scope_assurance.source,
+        ScopeSource::Conservative
+    );
+    assert_eq!(
+        claim.report.scope_assurance.completeness,
+        ScopeCompleteness::NotAsserted
+    );
+    assert!(claim.inputs.iter().any(|input| {
+        input.path == Path::new("src/helper.rs")
+            && input.source == ClaimInputSource::ConservativeDependency
+    }));
+
+    fs::write(
+        fixture.repository.join("src/helper.rs"),
+        "pub fn helper() -> i32 { 2 }\n",
+    )
+    .unwrap();
+    let reconciled = invoke(&[
+        "reconcile-claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &claim.id.to_string(),
+    ]);
+    let reconciled: Claim = serde_json::from_slice(&reconciled.stdout).unwrap();
+    assert_eq!(
+        reconciled.report.freshness_within_scope,
+        FreshnessWithinScope::Stale
+    );
+    assert_eq!(reconciled.report.reason, "recorded claim input changed");
 }
 
 #[test]

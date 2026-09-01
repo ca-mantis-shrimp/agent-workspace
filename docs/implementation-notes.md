@@ -55,3 +55,32 @@ revised when later scenarios expose a better boundary.
   by its absence from `mediated_paths`.
 - The standalone CLI adds `claim` and `reconcile-claim` solely to drive the
   executable scenarios. It is not yet the eventual agent-facing protocol.
+- Coverage is currently *passive*: an out-of-scope path is visible only by its
+  absence from `mediated_paths`. S2 proves honest scoping ("we do not lie about
+  what is in scope") but does **not** exercise F3's active half — surfacing that
+  an out-of-band change landed on an uncovered-but-possibly-relevant path. That
+  awaits the conservative dependency-scope decision deferred in
+  `executable-contract.md` §5, and must not be treated as covered yet.
+
+## 2026-09-01 — S3 conservative dependency scope
+
+- The first empirical conservative default is `conservative-siblings`: include
+  every regular file with the same extension in each supporting observation's
+  immediate directory. This is intentionally simple, provider-independent, and
+  likely over-broad; dogfooding must measure its invalidation noise.
+- Conservative expansion happens when the claim is recorded. Its concrete input
+  paths and fingerprints are persisted, ordered, and inspectable. The report is
+  `conservative`, `not-asserted`; it does not imply that dependencies outside
+  those sibling directories were discovered.
+- Inputs added by the strategy are distinguished as
+  `conservative_dependency`. Explicit dependencies remain independently visible
+  as `declared_dependency`.
+- Claim events written before S3 did not contain `scope_strategy`; replay assigns
+  those records the only strategy that existed then, `declared`. The additive
+  field remains compatible with schema version 2.
+- S3 proves the active part of coverage only within this named conservative
+  boundary: changing an unmentioned sibling helper invalidates the claim. New
+  files or dependencies outside the recorded expansion remain unresolved future
+  cases, not silently claimed coverage.
+- `--scope conservative-siblings` is a walking-skeleton switch, not a commitment
+  to this strategy as the eventual agent-facing default.

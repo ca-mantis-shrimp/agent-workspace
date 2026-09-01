@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -116,6 +116,7 @@ pub struct Observation {
 pub enum ClaimInputSource {
     SupportingObservation,
     DeclaredDependency,
+    ConservativeDependency,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -125,11 +126,29 @@ pub struct ClaimInput {
     pub source: ClaimInputSource,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimScopeStrategy {
+    #[default]
+    Declared,
+    ConservativeSiblingFiles,
+}
+
+impl ClaimScopeStrategy {
+    fn assurance_source(&self) -> ScopeSource {
+        match self {
+            Self::Declared => ScopeSource::Declared,
+            Self::ConservativeSiblingFiles => ScopeSource::Conservative,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Claim {
     pub id: u64,
     pub statement: String,
     pub supporting_observation_ids: Vec<u64>,
+    pub scope_strategy: ClaimScopeStrategy,
     pub inputs: Vec<ClaimInput>,
     pub report: FreshnessReport,
 }
@@ -164,6 +183,8 @@ enum Event {
         claim_id: u64,
         statement: String,
         supporting_observation_ids: Vec<u64>,
+        #[serde(default)]
+        scope_strategy: ClaimScopeStrategy,
         inputs: Vec<ClaimInput>,
         freshness: FreshnessWithinScope,
         reason: String,
@@ -283,6 +304,21 @@ impl Workspace {
         supporting_observation_ids: &[u64],
         declared_dependencies: &[PathBuf],
     ) -> Result<Claim, WorkspaceError> {
+        self.record_claim_with_scope(
+            statement,
+            supporting_observation_ids,
+            declared_dependencies,
+            ClaimScopeStrategy::Declared,
+        )
+    }
+
+    pub fn record_claim_with_scope(
+        &self,
+        statement: impl Into<String>,
+        supporting_observation_ids: &[u64],
+        declared_dependencies: &[PathBuf],
+        scope_strategy: ClaimScopeStrategy,
+    ) -> Result<Claim, WorkspaceError> {
         let statement = statement.into();
         if statement.trim().is_empty() {
             return Err(WorkspaceError::InvalidClaim(
@@ -297,11 +333,13 @@ impl Workspace {
 
         let projection = self.project()?;
         let mut inputs = BTreeMap::new();
+        let mut supporting_paths = Vec::new();
         for observation_id in supporting_observation_ids {
             let observation = projection
                 .observations
                 .get(observation_id)
                 .ok_or(WorkspaceError::ObservationNotFound(*observation_id))?;
+            supporting_paths.push(observation.path.clone());
             inputs.insert(
                 observation.path.clone(),
                 ClaimInput {
@@ -320,6 +358,17 @@ impl Workspace {
                 source: ClaimInputSource::DeclaredDependency,
             });
         }
+        if scope_strategy == ClaimScopeStrategy::ConservativeSiblingFiles {
+            for path in conservative_sibling_dependencies(&self.repository_root, &supporting_paths)?
+            {
+                let input_fingerprint = fingerprint_file(&self.repository_root.join(&path))?;
+                inputs.entry(path.clone()).or_insert(ClaimInput {
+                    path,
+                    recorded_input_fingerprint: input_fingerprint,
+                    source: ClaimInputSource::ConservativeDependency,
+                });
+            }
+        }
         let inputs: Vec<_> = inputs.into_values().collect();
         let (freshness, reason, fingerprint_inputs) =
             assess_claim_inputs(&self.repository_root, &inputs);
@@ -331,6 +380,7 @@ impl Workspace {
             claim_id,
             statement,
             supporting_observation_ids: supporting_observation_ids.to_vec(),
+            scope_strategy,
             inputs,
             freshness,
             reason,
@@ -492,6 +542,7 @@ impl Projection {
                 claim_id,
                 statement,
                 supporting_observation_ids,
+                scope_strategy,
                 inputs,
                 freshness,
                 reason,
@@ -512,17 +563,19 @@ impl Projection {
                 }
                 self.next_claim_id = self.next_claim_id.max(claim_id + 1);
                 let mediated_paths = inputs.iter().map(|input| input.path.clone()).collect();
+                let assurance_source = scope_strategy.assurance_source();
                 self.claims.insert(
                     claim_id,
                     Claim {
                         id: claim_id,
                         statement,
                         supporting_observation_ids,
+                        scope_strategy,
                         inputs,
                         report: FreshnessReport {
                             freshness_within_scope: freshness,
                             scope_assurance: ScopeAssurance {
-                                source: ScopeSource::Declared,
+                                source: assurance_source,
                                 completeness: ScopeCompleteness::NotAsserted,
                             },
                             operational_coverage: OperationalCoverage {
@@ -572,6 +625,28 @@ fn validate_relative_path(path: &Path) -> Result<PathBuf, WorkspaceError> {
 fn fingerprint_file(path: &Path) -> Result<String, WorkspaceError> {
     let bytes = fs::read(path)?;
     Ok(hex_digest(&bytes))
+}
+
+fn conservative_sibling_dependencies(
+    repository_root: &Path,
+    supporting_paths: &[PathBuf],
+) -> Result<Vec<PathBuf>, WorkspaceError> {
+    let mut dependencies = BTreeSet::new();
+    for supporting_path in supporting_paths {
+        let parent = supporting_path.parent().unwrap_or_else(|| Path::new(""));
+        let extension = supporting_path.extension();
+        for entry in fs::read_dir(repository_root.join(parent))? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() || entry.path().extension() != extension {
+                continue;
+            }
+            let path = parent.join(entry.file_name());
+            if !supporting_paths.contains(&path) {
+                dependencies.insert(path);
+            }
+        }
+    }
+    Ok(dependencies.into_iter().collect())
 }
 
 fn assess_claim_inputs(

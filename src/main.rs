@@ -1,4 +1,4 @@
-use agent_workspace::{Workspace, WorkspaceError};
+use agent_workspace::{ClaimScopeStrategy, Workspace, WorkspaceError};
 use serde::Serialize;
 use std::env;
 use std::path::PathBuf;
@@ -39,10 +39,11 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
             let statement = options
                 .statement
                 .ok_or_else(|| CliError::Usage("claim requires --statement".to_owned()))?;
-            print_json(&workspace.record_claim(
+            print_json(&workspace.record_claim_with_scope(
                 statement,
                 &options.observation_ids,
                 &options.dependencies,
+                options.scope_strategy,
             )?)?;
         }
         "reconcile-claim" => {
@@ -70,6 +71,7 @@ struct Options {
     statement: Option<String>,
     observation_ids: Vec<u64>,
     dependencies: Vec<PathBuf>,
+    scope_strategy: ClaimScopeStrategy,
 }
 
 impl Options {
@@ -82,6 +84,7 @@ impl Options {
         let mut statement = None;
         let mut observation_ids = Vec::new();
         let mut dependencies = Vec::new();
+        let mut scope_strategy = ClaimScopeStrategy::Declared;
         let mut index = 0;
 
         while index < arguments.len() {
@@ -101,6 +104,17 @@ impl Options {
                         .map_err(|_| CliError::Usage(format!("invalid observation id: {value}")))?,
                 ),
                 "--dependency" => dependencies.push(PathBuf::from(value)),
+                "--scope" => {
+                    scope_strategy = match value.as_str() {
+                        "declared" => ClaimScopeStrategy::Declared,
+                        "conservative-siblings" => ClaimScopeStrategy::ConservativeSiblingFiles,
+                        _ => {
+                            return Err(CliError::Usage(format!(
+                                "invalid claim scope strategy: {value}"
+                            )));
+                        }
+                    }
+                }
                 "--id" => {
                     id = Some(
                         value
@@ -124,6 +138,7 @@ impl Options {
             statement,
             observation_ids,
             dependencies,
+            scope_strategy,
         })
     }
 }
