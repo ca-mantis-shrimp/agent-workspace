@@ -6,7 +6,9 @@
 record from which the walking skeleton begins. Infrastructure-agnostic: it precedes the choice
 of storage/language. Every scenario is a concrete, checkable behavior; every failure-model item
 must **never** be observed. Further doc-only refinement is explicitly out of scope — open
-questions in §5 are settled by running code, not another pass.*
+questions in §5 are settled by running code, not another pass. Amended after the S1 review to
+add invariant 7 (claim completeness non-inheritance) — an implementation-evidence hardening,
+not a design reopening.*
 
 ## 0. Normative imports
 
@@ -65,20 +67,25 @@ A result is always the *triple*, never dimension 1 alone.
    cannot be reconciled are `unknown`, never `current`.
 6. **Layered invalidation.** Claim freshness is bounded by *both* its observations *and* its
    dependency scope; a claim may be `stale` while its observed span is byte-identical.
-7. **Evidence expires with inputs.** Validation evidence cannot support a transaction after its
+7. **Claims never inherit observation completeness.** An observation may report its own scope
+   `asserted-complete` because it captures a bounded, fully-fingerprinted payload. A claim's
+   scope assurance must be independently established from its declared observations and
+   dependency scope, and may never be set to `asserted-complete` by inheritance from a
+   supporting observation. *(Violation is an F1 vector.)*
+8. **Evidence expires with inputs.** Validation evidence cannot support a transaction after its
    relevant inputs change.
-8. **No silent rebinding.** Failed semantic relocation yields `stale`/ambiguous, never a guessed
+9. **No silent rebinding.** Failed semantic relocation yields `stale`/ambiguous, never a guessed
    binding reported as `current`.
-9. **Provenance survives normalization.** Every record retains provider identity plus enough
-   native detail (or a content-addressed reference) to reconstruct what the provider said.
-10. **Transactions are safely reversible.** A transaction records a revision identity *and* its
+10. **Provenance survives normalization.** Every record retains provider identity plus enough
+    native detail (or a content-addressed reference) to reconstruct what the provider said.
+11. **Transactions are safely reversible.** A transaction records a revision identity *and* its
     initial worktree state. Revert restores only transaction-owned mutations and reconstructs
     the initial worktree; on ambiguity from overlapping later mutations it **halts with a
     conflict** — never destroys unrelated work, never reports success on a partial revert.
-11. **Restart from records.** Restart reconstructs objective, working set, claims, transaction,
+12. **Restart from records.** Restart reconstructs objective, working set, claims, transaction,
     evidence, and the full report triple from durable records, not chat history.
-12. **Stopping is success.** Checkpoint and handoff are valid successful lifecycle outcomes.
-13. **Failure ≠ empty; secrets excluded.** Provider failure is recorded distinctly from a
+13. **Stopping is success.** Checkpoint and handoff are valid successful lifecycle outcomes.
+14. **Failure ≠ empty; secrets excluded.** Provider failure is recorded distinctly from a
     successful empty result; secrets and unbounded output are not stored by default (retention
     and redaction per imported §*Constraints*).
 
