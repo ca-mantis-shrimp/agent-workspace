@@ -1,5 +1,5 @@
 use agent_workspace::{
-    ClaimScopeStrategy, EvidenceOutcome, ObservationSelector, Workspace, WorkspaceError,
+    ClaimScopeStrategy, EvidenceOutcome, Normalizer, ObservationSelector, Workspace, WorkspaceError,
 };
 use serde::Serialize;
 use std::env;
@@ -70,6 +70,7 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 path,
                 provider,
                 options.selector.unwrap_or_default(),
+                options.normalizer,
                 options.retain_payload,
             )?)?;
         }
@@ -198,6 +199,7 @@ struct Options {
     reason: Option<String>,
     contents: Option<String>,
     selector: Option<ObservationSelector>,
+    normalizer: Normalizer,
     retain_payload: bool,
     label: Option<String>,
     note: Option<String>,
@@ -226,6 +228,7 @@ impl Options {
         let mut reason = None;
         let mut contents = None;
         let mut selector = None;
+        let mut normalizer = Normalizer::None;
         let mut retain_payload = false;
         let mut label = None;
         let mut note = None;
@@ -272,6 +275,15 @@ impl Options {
                 "--since" => since = Some(value.clone()),
                 "--content" => contents = Some(value.clone()),
                 "--range" => selector = Some(parse_byte_range(value)?),
+                "--normalize" => {
+                    normalizer = match value.as_str() {
+                        "none" => Normalizer::None,
+                        "rustfmt" => Normalizer::Rustfmt,
+                        _ => {
+                            return Err(CliError::Usage(format!("invalid normalizer: {value}")));
+                        }
+                    }
+                }
                 "--retain-payload" => {
                     retain_payload = value.parse().map_err(|_| {
                         CliError::Usage(format!("invalid retain-payload value: {value}"))
@@ -334,6 +346,7 @@ impl Options {
             reason,
             contents,
             selector,
+            normalizer,
             retain_payload,
             label,
             note,

@@ -2078,6 +2078,98 @@ fn concurrent_writers_serialize_without_corrupting_the_log() {
     invoke(&["status", "--repository", &repo, "--workspace", &ws]);
 }
 
+/// Normalized fingerprinting: an observation captured with `--normalize rustfmt`
+/// fingerprints the formatter-canonical form, so a pure reformat (same meaning,
+/// different bytes) stays `current` while a real semantic edit still stales.
+/// The default (byte) path is unchanged — a reformat stales it, as any edit does.
+#[test]
+fn rustfmt_normalized_observation_ignores_reformat_but_catches_semantics() {
+    let fixture =
+        GitFixture::with_files(&[("src/task.rs", "pub fn f() -> i32 { let x = 1; x }\n")]);
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    // Normalized observation, plus a default (byte) observation for contrast.
+    let normalized: Observation = serde_json::from_slice(
+        &invoke(&[
+            "observe",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--path",
+            "src/task.rs",
+            "--normalize",
+            "rustfmt",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let byte: Observation = serde_json::from_slice(
+        &invoke(&[
+            "observe",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--path",
+            "src/task.rs",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let normalized_id = normalized.id.to_string();
+    let byte_id = byte.id.to_string();
+
+    // A pure reformat: rustfmt-equivalent to the original, different bytes.
+    fs::write(
+        fixture.repository.join("src/task.rs"),
+        "pub fn f() -> i32 {\n    let x = 1;\n    x\n}\n",
+    )
+    .unwrap();
+
+    let reconcile = |id: &str| -> FreshnessWithinScope {
+        let observation: Observation = serde_json::from_slice(
+            &invoke(&[
+                "reconcile",
+                "--repository",
+                &repo,
+                "--workspace",
+                &ws,
+                "--id",
+                id,
+            ])
+            .stdout,
+        )
+        .unwrap();
+        observation.report.freshness_within_scope
+    };
+
+    assert_eq!(
+        reconcile(&normalized_id),
+        FreshnessWithinScope::Current,
+        "a pure reformat must not stale a rustfmt-normalized observation"
+    );
+    assert_eq!(
+        reconcile(&byte_id),
+        FreshnessWithinScope::Stale,
+        "the default byte observation still stales on any byte change, reformat included"
+    );
+
+    // A semantic edit must stale even the normalized observation.
+    fs::write(
+        fixture.repository.join("src/task.rs"),
+        "pub fn f() -> i32 {\n    let x = 2;\n    x\n}\n",
+    )
+    .unwrap();
+    assert_eq!(
+        reconcile(&normalized_id),
+        FreshnessWithinScope::Stale,
+        "a semantic edit must still stale a normalized observation"
+    );
+}
+
 fn claim_ids(claims: &[Claim]) -> Vec<u64> {
     claims.iter().map(|claim| claim.id).collect()
 }

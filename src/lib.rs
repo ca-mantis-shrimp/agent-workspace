@@ -151,6 +151,24 @@ pub enum ObservationSelector {
     },
 }
 
+/// How an observed unit's bytes are canonicalized before fingerprinting. The
+/// default (`None`) fingerprints raw bytes — any change, cosmetic or not, is a
+/// change. A formatter normalizer fingerprints the *canonical* form instead, so
+/// a pure reformat (same meaning, different bytes) is not seen as a change while
+/// a real edit still is. Because the normalizer rides beside the selector on
+/// both observations and claim inputs, record-time and reconcile-time
+/// fingerprints are computed the same way and stay comparable.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Normalizer {
+    #[default]
+    None,
+    /// Canonicalize Rust source with `rustfmt`. Falls back to raw bytes when
+    /// rustfmt is absent or the unit does not parse (e.g. a mid-edit file, or a
+    /// byte-range fragment that is not a standalone item).
+    Rustfmt,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Observation {
     pub id: u64,
@@ -159,6 +177,8 @@ pub struct Observation {
     pub observed_revision: String,
     #[serde(default)]
     pub selector: ObservationSelector,
+    #[serde(default)]
+    pub normalizer: Normalizer,
     pub observed_input_fingerprint: String,
     #[serde(default)]
     pub observed_container_fingerprint: String,
@@ -200,6 +220,8 @@ pub struct ClaimInput {
     pub path: PathBuf,
     #[serde(default)]
     pub selector: ObservationSelector,
+    #[serde(default)]
+    pub normalizer: Normalizer,
     pub recorded_input_fingerprint: String,
     pub source: ClaimInputSource,
 }
@@ -385,6 +407,8 @@ enum Event {
         git_revision: String,
         #[serde(default)]
         selector: ObservationSelector,
+        #[serde(default)]
+        normalizer: Normalizer,
         input_fingerprint: String,
         #[serde(default)]
         container_fingerprint: Option<String>,
@@ -714,6 +738,7 @@ impl Workspace {
         path: impl AsRef<Path>,
         provider: impl Into<String>,
         selector: ObservationSelector,
+        normalizer: Normalizer,
         retain_native_payload: bool,
     ) -> Result<ObservationCapture, WorkspaceError> {
         let path = validate_relative_path(path.as_ref())?;
@@ -723,7 +748,7 @@ impl Workspace {
         let content = String::from_utf8(unit.to_vec()).map_err(|_| {
             WorkspaceError::InvalidObservation("selected source is not valid UTF-8".to_owned())
         })?;
-        let input_fingerprint = hex_digest(unit);
+        let input_fingerprint = hex_digest(&normalize_unit(unit, normalizer));
         let container_fingerprint = hex_digest(&container);
         let native_payload_reference = if retain_native_payload {
             if container.len() > MAX_RETAINED_PAYLOAD_BYTES {
@@ -755,6 +780,7 @@ impl Workspace {
             provider: provider.into(),
             git_revision,
             selector,
+            normalizer,
             input_fingerprint,
             container_fingerprint: Some(container_fingerprint),
             native_payload_reference,
@@ -845,6 +871,7 @@ impl Workspace {
             &self.repository_root,
             &observation.path,
             &observation.selector,
+            observation.normalizer,
         );
         let (current_unit, current_container) = current
             .as_ref()
@@ -956,6 +983,7 @@ impl Workspace {
                 ClaimInput {
                     path: observation.path.clone(),
                     selector: observation.selector.clone(),
+                    normalizer: observation.normalizer,
                     recorded_input_fingerprint: observation.observed_input_fingerprint.clone(),
                     source: ClaimInputSource::SupportingObservation,
                 },
@@ -969,6 +997,7 @@ impl Workspace {
                 .or_insert(ClaimInput {
                     path,
                     selector: ObservationSelector::WholeFile,
+                    normalizer: Normalizer::None,
                     recorded_input_fingerprint: input_fingerprint,
                     source: ClaimInputSource::DeclaredDependency,
                 });
@@ -982,6 +1011,7 @@ impl Workspace {
                     .or_insert(ClaimInput {
                         path,
                         selector: ObservationSelector::WholeFile,
+                        normalizer: Normalizer::None,
                         recorded_input_fingerprint: input_fingerprint,
                         source: ClaimInputSource::ConservativeDependency,
                     });
@@ -1459,6 +1489,7 @@ impl Workspace {
         let file = OpenOptions::new()
             .create(true)
             .write(true)
+            .truncate(false)
             .open(self.workspace_root.join(LOCK_FILE_NAME))?;
         file.lock()?;
         Ok(WorkspaceLock { _file: file })
@@ -1577,6 +1608,7 @@ impl Projection {
                 provider,
                 git_revision,
                 selector,
+                normalizer,
                 input_fingerprint,
                 container_fingerprint,
                 native_payload_reference,
@@ -1597,6 +1629,7 @@ impl Projection {
                         provider,
                         observed_revision: git_revision,
                         selector: selector.clone(),
+                        normalizer,
                         observed_container_fingerprint: container_fingerprint
                             .unwrap_or_else(|| input_fingerprint.clone()),
                         observed_input_fingerprint: input_fingerprint,
@@ -2028,8 +2061,13 @@ fn assess_claim_inputs(repository_root: &Path, inputs: &[ClaimInput]) -> ClaimAs
     let mut fingerprint_inputs = Vec::with_capacity(inputs.len());
 
     for input in inputs {
-        let current = read_observation_fingerprints(repository_root, &input.path, &input.selector)
-            .map(|(unit, _)| unit);
+        let current = read_observation_fingerprints(
+            repository_root,
+            &input.path,
+            &input.selector,
+            input.normalizer,
+        )
+        .map(|(unit, _)| unit);
         match &current {
             Ok(fingerprint) if fingerprint == &input.recorded_input_fingerprint => {}
             Ok(_) => {
@@ -2106,10 +2144,40 @@ fn read_observation_fingerprints(
     repository_root: &Path,
     path: &Path,
     selector: &ObservationSelector,
+    normalizer: Normalizer,
 ) -> Result<(String, String), WorkspaceError> {
     let container = fs::read(resolve_repository_file(repository_root, path)?)?;
     let unit = select_observation_unit(&container, selector)?;
-    Ok((hex_digest(unit), hex_digest(&container)))
+    Ok((
+        hex_digest(&normalize_unit(unit, normalizer)),
+        hex_digest(&container),
+    ))
+}
+
+/// Canonicalize an observed unit before fingerprinting. `None` returns the bytes
+/// unchanged. `Rustfmt` returns the rustfmt-canonical form, falling back to the
+/// raw bytes whenever rustfmt is unavailable or the unit does not parse — so a
+/// mid-edit or non-standalone fragment simply fingerprints as its literal bytes
+/// (and thus reads as changed), never as an error.
+fn normalize_unit(unit: &[u8], normalizer: Normalizer) -> Vec<u8> {
+    match normalizer {
+        Normalizer::None => unit.to_vec(),
+        Normalizer::Rustfmt => rustfmt_canonical(unit).unwrap_or_else(|| unit.to_vec()),
+    }
+}
+
+fn rustfmt_canonical(unit: &[u8]) -> Option<Vec<u8>> {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("rustfmt")
+        .args(["--emit", "stdout", "--edition", "2021", "--quiet"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.take()?.write_all(unit).ok()?;
+    let output = child.wait_with_output().ok()?;
+    output.status.success().then_some(output.stdout)
 }
 
 fn observation_reconciliation_fingerprint(

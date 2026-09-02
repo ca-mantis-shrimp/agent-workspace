@@ -458,3 +458,46 @@ checkpoint notion to diff against.
   exclusive lock, so all invocations fully serialize — simpler than a shared/
   exclusive split and it also rules out torn reads, at the cost of some read
   concurrency that does not matter for a local CLI.
+
+## 2026-09-01 — Normalized fingerprinting (semantic freshness, first slice)
+
+- **The problem it kills.** The freshness signal fingerprints raw bytes, so a
+  pure reformat (whitespace/layout, no meaning change) reads as `stale`. This
+  fired three times in one session — a GLM reformat of `walking_skeleton.rs`
+  staled claim 17 for zero semantic reason. A signal that cries wolf on cosmetic
+  noise erodes the prime directive (*believe `stale` over your own memory*), so
+  this is signal-trust work, not an optimization.
+- **The reframe that kept it small.** Not an AST/semantic-diff engine — fingerprint
+  the *formatter-canonical* form and delegate canonicalization to the language's
+  existing formatter (`rustfmt`). "Leverage existing tools." The unit fingerprint
+  is computed in exactly two places (`capture_file_observation` and
+  `read_observation_fingerprints`, the latter serving both observation-reconcile
+  and `assess_claim_inputs`), so routing both through `normalize_unit` is the
+  whole mechanism.
+- **The normalizer rides beside the selector.** A `Normalizer` enum (`None`
+  default, `Rustfmt`) sits next to `ObservationSelector` on `Observation`, the
+  `ObservationRecorded` event, and `ClaimInput`. Because the selector already
+  travels wherever an input is fingerprinted, record-time and reconcile-time
+  normalization stay identical *for free* — the key to this being a small slice
+  rather than a sprawling one. All fields are `#[serde(default)]`, so existing
+  logs replay unchanged.
+- **Opt-in, default byte-identical.** `--normalize rustfmt` on `observe`; default
+  `None` changes nothing. `rustfmt_canonical` shells `rustfmt --emit stdout` over
+  stdin and **falls back to raw bytes** when rustfmt is absent or the unit does
+  not parse (a mid-edit file, or a byte-range fragment that is not a standalone
+  item) — so it degrades to today's behavior, never to an error.
+- **Proof.** `rustfmt_normalized_observation_ignores_reformat_but_catches_semantics`:
+  a normalized observation stays `current` across a reformat while the byte
+  observation stales, and a semantic edit (`x = 1` → `x = 2`) stales even the
+  normalized one. End-to-end smoke reproduced the exact GLM incident (multi-line
+  `assert!` → chained one-liner): normalized `current`, byte `stale`.
+- **Deferred (honest residuals).** (1) *Opt-in has an adoption gap* — nobody
+  benefits unless they pass the flag, so the claim-17 recurrence is only
+  prevented once observations adopt it; auto-normalizing recognized source types
+  is the natural follow-up but was rejected here to avoid silently changing
+  existing fingerprints' meaning and taxing every reconcile with a subprocess.
+  (2) *Version skew* — the canonical form depends on the rustfmt version, so two
+  environments with different rustfmt still disagree; this is Pareto-no-worse
+  than today's byte baseline, and pinning rustfmt (`rust-toolchain.toml`) would
+  close it. (3) The normalizer is not folded into the reconciliation-fingerprint
+  material (the unit fingerprint already encodes the normalized content).
