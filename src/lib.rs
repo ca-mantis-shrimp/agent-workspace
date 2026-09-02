@@ -420,6 +420,16 @@ pub struct Evidence {
     pub provider: String,
     pub outcome: EvidenceOutcome,
     pub inputs: Vec<ClaimInput>,
+    /// The content-addressed candidate the transaction owned *when this evidence
+    /// was recorded* — a fold over its mutation bytes (see
+    /// [`Transaction::candidate_fingerprint`]). Acceptance requires this still
+    /// equals the transaction's current candidate, so a passing check recorded
+    /// against an earlier candidate (e.g. before another file was mutated) can
+    /// never be counted as proof for the bytes actually being committed. Empty
+    /// for legacy evidence replayed from before candidate binding existed;
+    /// unbound legacy evidence therefore never satisfies the binding gate.
+    #[serde(default)]
+    pub candidate_fingerprint: String,
     pub report: FreshnessReport,
 }
 
@@ -545,6 +555,31 @@ pub struct Transaction {
     pub mutations: Vec<Mutation>,
     pub state: TransactionState,
     pub last_rejection: Option<String>,
+}
+
+impl Transaction {
+    /// A single content address for the transaction's owned candidate state: the
+    /// set of `(path, after_fingerprint)` mutation bytes, folded in path order so
+    /// it is independent of the order mutations were applied. This is a pure
+    /// projection over the mutations — no stored field, one source of truth — and
+    /// it is what evidence binds to and what acceptance re-verifies against disk.
+    /// A transaction with no mutations yields a stable empty-candidate digest.
+    pub fn candidate_fingerprint(&self) -> String {
+        let mut entries: Vec<(&Path, &str)> = self
+            .mutations
+            .iter()
+            .map(|mutation| (mutation.path.as_path(), mutation.after_fingerprint.as_str()))
+            .collect();
+        entries.sort_by(|left, right| left.0.cmp(right.0));
+        let mut material = Vec::new();
+        for (path, after_fingerprint) in entries {
+            material.extend_from_slice(path.as_os_str().as_encoded_bytes());
+            material.push(0);
+            material.extend_from_slice(after_fingerprint.as_bytes());
+            material.push(b'\n');
+        }
+        hex_digest(&material)
+    }
 }
 
 /// A named point in the event log. Recording a checkpoint captures *where in the
@@ -1027,7 +1062,11 @@ pub struct TransactionPreview {
 impl WorkspaceStatus {
     /// Project a review surface for one transaction, or `None` if no such
     /// transaction exists. Pure over the already-reconciled status.
-    pub fn transaction_preview(&self, transaction_id: u64) -> Option<TransactionPreview> {
+    pub fn transaction_preview(
+        &self,
+        transaction_id: u64,
+        candidate_drift: Option<String>,
+    ) -> Option<TransactionPreview> {
         let transaction = self
             .transactions
             .iter()
@@ -1065,7 +1104,14 @@ impl WorkspaceStatus {
             })
             .collect();
 
-        let (ready_to_accept, readiness_reason) = self.acceptance_readiness(transaction);
+        // Disk-drift takes precedence over the pure rule while the transaction is
+        // still open: bytes that no longer match what was applied are the most
+        // fundamental blocker, and surfacing that reason is what keeps this
+        // preview from ever promising a readiness `accept-transaction` would deny.
+        let (ready_to_accept, readiness_reason) = match candidate_drift {
+            Some(drift) if transaction.state == TransactionState::Open => (false, drift),
+            _ => self.acceptance_readiness(transaction),
+        };
 
         Some(TransactionPreview {
             id: transaction.id,
@@ -1090,6 +1136,7 @@ impl WorkspaceStatus {
         if transaction.state != TransactionState::Open {
             return (false, format!("transaction is {:?}", transaction.state));
         }
+        let candidate = transaction.candidate_fingerprint();
         for claim_id in &transaction.acceptance_claim_ids {
             let Some(claim) = self.claims.iter().find(|claim| claim.id == *claim_id) else {
                 return (false, format!("acceptance claim {claim_id} is not active"));
@@ -1097,21 +1144,29 @@ impl WorkspaceStatus {
             if claim.report.freshness_within_scope != FreshnessWithinScope::Current {
                 return (false, format!("acceptance claim {claim_id} is not current"));
             }
-            let has_passing_evidence = self.evidence.iter().any(|evidence| {
+            // The passing evidence must also be bound to *this* candidate: a check
+            // recorded against an earlier candidate (before another path was
+            // mutated) never proves the bytes now being committed. This is
+            // orthogonal to the evidence's own input-freshness above.
+            let has_bound_passing_evidence = self.evidence.iter().any(|evidence| {
                 evidence.claim_id == *claim_id
                     && evidence.outcome == EvidenceOutcome::Passed
                     && evidence.report.freshness_within_scope == FreshnessWithinScope::Current
+                    && evidence.candidate_fingerprint == candidate
             });
-            if !has_passing_evidence {
+            if !has_bound_passing_evidence {
                 return (
                     false,
-                    format!("acceptance claim {claim_id} lacks current passing evidence"),
+                    format!(
+                        "acceptance claim {claim_id} lacks current passing evidence bound to the current candidate"
+                    ),
                 );
             }
         }
         (
             true,
-            "all acceptance claims current with passing evidence".to_owned(),
+            "all acceptance claims current with passing evidence bound to the current candidate"
+                .to_owned(),
         )
     }
 }
@@ -1339,6 +1394,8 @@ enum Event {
         provider: String,
         outcome: EvidenceOutcome,
         inputs: Vec<ClaimInput>,
+        #[serde(default)]
+        candidate_fingerprint: String,
         freshness: FreshnessWithinScope,
         reason: String,
         reconciliation_fingerprint: String,
@@ -1609,7 +1666,13 @@ impl Workspace {
             }
         }
         let projection = self.apply_reconciliations(projection, pending)?;
-        Ok(Self::status_from_projection(projection).transaction_preview(transaction_id))
+        let status = Self::status_from_projection(projection);
+        let drift = status
+            .transactions
+            .iter()
+            .find(|transaction| transaction.id == transaction_id)
+            .and_then(|transaction| self.candidate_drift(transaction));
+        Ok(status.transaction_preview(transaction_id, drift))
     }
 
     fn apply_reconciliations(
@@ -2777,6 +2840,17 @@ impl Workspace {
                 "claim inputs are not current".to_owned(),
             ));
         }
+        // Materialization gate: bind this evidence to the candidate the checks
+        // actually ran against. That is only honest if the candidate is on disk
+        // *now* — every owned path hashing to its `after_fingerprint`. If a path
+        // has drifted before the evidence is even recorded, the check could not
+        // have consumed this candidate, so we refuse to stamp it.
+        if let Some(drift) = self.candidate_drift(transaction) {
+            return Err(WorkspaceError::InvalidEvidence(format!(
+                "candidate not materialized: {drift}"
+            )));
+        }
+        let candidate_fingerprint = transaction.candidate_fingerprint();
         let evidence_id = projection.next_evidence_id;
         self.append(Event::EvidenceRecorded {
             evidence_id,
@@ -2787,6 +2861,7 @@ impl Workspace {
             provider: provider.into(),
             outcome,
             inputs,
+            candidate_fingerprint,
             freshness,
             reason,
             reconciliation_fingerprint: scoped_reconciliation_fingerprint(
@@ -2926,6 +3001,35 @@ impl Workspace {
             .ok_or(WorkspaceError::TransactionNotFound(transaction_id))
     }
 
+    /// Re-verify that the transaction's owned bytes still sit on disk exactly as
+    /// they were applied: each mutated path must hash to its `after_fingerprint`.
+    /// Returns `None` when every path matches, or `Some(reason)` naming the first
+    /// path that has drifted (a formatter reflow, a hand-edit) or can no longer be
+    /// read. This is the fail-closed gate that keeps acceptance from committing —
+    /// and calling "fresh" — bytes that differ from what the checks consumed. Pure
+    /// read; it never writes.
+    fn candidate_drift(&self, transaction: &Transaction) -> Option<String> {
+        for mutation in &transaction.mutations {
+            let absolute_path = self.repository_root.join(&mutation.path);
+            match fs::read(&absolute_path) {
+                Ok(bytes) if hex_digest(&bytes) == mutation.after_fingerprint => {}
+                Ok(_) => {
+                    return Some(format!(
+                        "owned bytes at {} drifted since apply (post-apply edit or formatter)",
+                        mutation.path.display()
+                    ));
+                }
+                Err(error) => {
+                    return Some(format!(
+                        "cannot re-verify owned bytes at {}: {error}",
+                        mutation.path.display()
+                    ));
+                }
+            }
+        }
+        None
+    }
+
     pub fn accept_transaction(&self, transaction_id: u64) -> Result<Transaction, WorkspaceError> {
         let projection = self.project()?;
         let transaction = projection
@@ -2946,29 +3050,26 @@ impl Workspace {
             self.reconcile_evidence(*evidence_id)?;
         }
 
-        let projection = self.project()?;
-        let validated = claim_ids.iter().all(|claim_id| {
-            projection.claims.get(claim_id).is_some_and(|claim| {
-                claim.report.freshness_within_scope == FreshnessWithinScope::Current
-                    && evidence_ids.iter().any(|evidence_id| {
-                        projection
-                            .evidence
-                            .get(evidence_id)
-                            .is_some_and(|evidence| {
-                                evidence.claim_id == *claim_id
-                                    && evidence.outcome == EvidenceOutcome::Passed
-                                    && evidence.report.freshness_within_scope
-                                        == FreshnessWithinScope::Current
-                            })
-                    })
-            })
-        });
+        // One rule, evaluated the same way `transaction_preview` shows it: the
+        // owned bytes must still be on disk exactly as applied (disk gate), and
+        // every acceptance claim must be current with passing evidence bound to
+        // the current candidate (pure gate). Both fail closed.
+        let status = Self::status_from_projection(self.project()?);
+        let transaction = status
+            .transactions
+            .iter()
+            .find(|transaction| transaction.id == transaction_id)
+            .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+        let (validated, reason) = match self.candidate_drift(transaction) {
+            Some(drift) => (false, drift),
+            None => status.acceptance_readiness(transaction),
+        };
         if validated {
             self.append(Event::TransactionAccepted { transaction_id })?;
         } else {
             self.append(Event::TransactionAcceptanceRejected {
                 transaction_id,
-                reason: "acceptance claims lack current passing evidence".to_owned(),
+                reason,
             })?;
         }
         self.project()?
@@ -3450,6 +3551,7 @@ impl Projection {
                 provider,
                 outcome,
                 inputs,
+                candidate_fingerprint,
                 freshness,
                 reason,
                 reconciliation_fingerprint,
@@ -3515,6 +3617,7 @@ impl Projection {
                         provider,
                         outcome,
                         inputs,
+                        candidate_fingerprint,
                         report: FreshnessReport {
                             freshness_within_scope: freshness,
                             scope_assurance: ScopeAssurance {

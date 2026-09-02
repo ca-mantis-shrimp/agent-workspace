@@ -977,3 +977,60 @@ projections that only present active state.
   unverified-candidate omission), strict fmt/clippy, 7 Pi tests + typecheck.
   The single-pass log-reads test now settles through `status --full`, since
   the default bounded status intentionally no longer settles retired state.
+
+## 2026-09-02 — Candidate-state evidence (accept re-verifies owned bytes)
+
+The dogfood proved a soundness hole: `accept` checked that acceptance claims
+were current with passing evidence, but never re-read the mutated files. So a
+formatter reflowing a file between `apply` and `accept` went undetected — the
+committed bytes could differ from the bytes the checks consumed, while the
+workspace still reported "accepted". Evidence, meanwhile, reconciled only the
+*claim's cited inputs*, which need not even be the mutated paths; nothing tied a
+passing check to the candidate being committed.
+
+Considered and rejected: re-founding on parse trees so formatter drift stops
+mattering. Bytes fail toward false *staleness* (fail-closed, safe); a semantic
+tree normalizer fails toward false *freshness* (fail-open) the first time it
+drops a token that turns out to be significant (`// SAFETY`, `#[cfg]`, macro
+whitespace). For a "never silently go stale" substrate that failure direction
+is disqualifying at the core, and it would couple a language-agnostic kernel to
+a parser zoo while still needing a byte fallback. The existing
+`Normalizer::Rustfmt` seam already neutralizes formatter drift for locations
+that opt in, degrading to raw bytes — the wise version. Semantic *anchoring*
+(claims surviving line-shifts) is a real but separate axis for the location
+layer, opt-in and fail-closed; deferred to its own action.
+
+- **Candidate fingerprint = pure projection over the mutations.**
+  `Transaction::candidate_fingerprint()` folds the sorted `(path,
+  after_fingerprint)` set into one content address. No stored field — one source
+  of truth, derived like semantic-location. Empty mutations → stable
+  empty-candidate digest.
+- **Evidence binds to the candidate it was recorded against.** New
+  `Evidence.candidate_fingerprint` (serde-default `""` = legacy unbound, which
+  never satisfies the gate). `record_evidence` also gains a **materialization
+  gate**: every owned path must already hash to its `after_fingerprint` at
+  record time, else the check could not have consumed this candidate and the
+  evidence is refused. That is the honest, locally-checkable reading of "prove
+  each passing check consumed the candidate" — the candidate was materialized on
+  disk when the check ran, and (below) has not moved since.
+- **`accept` fails closed on two gates.** (a) **Disk re-verification**
+  (`candidate_drift`) re-reads each owned path and rejects, naming the path, if
+  the bytes no longer match — catching post-apply formatter drift. (b)
+  **Candidate binding** in `acceptance_readiness`: the passing evidence must
+  carry `candidate_fingerprint == the transaction's current candidate`, so a
+  check recorded before a further path was mutated no longer counts. Binding is
+  orthogonal to the evidence's own input-freshness — same freshness-vs-
+  disposition split used elsewhere.
+- **One rule, two callers — parity is now structural.** `accept` previously
+  *inlined* its acceptance check, duplicating `acceptance_readiness`; that
+  duplication was itself the drift risk this action targets. Both `accept` and
+  `preview` now compose `candidate_drift` (disk) with `acceptance_readiness`
+  (pure), so the advisory preview cannot promise a readiness the authority would
+  deny. `transaction_preview` takes the drift verdict as an injected parameter,
+  since the projection has no filesystem.
+- **Native provenance preserved.** The check still runs natively; the kernel
+  only binds its result to the candidate. `provider`/`invocation`/`check_name`
+  are untouched.
+- **Coverage.** 50 Rust tests (two new: disk re-verification rejects drift with
+  byte-exact recovery and preview↔accept parity in both directions; evidence
+  candidate-binding + the record-time materialization gate). Strict fmt/clippy.

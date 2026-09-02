@@ -551,7 +551,7 @@ fn s4_stale_evidence_cannot_accept_transaction() {
     assert_eq!(rejected.state, TransactionState::Open);
     assert_eq!(
         rejected.last_rejection.as_deref(),
-        Some("acceptance claims lack current passing evidence")
+        Some(format!("acceptance claim {} is not current", claim.id).as_str())
     );
 
     let event_log = fs::read_to_string(workspace.join("events.jsonl")).unwrap();
@@ -3916,6 +3916,356 @@ fn transaction_carries_intent_findings_risks_and_preview_matches_acceptance() {
         resumed_tx.intent.as_deref(),
         Some("resolve the needless-return lint in foo")
     );
+}
+
+/// Acceptance re-verifies the transaction's owned bytes against disk and rejects
+/// post-apply drift (a formatter reflow, a stray edit) even when every claim and
+/// its evidence are current — the exact hole the dogfood caught, where accepted
+/// bytes silently diverged from the bytes the checks consumed. The acceptance
+/// claim binds to `helper.rs`, which is never mutated, so this isolates the
+/// disk-reverification gate from claim staleness. Preview and accept agree in
+/// both directions, and byte-exact restoration recovers readiness.
+#[test]
+fn accept_reverifies_candidate_bytes_and_rejects_drift() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap();
+    let ws = workspace.to_str().unwrap();
+    let applied_bytes = "pub fn foo() -> i32 { 2 }\n";
+
+    let observation: Observation = serde_json::from_slice(
+        &invoke(&[
+            "observe",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--path",
+            "src/helper.rs",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let claim: Claim = serde_json::from_slice(
+        &invoke(&[
+            "claim",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--statement",
+            "helper returns one",
+            "--observation",
+            &observation.id.to_string(),
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let transaction: Transaction = serde_json::from_slice(
+        &invoke(&[
+            "begin-transaction",
+            "--intent",
+            "rewrite foo body",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--claim",
+            &claim.id.to_string(),
+        ])
+        .stdout,
+    )
+    .unwrap();
+    invoke(&[
+        "apply",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--id",
+        &transaction.id.to_string(),
+        "--path",
+        "src/lib.rs",
+        "--content",
+        applied_bytes,
+    ]);
+    invoke(&[
+        "evidence",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--transaction",
+        &transaction.id.to_string(),
+        "--claim",
+        &claim.id.to_string(),
+        "--check",
+        "cargo-test",
+        "--invocation",
+        "cargo test",
+        "--result",
+        "passed",
+    ]);
+
+    let preview = |id: u64| -> Value {
+        serde_json::from_slice(
+            &invoke(&[
+                "preview-transaction",
+                "--repository",
+                repo,
+                "--workspace",
+                ws,
+                "--transaction",
+                &id.to_string(),
+            ])
+            .stdout,
+        )
+        .unwrap()
+    };
+    let accept = |id: u64| -> Transaction {
+        serde_json::from_slice(
+            &invoke(&[
+                "accept-transaction",
+                "--repository",
+                repo,
+                "--workspace",
+                ws,
+                "--id",
+                &id.to_string(),
+            ])
+            .stdout,
+        )
+        .unwrap()
+    };
+
+    // Bytes match what was applied: preview is ready and accept would succeed.
+    assert_eq!(preview(transaction.id)["ready_to_accept"], true);
+
+    // Simulate a formatter reflowing the file after apply. Same meaning, different
+    // bytes — and different from the fingerprint the evidence was recorded against.
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 {\n    2\n}\n",
+    )
+    .unwrap();
+
+    let drifted_preview = preview(transaction.id);
+    assert_eq!(drifted_preview["ready_to_accept"], false);
+    assert!(
+        drifted_preview["readiness_reason"]
+            .as_str()
+            .unwrap()
+            .contains("drifted"),
+        "preview should name the drift, got {}",
+        drifted_preview["readiness_reason"]
+    );
+
+    let rejected = accept(transaction.id);
+    assert_eq!(rejected.state, TransactionState::Open);
+    assert!(
+        rejected
+            .last_rejection
+            .as_deref()
+            .unwrap()
+            .contains("drifted"),
+        "accept should reject on drift, got {:?}",
+        rejected.last_rejection
+    );
+
+    // Restore the exact applied bytes: readiness recovers and accept commits. It
+    // is the bytes, not merely the fact of an edit, that the gate turns on.
+    fs::write(fixture.repository.join("src/lib.rs"), applied_bytes).unwrap();
+    assert_eq!(preview(transaction.id)["ready_to_accept"], true);
+    assert_eq!(accept(transaction.id).state, TransactionState::Accepted);
+}
+
+/// Evidence binds to the content-addressed candidate it was recorded against, and
+/// acceptance requires that binding still hold. Mutating a further path after the
+/// evidence is recorded moves the candidate, so the earlier passing check — which
+/// never saw that path — no longer proves the bytes being committed, and accept
+/// fails closed until evidence bound to the new candidate is recorded. The
+/// materialization gate at record time is also exercised: evidence cannot be
+/// recorded while an owned path is drifted.
+#[test]
+fn evidence_binds_to_candidate_and_stale_binding_cannot_accept() {
+    let fixture = GitFixture::with_files(&[
+        ("src/lib.rs", "pub fn foo() -> i32 { 1 }\n"),
+        ("src/helper.rs", "pub fn helper() -> i32 { 1 }\n"),
+        ("src/other.rs", "pub fn other() -> i32 { 1 }\n"),
+    ]);
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap();
+    let ws = workspace.to_str().unwrap();
+
+    let observation: Observation = serde_json::from_slice(
+        &invoke(&[
+            "observe",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--path",
+            "src/helper.rs",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let claim: Claim = serde_json::from_slice(
+        &invoke(&[
+            "claim",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--statement",
+            "helper returns one",
+            "--observation",
+            &observation.id.to_string(),
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let transaction: Transaction = serde_json::from_slice(
+        &invoke(&[
+            "begin-transaction",
+            "--intent",
+            "rewrite foo, then other",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--claim",
+            &claim.id.to_string(),
+        ])
+        .stdout,
+    )
+    .unwrap();
+
+    let apply = |path: &str, content: &str| {
+        invoke(&[
+            "apply",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--id",
+            &transaction.id.to_string(),
+            "--path",
+            path,
+            "--content",
+            content,
+        ]);
+    };
+    let record_evidence = || {
+        invoke(&[
+            "evidence",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--transaction",
+            &transaction.id.to_string(),
+            "--claim",
+            &claim.id.to_string(),
+            "--check",
+            "cargo-test",
+            "--invocation",
+            "cargo test",
+            "--result",
+            "passed",
+        ])
+    };
+    let preview = || -> Value {
+        serde_json::from_slice(
+            &invoke(&[
+                "preview-transaction",
+                "--repository",
+                repo,
+                "--workspace",
+                ws,
+                "--transaction",
+                &transaction.id.to_string(),
+            ])
+            .stdout,
+        )
+        .unwrap()
+    };
+    let accept = || -> Transaction {
+        serde_json::from_slice(
+            &invoke(&[
+                "accept-transaction",
+                "--repository",
+                repo,
+                "--workspace",
+                ws,
+                "--id",
+                &transaction.id.to_string(),
+            ])
+            .stdout,
+        )
+        .unwrap()
+    };
+
+    // Materialization gate: record evidence while an owned path is drifted and the
+    // command fails closed — the check could not have consumed that candidate.
+    apply("src/lib.rs", "pub fn foo() -> i32 { 2 }\n");
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 { 999 }\n",
+    )
+    .unwrap();
+    let refused = invoke_failure(&[
+        "evidence",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--transaction",
+        &transaction.id.to_string(),
+        "--claim",
+        &claim.id.to_string(),
+        "--check",
+        "cargo-test",
+        "--invocation",
+        "cargo test",
+        "--result",
+        "passed",
+    ]);
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("candidate not materialized"),
+        "evidence must refuse an unmaterialized candidate, got {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    // Restore, then record evidence against this candidate (C1). Ready to accept.
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 { 2 }\n",
+    )
+    .unwrap();
+    record_evidence();
+    assert_eq!(preview()["ready_to_accept"], true);
+
+    // Now mutate a further owned path: the candidate moves to C2, and the C1-bound
+    // evidence no longer proves the committed bytes. Fail closed.
+    apply("src/other.rs", "pub fn other() -> i32 { 2 }\n");
+    let stale_binding = preview();
+    assert_eq!(stale_binding["ready_to_accept"], false);
+    assert!(
+        stale_binding["readiness_reason"]
+            .as_str()
+            .unwrap()
+            .contains("bound to the current candidate"),
+        "preview should name the stale candidate binding, got {}",
+        stale_binding["readiness_reason"]
+    );
+    assert_eq!(accept().state, TransactionState::Open);
+
+    // Record evidence against the current candidate (C2): binding holds, accept
+    // commits.
+    record_evidence();
+    assert_eq!(preview()["ready_to_accept"], true);
+    assert_eq!(accept().state, TransactionState::Accepted);
 }
 
 fn claim_ids(claims: &[Claim]) -> Vec<u64> {
