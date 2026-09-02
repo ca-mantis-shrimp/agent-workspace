@@ -27,6 +27,12 @@ If a commit is rejected, run `cargo fmt`, re-stage, and retry. Blind spot: the
 check only sees `.rs` files reachable from a crate root, so a brand-new file not
 yet wired into the module tree is not verified until it is.
 
+The toolchain is pinned in `rust-toolchain.toml` (exact version, not floating
+`stable`) so every environment produces identical rustfmt output — that is what
+keeps the gate meaningful across agents and keeps rustfmt-normalized fingerprints
+comparable. Under rustup this resolves automatically; it may trigger a one-time
+toolchain download.
+
 Use the Clearhead CLI—not manual `.actions` or sidecar edits—to update lifecycle state. Preserve native tool authority and provenance; do not turn the workspace into a generic wrapper API.
 
 For each implemented slice, add executable acceptance coverage, record key decisions in the relevant document, update the Clearhead action, and commit a coherent checkpoint.
