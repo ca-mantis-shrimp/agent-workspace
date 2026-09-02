@@ -246,7 +246,38 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
             print_json(&workspace.supersede_claim(id, replacement_claim_id, reason)?)?;
         }
         "begin-transaction" => {
-            print_json(&workspace.begin_transaction(&options.claim_ids)?)?;
+            let intent = options
+                .intent
+                .ok_or_else(|| CliError::Usage("begin-transaction requires --intent".to_owned()))?;
+            print_json(&workspace.begin_transaction(intent, &options.claim_ids)?)?;
+        }
+        "associate-finding" => {
+            let transaction_id = options.transaction_id.ok_or_else(|| {
+                CliError::Usage("associate-finding requires --transaction".to_owned())
+            })?;
+            let finding_id = options
+                .id
+                .ok_or_else(|| CliError::Usage("associate-finding requires --id".to_owned()))?;
+            print_json(&workspace.associate_finding(transaction_id, finding_id)?)?;
+        }
+        "record-risk" => {
+            let transaction_id = options
+                .transaction_id
+                .ok_or_else(|| CliError::Usage("record-risk requires --transaction".to_owned()))?;
+            let risk = options
+                .risk
+                .ok_or_else(|| CliError::Usage("record-risk requires --risk".to_owned()))?;
+            print_json(&workspace.record_residual_risk(transaction_id, risk)?)?;
+        }
+        "preview-transaction" => {
+            let transaction_id = options.transaction_id.ok_or_else(|| {
+                CliError::Usage("preview-transaction requires --transaction".to_owned())
+            })?;
+            let preview = workspace
+                .resume_status()?
+                .transaction_preview(transaction_id)
+                .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+            print_selected_json(&preview, options.compact)?;
         }
         "evidence" => {
             let transaction_id = options
@@ -339,6 +370,7 @@ struct Options {
     disposition: Option<String>,
     actor: Option<String>,
     rationale: Option<String>,
+    risk: Option<String>,
     contents: Option<String>,
     selector: Option<ObservationSelector>,
     /// `None` is the `auto` default: resolve per path at dispatch.
@@ -382,6 +414,7 @@ impl Options {
         let mut disposition = None;
         let mut actor = None;
         let mut rationale = None;
+        let mut risk = None;
         let mut contents = None;
         let mut selector = None;
         let mut normalizer = None;
@@ -455,6 +488,7 @@ impl Options {
                 "--disposition" => disposition = Some(value.clone()),
                 "--actor" => actor = Some(value.clone()),
                 "--rationale" => rationale = Some(value.clone()),
+                "--risk" => risk = Some(value.clone()),
                 "--severity" => {
                     severity = Some(match value.as_str() {
                         "error" => FindingSeverity::Error,
@@ -566,6 +600,7 @@ impl Options {
             disposition,
             actor,
             rationale,
+            risk,
             contents,
             selector,
             normalizer,

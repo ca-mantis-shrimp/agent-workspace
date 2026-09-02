@@ -372,4 +372,28 @@ export default function (pi: ExtensionAPI) {
 			return runKernel(ctx.cwd, ["findings", "--compact"], signal);
 		},
 	});
+
+	pi.registerTool({
+		name: "workspace_transaction_preview",
+		label: "Workspace Transaction Preview",
+		description:
+			"Review a change transaction before accepting it: its intent, the locations it touches, the findings it addresses, the evidence and acceptance claims bearing on it, the residual risks its author accepted, and whether it is ready to accept right now (the advisory mirror of what accept-transaction enforces).",
+		promptSnippet:
+			"Review a transaction before accept: intent, blast radius, evidence, readiness.",
+		promptGuidelines: [
+			"Call workspace_transaction_preview before accepting a transaction: `ready_to_accept: false` means accept-transaction will reject it for the stated reason.",
+		],
+		parameters: Type.Object({
+			transaction: Type.Number({
+				description: "The id of the transaction to preview.",
+			}),
+		}),
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			return runKernel(
+				ctx.cwd,
+				["preview-transaction", "--compact", "--transaction", String(params.transaction)],
+				signal,
+			);
+		},
+	});
 }

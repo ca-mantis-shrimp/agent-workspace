@@ -280,6 +280,38 @@ test("workspace_findings projects the bounded quickfix queue via the kernel", as
 	assert.equal(result.content[0].text, "executed:findings");
 });
 
+test("workspace_transaction_preview passes the transaction id through to the kernel", async () => {
+	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
+	await installKernelPlaceholder(root);
+	const calls: string[][] = [];
+	const exec: FakeExec = (command, args) => {
+		if (command !== "git") calls.push(args);
+		return repositoryRootStub(root)(command, args);
+	};
+	const tools = registerWithFakePi(exec);
+	const preview = tools.get("workspace_transaction_preview");
+	assert.ok(preview, "workspace_transaction_preview must be registered");
+
+	const result = await preview.execute(
+		"call-1",
+		{ transaction: 3 },
+		undefined,
+		undefined,
+		{ cwd: root },
+	);
+	assert.deepEqual(calls[0], [
+		"preview-transaction",
+		"--compact",
+		"--transaction",
+		"3",
+		"--repository",
+		root,
+		"--workspace",
+		join(root, ".agent-workspace"),
+	]);
+	assert.equal(result.content[0].text, "executed:preview-transaction");
+});
+
 test("orientation tools degrade to plain text outside a repository and throw on kernel failure", async () => {
 	const outside = await mkdtemp(join(tmpdir(), "agent-workspace-outside-"));
 	const tools = registerWithFakePi(async (_command, _args) => ({

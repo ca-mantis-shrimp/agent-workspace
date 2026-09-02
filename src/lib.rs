@@ -526,10 +526,22 @@ pub struct Mutation {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Transaction {
     pub id: u64,
+    /// Why this change exists — the transaction's thesis, recorded at `begin`.
+    /// `Option` for backward-compatible replay of pre-intent transactions; new
+    /// transactions always carry one.
+    #[serde(default)]
+    pub intent: Option<String>,
     pub base_revision: String,
     pub initial_worktree_fingerprint: String,
     pub acceptance_claim_ids: Vec<u64>,
     pub evidence_ids: Vec<u64>,
+    /// Findings this transaction addresses. Association only — disposing a
+    /// finding stays an explicit, separately-actored act.
+    #[serde(default)]
+    pub finding_ids: Vec<u64>,
+    /// Known residual risks the author chose to accept, in record order.
+    #[serde(default)]
+    pub residual_risks: Vec<String>,
     pub mutations: Vec<Mutation>,
     pub state: TransactionState,
     pub last_rejection: Option<String>,
@@ -915,6 +927,142 @@ impl WorkspaceStatus {
 
 const FINDING_QUEUE_LIMIT: usize = 12;
 
+/// A finding as it appears in a transaction preview: enough to judge relevance,
+/// with freshness so a stale association is visible.
+#[derive(Clone, Debug, Serialize)]
+pub struct PreviewFinding {
+    pub id: u64,
+    pub severity: FindingSeverity,
+    pub freshness: FreshnessWithinScope,
+    pub headline: String,
+}
+
+/// One evidence record bearing on a transaction's acceptance.
+#[derive(Clone, Debug, Serialize)]
+pub struct PreviewEvidence {
+    pub id: u64,
+    pub claim_id: u64,
+    pub check_name: String,
+    pub outcome: EvidenceOutcome,
+    pub freshness: FreshnessWithinScope,
+}
+
+/// A review-before-accept surface for one transaction: its intent, the locations
+/// it touches, the findings it addresses, the evidence and acceptance claims
+/// bearing on it, the residual risks its author accepted, and whether it is
+/// ready to accept right now. Pure projection over the reconciled status — the
+/// advisory mirror of what `accept-transaction` will enforce.
+#[derive(Clone, Debug, Serialize)]
+pub struct TransactionPreview {
+    pub id: u64,
+    pub intent: Option<String>,
+    pub state: TransactionState,
+    pub base_revision: String,
+    /// Distinct paths the transaction's mutations touch, in first-touch order.
+    /// The honest, derivable "affected locations"; symbol-level blast radius is a
+    /// deferred non-goal.
+    pub affected_locations: Vec<PathBuf>,
+    pub mutation_count: usize,
+    pub acceptance_claim_ids: Vec<u64>,
+    pub associated_findings: Vec<PreviewFinding>,
+    pub evidence: Vec<PreviewEvidence>,
+    pub residual_risks: Vec<String>,
+    pub ready_to_accept: bool,
+    pub readiness_reason: String,
+}
+
+impl WorkspaceStatus {
+    /// Project a review surface for one transaction, or `None` if no such
+    /// transaction exists. Pure over the already-reconciled status.
+    pub fn transaction_preview(&self, transaction_id: u64) -> Option<TransactionPreview> {
+        let transaction = self
+            .transactions
+            .iter()
+            .find(|transaction| transaction.id == transaction_id)?;
+
+        let mut affected_locations: Vec<PathBuf> = Vec::new();
+        for mutation in &transaction.mutations {
+            if !affected_locations.contains(&mutation.path) {
+                affected_locations.push(mutation.path.clone());
+            }
+        }
+
+        let associated_findings = transaction
+            .finding_ids
+            .iter()
+            .filter_map(|finding_id| self.findings.iter().find(|f| f.id == *finding_id))
+            .map(|finding| PreviewFinding {
+                id: finding.id,
+                severity: finding.severity,
+                freshness: finding.report.freshness_within_scope.clone(),
+                headline: claim_headline(&finding.message, BRIEF_HEADLINE_MAX_CHARS),
+            })
+            .collect();
+
+        let evidence: Vec<PreviewEvidence> = self
+            .evidence
+            .iter()
+            .filter(|evidence| evidence.transaction_id == transaction_id)
+            .map(|evidence| PreviewEvidence {
+                id: evidence.id,
+                claim_id: evidence.claim_id,
+                check_name: evidence.check_name.clone(),
+                outcome: evidence.outcome.clone(),
+                freshness: evidence.report.freshness_within_scope.clone(),
+            })
+            .collect();
+
+        let (ready_to_accept, readiness_reason) = self.acceptance_readiness(transaction);
+
+        Some(TransactionPreview {
+            id: transaction.id,
+            intent: transaction.intent.clone(),
+            state: transaction.state.clone(),
+            base_revision: transaction.base_revision.clone(),
+            affected_locations,
+            mutation_count: transaction.mutations.len(),
+            acceptance_claim_ids: transaction.acceptance_claim_ids.clone(),
+            associated_findings,
+            evidence,
+            residual_risks: transaction.residual_risks.clone(),
+            ready_to_accept,
+            readiness_reason,
+        })
+    }
+
+    /// Whether every acceptance claim is current and backed by current passing
+    /// evidence — the same rule `accept-transaction` enforces, evaluated
+    /// read-only here so a preview never claims readiness the accept would deny.
+    fn acceptance_readiness(&self, transaction: &Transaction) -> (bool, String) {
+        if transaction.state != TransactionState::Open {
+            return (false, format!("transaction is {:?}", transaction.state));
+        }
+        for claim_id in &transaction.acceptance_claim_ids {
+            let Some(claim) = self.claims.iter().find(|claim| claim.id == *claim_id) else {
+                return (false, format!("acceptance claim {claim_id} is not active"));
+            };
+            if claim.report.freshness_within_scope != FreshnessWithinScope::Current {
+                return (false, format!("acceptance claim {claim_id} is not current"));
+            }
+            let has_passing_evidence = self.evidence.iter().any(|evidence| {
+                evidence.claim_id == *claim_id
+                    && evidence.outcome == EvidenceOutcome::Passed
+                    && evidence.report.freshness_within_scope == FreshnessWithinScope::Current
+            });
+            if !has_passing_evidence {
+                return (
+                    false,
+                    format!("acceptance claim {claim_id} lacks current passing evidence"),
+                );
+            }
+        }
+        (
+            true,
+            "all acceptance claims current with passing evidence".to_owned(),
+        )
+    }
+}
+
 /// Hard cardinality and per-headline bounds for model-entry orientation. Stale
 /// claims rank first so a cap never preferentially hides invalidated beliefs.
 const BRIEF_CLAIM_LIMIT: usize = 8;
@@ -1115,9 +1263,19 @@ enum Event {
     },
     TransactionBegan {
         transaction_id: u64,
+        #[serde(default)]
+        intent: Option<String>,
         base_revision: String,
         initial_worktree_fingerprint: String,
         acceptance_claim_ids: Vec<u64>,
+    },
+    TransactionFindingAssociated {
+        transaction_id: u64,
+        finding_id: u64,
+    },
+    TransactionResidualRiskRecorded {
+        transaction_id: u64,
+        risk: String,
     },
     EvidenceRecorded {
         evidence_id: u64,
@@ -2211,8 +2369,15 @@ impl Workspace {
 
     pub fn begin_transaction(
         &self,
+        intent: impl Into<String>,
         acceptance_claim_ids: &[u64],
     ) -> Result<Transaction, WorkspaceError> {
+        let intent = intent.into();
+        if intent.trim().is_empty() {
+            return Err(WorkspaceError::InvalidTransaction(
+                "a transaction intent is required".to_owned(),
+            ));
+        }
         if acceptance_claim_ids.is_empty() {
             return Err(WorkspaceError::InvalidTransaction(
                 "at least one acceptance claim is required".to_owned(),
@@ -2233,9 +2398,75 @@ impl Workspace {
         let transaction_id = projection.next_transaction_id;
         self.append(Event::TransactionBegan {
             transaction_id,
+            intent: Some(intent),
             base_revision: git_output(&self.repository_root, &["rev-parse", "HEAD"])?,
             initial_worktree_fingerprint: worktree_fingerprint(&self.repository_root)?,
             acceptance_claim_ids: acceptance_claim_ids.to_vec(),
+        })?;
+        self.project()?
+            .transactions
+            .remove(&transaction_id)
+            .ok_or(WorkspaceError::TransactionNotFound(transaction_id))
+    }
+
+    /// Associate a finding this transaction addresses. Requires an open
+    /// transaction and an existing finding; idempotent on repeat. Association is
+    /// a link only — it does not dispose the finding, which stays a separate
+    /// explicit act.
+    pub fn associate_finding(
+        &self,
+        transaction_id: u64,
+        finding_id: u64,
+    ) -> Result<Transaction, WorkspaceError> {
+        let projection = self.project()?;
+        let transaction = projection
+            .transactions
+            .get(&transaction_id)
+            .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+        if transaction.state != TransactionState::Open {
+            return Err(WorkspaceError::InvalidTransaction(
+                "findings can only be associated with an open transaction".to_owned(),
+            ));
+        }
+        if !projection.findings.contains_key(&finding_id) {
+            return Err(WorkspaceError::FindingNotFound(finding_id));
+        }
+        self.append(Event::TransactionFindingAssociated {
+            transaction_id,
+            finding_id,
+        })?;
+        self.project()?
+            .transactions
+            .remove(&transaction_id)
+            .ok_or(WorkspaceError::TransactionNotFound(transaction_id))
+    }
+
+    /// Record a residual risk the author is knowingly accepting on an open
+    /// transaction.
+    pub fn record_residual_risk(
+        &self,
+        transaction_id: u64,
+        risk: impl Into<String>,
+    ) -> Result<Transaction, WorkspaceError> {
+        let risk = risk.into();
+        if risk.trim().is_empty() {
+            return Err(WorkspaceError::InvalidTransaction(
+                "a residual risk must not be empty".to_owned(),
+            ));
+        }
+        let projection = self.project()?;
+        let transaction = projection
+            .transactions
+            .get(&transaction_id)
+            .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+        if transaction.state != TransactionState::Open {
+            return Err(WorkspaceError::InvalidTransaction(
+                "residual risks can only be recorded on an open transaction".to_owned(),
+            ));
+        }
+        self.append(Event::TransactionResidualRiskRecorded {
+            transaction_id,
+            risk,
         })?;
         self.project()?
             .transactions
@@ -2877,6 +3108,7 @@ impl Projection {
             }
             Event::TransactionBegan {
                 transaction_id,
+                intent,
                 base_revision,
                 initial_worktree_fingerprint,
                 acceptance_claim_ids,
@@ -2907,15 +3139,43 @@ impl Projection {
                     transaction_id,
                     Transaction {
                         id: transaction_id,
+                        intent,
                         base_revision,
                         initial_worktree_fingerprint,
                         acceptance_claim_ids,
                         evidence_ids: Vec::new(),
+                        finding_ids: Vec::new(),
+                        residual_risks: Vec::new(),
                         mutations: Vec::new(),
                         state: TransactionState::Open,
                         last_rejection: None,
                     },
                 );
+            }
+            Event::TransactionFindingAssociated {
+                transaction_id,
+                finding_id,
+            } => {
+                if !self.findings.contains_key(&finding_id) {
+                    return Err(WorkspaceError::FindingNotFound(finding_id));
+                }
+                let transaction = self
+                    .transactions
+                    .get_mut(&transaction_id)
+                    .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
+                if !transaction.finding_ids.contains(&finding_id) {
+                    transaction.finding_ids.push(finding_id);
+                }
+            }
+            Event::TransactionResidualRiskRecorded {
+                transaction_id,
+                risk,
+            } => {
+                self.transactions
+                    .get_mut(&transaction_id)
+                    .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?
+                    .residual_risks
+                    .push(risk);
             }
             Event::EvidenceRecorded {
                 evidence_id,

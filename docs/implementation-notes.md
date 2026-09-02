@@ -878,3 +878,37 @@ Completes the findings action.
   Pi test asserts the tool wiring. 43 Rust tests, 6 Pi tests + typecheck, strict
   fmt and clippy. All findings action criteria — normalized queue, native payloads,
   provenance, revision, dispositions, and edit-driven invalidation — are met.
+
+## 2026-09-02 — Transaction associations, intent, and preview
+
+An audit first: `begin`/`apply`/`revert` and the `accept` verb (which is BOTH
+"validate" and "commit" — it accepts only when every acceptance claim is current
+with current passing evidence) already existed (S6/S9/S10). The gap the action
+named was the *associations*: intent, findings, residual risks, and a preview.
+
+- **Intent is now required at `begin`.** `Transaction.intent` (Option for
+  backward-compatible replay; required for new transactions). This is the
+  charter's first-listed transaction field and the anchor a preview reads.
+- **Findings and residual risks associate onto an open transaction.**
+  `associate-finding` (link only — it never disposes the finding, which stays a
+  separate actored act; idempotent) and `record-risk` add `finding_ids` /
+  `residual_risks`, via `TransactionFindingAssociated` / `TransactionResidualRiskRecorded`
+  events. Both refuse a closed transaction.
+- **`preview-transaction` is the review-before-accept surface.** A pure
+  `WorkspaceStatus::transaction_preview` projection: intent, affected locations
+  (distinct mutation paths in first-touch order), associated findings (with
+  freshness), bearing evidence, acceptance claims, residual risks, and
+  `ready_to_accept` + reason. Readiness is computed by `acceptance_readiness`,
+  which evaluates the SAME rule `accept` enforces, read-only — a test drives both
+  directions (preview says not-ready → accept rejects; preview says ready →
+  accept succeeds) so the advisory mirror can't drift from the authority.
+- **Deferred as charter non-goals:** true changed-symbol identity and
+  dependency-level blast radius need the symbol model the charter explicitly
+  declines to over-invest in. "Affected locations = mutation paths" is the
+  honest, derivable version shipped here.
+- **Surface + coverage.** `begin-transaction --intent`, `associate-finding`,
+  `record-risk`, `preview-transaction`, and a `workspace_transaction_preview` Pi
+  tool (the first tool taking a parameter). One Rust test covers intent-required,
+  associations, preview↔accept agreement, and restart persistence; one Pi test
+  covers the id passthrough. 44 Rust tests, 7 Pi tests + typecheck, strict fmt
+  and clippy.

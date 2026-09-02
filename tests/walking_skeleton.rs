@@ -497,6 +497,8 @@ fn s4_stale_evidence_cannot_accept_transaction() {
     let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
     let transaction = invoke(&[
         "begin-transaction",
+        "--intent",
+        "fixture transaction intent",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -585,6 +587,8 @@ fn current_passing_evidence_accepts_transaction() {
     let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
     let transaction = invoke(&[
         "begin-transaction",
+        "--intent",
+        "fixture transaction intent",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -673,6 +677,8 @@ fn s5_restart_recovers_objective_working_set_and_open_work() {
     let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
     let transaction = invoke(&[
         "begin-transaction",
+        "--intent",
+        "fixture transaction intent",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -766,6 +772,8 @@ fn s6_clean_transaction_revert_restores_repository_and_freshness() {
     let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
     let transaction = invoke(&[
         "begin-transaction",
+        "--intent",
+        "fixture transaction intent",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -887,6 +895,8 @@ fn multi_path_revert_conflict_changes_nothing() {
     let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
     let transaction = invoke(&[
         "begin-transaction",
+        "--intent",
+        "fixture transaction intent",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -1381,6 +1391,8 @@ fn claim_supersession_rejects_unsafe_lifecycle_transitions_and_replay() {
 
     let historical_transaction = invoke_failure(&[
         "begin-transaction",
+        "--intent",
+        "fixture transaction intent",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -1395,6 +1407,8 @@ fn claim_supersession_rejects_unsafe_lifecycle_transitions_and_replay() {
 
     invoke(&[
         "begin-transaction",
+        "--intent",
+        "fixture transaction intent",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -2304,6 +2318,8 @@ fn status_suppresses_redundant_reconcile_events() {
     let claim: Claim = serde_json::from_slice(&out.stdout).unwrap();
     let out = invoke(&[
         "begin-transaction",
+        "--intent",
+        "fixture transaction intent",
         "--repository",
         &repo,
         "--workspace",
@@ -3326,6 +3342,212 @@ fn findings_queue_ranks_by_severity_and_disposition_leaves_the_queue() {
         error_finding.disposition,
         FindingDisposition::FalsePositive { .. }
     ));
+}
+
+#[test]
+fn transaction_carries_intent_findings_risks_and_preview_matches_acceptance() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap();
+    let ws = workspace.to_str().unwrap();
+
+    let observation = invoke(&[
+        "observe",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&observation.stdout).unwrap();
+    let claim = invoke(&[
+        "claim",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--statement",
+        "foo returns one",
+        "--observation",
+        &observation.id.to_string(),
+    ]);
+    let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
+    let finding: Finding = serde_json::from_slice(
+        &invoke_with_stdin(
+            &[
+                "record-finding",
+                "--repository",
+                repo,
+                "--workspace",
+                ws,
+                "--provider",
+                "clippy",
+                "--severity",
+                "warning",
+                "--message",
+                "needless return",
+                "--path",
+                "src/lib.rs",
+            ],
+            "",
+        )
+        .stdout,
+    )
+    .unwrap();
+
+    // Intent is required.
+    let no_intent = invoke_failure(&[
+        "begin-transaction",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--claim",
+        &claim.id.to_string(),
+    ]);
+    assert!(String::from_utf8_lossy(&no_intent.stderr).contains("requires --intent"));
+
+    let transaction: Transaction = serde_json::from_slice(
+        &invoke(&[
+            "begin-transaction",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--intent",
+            "resolve the needless-return lint in foo",
+            "--claim",
+            &claim.id.to_string(),
+        ])
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        transaction.intent.as_deref(),
+        Some("resolve the needless-return lint in foo")
+    );
+
+    invoke(&[
+        "associate-finding",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--transaction",
+        &transaction.id.to_string(),
+        "--id",
+        &finding.id.to_string(),
+    ]);
+    invoke(&[
+        "record-risk",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--transaction",
+        &transaction.id.to_string(),
+        "--risk",
+        "no integration test covers foo's callers",
+    ]);
+
+    let preview = |id: u64| -> Value {
+        serde_json::from_slice(
+            &invoke(&[
+                "preview-transaction",
+                "--repository",
+                repo,
+                "--workspace",
+                ws,
+                "--transaction",
+                &id.to_string(),
+            ])
+            .stdout,
+        )
+        .unwrap()
+    };
+
+    // Before evidence: the association and risk show, and the preview reports the
+    // transaction is NOT ready — matching what accept would do.
+    let before = preview(transaction.id);
+    assert_eq!(before["intent"], "resolve the needless-return lint in foo");
+    assert_eq!(
+        before["associated_findings"][0]["id"].as_u64().unwrap(),
+        finding.id
+    );
+    assert_eq!(before["associated_findings"][0]["freshness"], "current");
+    assert_eq!(
+        before["residual_risks"][0],
+        "no integration test covers foo's callers"
+    );
+    assert_eq!(before["ready_to_accept"], false);
+
+    // The preview must never claim readiness the accept would deny: accept fails
+    // here too.
+    let premature = invoke(&[
+        "accept-transaction",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--id",
+        &transaction.id.to_string(),
+    ]);
+    let premature: Transaction = serde_json::from_slice(&premature.stdout).unwrap();
+    assert_ne!(premature.state, TransactionState::Accepted);
+
+    // A begin fresh transaction (the prior one recorded a rejection but stays
+    // open) and add passing evidence, then preview flips to ready and accept
+    // succeeds — preview and acceptance agree in both directions.
+    invoke(&[
+        "evidence",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--transaction",
+        &transaction.id.to_string(),
+        "--claim",
+        &claim.id.to_string(),
+        "--check",
+        "cargo-clippy",
+        "--invocation",
+        "cargo clippy",
+        "--result",
+        "passed",
+    ]);
+    let after = preview(transaction.id);
+    assert_eq!(after["ready_to_accept"], true);
+    assert_eq!(after["evidence"][0]["outcome"], "passed");
+
+    let accepted = invoke(&[
+        "accept-transaction",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--id",
+        &transaction.id.to_string(),
+    ]);
+    let accepted: Transaction = serde_json::from_slice(&accepted.stdout).unwrap();
+    assert_eq!(accepted.state, TransactionState::Accepted);
+
+    // Associations survive restart.
+    let resumed: WorkspaceStatus = serde_json::from_slice(
+        &invoke(&["status", "--full", "--repository", repo, "--workspace", ws]).stdout,
+    )
+    .unwrap();
+    let resumed_tx = resumed
+        .transactions
+        .iter()
+        .find(|t| t.id == transaction.id)
+        .unwrap();
+    assert_eq!(resumed_tx.finding_ids, vec![finding.id]);
+    assert_eq!(resumed_tx.residual_risks.len(), 1);
+    assert_eq!(
+        resumed_tx.intent.as_deref(),
+        Some("resolve the needless-return lint in foo")
+    );
 }
 
 fn claim_ids(claims: &[Claim]) -> Vec<u64> {
