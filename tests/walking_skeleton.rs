@@ -1,7 +1,7 @@
 use agent_workspace::{
     Claim, ClaimInputSource, ClaimLifecycle, DeltaStatus, Evidence, FreshnessWithinScope,
     Normalizer, Objective, Observation, ObservationCapture, ObservationSelector,
-    RevealedObservation, ScopeCompleteness, ScopeSource, Transaction, TransactionState,
+    RevealedObservation, ScopeCompleteness, ScopeSource, Transaction, TransactionState, Workspace,
     WorkspaceStatus,
 };
 use serde_json::Value;
@@ -1933,6 +1933,198 @@ fn default_status_is_the_brief_orientation_surface() {
         brief_out.stdout.len(),
         full_out.stdout.len()
     );
+}
+
+/// Teeth for the single-pass I/O guarantee itself: a settled `status` reads the
+/// event log a small constant number of times, NOT once per entity. Built with
+/// many observations + claims so the old per-entity-`project()` design would
+/// read the log ~2×(entities) times; single-pass reads it once. Uses an
+/// in-process `Workspace` to read the diagnostic `event_log_reads` counter that
+/// a subprocess could not expose. This is the assertion that fails on a
+/// regression to multi-pass — the strace-measured 214→1 win, made permanent.
+#[test]
+fn single_pass_status_reads_the_event_log_a_constant_number_of_times() {
+    let files: Vec<(String, String)> = (0..8)
+        .map(|index| (format!("src/f{index}.txt"), format!("content {index}\n")))
+        .collect();
+    let file_refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, contents)| (path.as_str(), contents.as_str()))
+        .collect();
+    let fixture = GitFixture::with_files(&file_refs);
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    // 8 observations, each with a claim — 16 reconcilable entities.
+    for (path, _) in &files {
+        let observation: Observation = serde_json::from_slice(
+            &invoke(&[
+                "observe",
+                "--repository",
+                &repo,
+                "--workspace",
+                &ws,
+                "--path",
+                path,
+            ])
+            .stdout,
+        )
+        .unwrap();
+        invoke(&[
+            "claim",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--statement",
+            &format!("claim about {path}"),
+            "--observation",
+            &observation.id.to_string(),
+        ]);
+    }
+    // Settle so the measured status is a pure no-op (nothing left to append).
+    invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+
+    // Drive resume_status in-process over the settled, unchanged workspace and
+    // read the diagnostic counter. Single-pass reads the log exactly once
+    // (project the snapshot; nothing to append, so the snapshot is reused).
+    let handle = Workspace::open(&fixture.repository, &workspace).unwrap();
+    assert_eq!(handle.event_log_reads(), 0, "counter starts at zero");
+    handle.resume_status().unwrap();
+    let reads = handle.event_log_reads();
+    assert!(
+        reads <= 2,
+        "a settled status must read the log a small constant number of times, \
+         got {reads} over 16 entities (multi-pass would be ~17+)"
+    );
+}
+
+/// Single-pass `status` projects the log once and reconciles every entity
+/// against that one snapshot. This guards the two properties that could break:
+/// (1) suppression must hold across *many* entities at once — a settled repeat
+/// status appends nothing even with several observations and claims; and
+/// (2) entities stay independent — an out-of-band edit to one file stales only
+/// the entity that observed it, never its neighbours (the shared snapshot must
+/// not smear one verdict across the batch). Detection surviving the reused
+/// snapshot is exactly the F9 guard under the single-pass optimization.
+#[test]
+fn single_pass_status_suppresses_at_scale_and_isolates_edits() {
+    let fixture = GitFixture::with_files(&[
+        ("src/a.txt", "alpha\n"),
+        ("src/b.txt", "bravo\n"),
+        ("src/c.txt", "charlie\n"),
+    ]);
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+    let log_path = workspace.join("events.jsonl");
+    let log_len = || {
+        fs::read_to_string(&log_path)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count()
+    };
+
+    // Observe all three files and stake a claim on each.
+    let mut observation_ids = Vec::new();
+    for path in ["src/a.txt", "src/b.txt", "src/c.txt"] {
+        let observation: Observation = serde_json::from_slice(
+            &invoke(&[
+                "observe",
+                "--repository",
+                &repo,
+                "--workspace",
+                &ws,
+                "--path",
+                path,
+            ])
+            .stdout,
+        )
+        .unwrap();
+        invoke(&[
+            "claim",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--statement",
+            &format!("claim about {path}"),
+            "--observation",
+            &observation.id.to_string(),
+        ]);
+        observation_ids.push(observation.id);
+    }
+
+    // Settle, then prove a repeat status over the unchanged workspace appends
+    // nothing — suppression holds across all six entities in one pass.
+    invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let settled = log_len();
+    invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    assert_eq!(
+        log_len(),
+        settled,
+        "a settled repeat status must append nothing across many entities"
+    );
+
+    // Edit exactly one observed file out of band.
+    fs::write(fixture.repository.join("src/b.txt"), "bravo edited\n").unwrap();
+
+    let full: WorkspaceStatus = serde_json::from_slice(
+        &invoke(&[
+            "status",
+            "--full",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let freshness_of = |observation_id: u64| {
+        full.observations
+            .iter()
+            .find(|observation| observation.id == observation_id)
+            .map(|observation| observation.report.freshness_within_scope.clone())
+            .unwrap_or_else(|| panic!("observation {observation_id} missing from status"))
+    };
+    // The edited file's observation is detected as stale...
+    assert_eq!(
+        freshness_of(observation_ids[1]),
+        FreshnessWithinScope::Stale
+    );
+    // ...and its untouched neighbours stay current — no cross-contamination.
+    assert_eq!(
+        freshness_of(observation_ids[0]),
+        FreshnessWithinScope::Current
+    );
+    assert_eq!(
+        freshness_of(observation_ids[2]),
+        FreshnessWithinScope::Current
+    );
+    // Claims mirror their observed files: only b's claim stales.
+    let claim_freshness: Vec<_> = full
+        .claims
+        .iter()
+        .map(|claim| {
+            (
+                claim.statement.clone(),
+                claim.report.freshness_within_scope.clone(),
+            )
+        })
+        .collect();
+    let fresh_for = |path: &str| {
+        claim_freshness
+            .iter()
+            .find(|(statement, _)| statement == &format!("claim about {path}"))
+            .map(|(_, freshness)| freshness.clone())
+            .unwrap()
+    };
+    assert_eq!(fresh_for("src/b.txt"), FreshnessWithinScope::Stale);
+    assert_eq!(fresh_for("src/a.txt"), FreshnessWithinScope::Current);
+    assert_eq!(fresh_for("src/c.txt"), FreshnessWithinScope::Current);
 }
 
 #[test]

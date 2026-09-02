@@ -661,6 +661,11 @@ enum Event {
 pub struct Workspace {
     repository_root: PathBuf,
     workspace_root: PathBuf,
+    /// Diagnostic: how many times this handle has replayed the event log from
+    /// disk. It exists to make the single-pass `status` guarantee observable and
+    /// testable — a settled `resume_status` must read the log O(1) times, never
+    /// O(entities). See [`Workspace::event_log_reads`].
+    event_log_reads: std::sync::atomic::AtomicUsize,
 }
 
 /// RAII guard for the workspace's exclusive inter-process write lock. The lock
@@ -682,7 +687,17 @@ impl Workspace {
         Ok(Self {
             repository_root,
             workspace_root,
+            event_log_reads: std::sync::atomic::AtomicUsize::new(0),
         })
+    }
+
+    /// How many times this handle has replayed the event log from disk since it
+    /// was opened. A diagnostic for the single-pass `status` invariant: a
+    /// settled `resume_status` reads the log a small constant number of times,
+    /// independent of how many observations/claims/evidence the workspace holds.
+    pub fn event_log_reads(&self) -> usize {
+        self.event_log_reads
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn bind_objective(
@@ -730,20 +745,39 @@ impl Workspace {
     }
 
     pub fn resume_status(&self) -> Result<WorkspaceStatus, WorkspaceError> {
+        // Single-pass reconciliation: project the log ONCE, then recompute every
+        // entity's verdict against that snapshot plus the live worktree. Each
+        // entity reconciles from its own stored fields and its own file alone —
+        // never from another entity's reconcile event — so one projection backs
+        // all verdicts. This replaces the former O(entities × log-length) replay
+        // (a `project()` inside every per-entity reconcile) with a single read.
+        // F9 is intact: verdicts are still recomputed here, every time; only the
+        // *write* is suppressed when a verdict is unchanged.
         let projection = self.project()?;
-        let observation_ids: Vec<_> = projection.observations.keys().copied().collect();
-        let claim_ids: Vec<_> = projection.claims.keys().copied().collect();
-        let evidence_ids: Vec<_> = projection.evidence.keys().copied().collect();
-        for observation_id in observation_ids {
-            self.reconcile_observation(observation_id)?;
+        let mut pending = Vec::new();
+        for observation in projection.observations.values() {
+            pending.extend(self.observation_reconcile_event(observation)?);
         }
-        for claim_id in claim_ids {
-            self.reconcile_claim(claim_id)?;
+        for claim in projection.claims.values() {
+            pending.extend(self.claim_reconcile_event(claim)?);
         }
-        for evidence_id in evidence_ids {
-            self.reconcile_evidence(evidence_id)?;
+        for evidence in projection.evidence.values() {
+            pending.extend(self.evidence_reconcile_event(evidence)?);
         }
-        let projection = self.project()?;
+
+        // Touch the log only when a verdict actually changed. On the unchanged
+        // path (the common one) nothing is appended and the snapshot already is
+        // the state a re-projection would return, so we reuse it — zero extra
+        // reads. When verdicts changed, re-project once to fold them in.
+        let projection = if pending.is_empty() {
+            projection
+        } else {
+            for event in pending {
+                self.append(event)?;
+            }
+            self.project()?
+        };
+
         let (claims, superseded_claims) = projection
             .claims
             .into_values()
@@ -758,6 +792,124 @@ impl Workspace {
             transactions: projection.transactions.into_values().collect(),
             checkpoints: projection.checkpoints,
         })
+    }
+
+    /// Recompute an observation's freshness verdict from the live worktree and
+    /// return the `ObservationReconciled` event that would record it — or `None`
+    /// when the verdict is unchanged (no-op suppression). Reads the observed
+    /// file; does not touch the log. Shared by `reconcile_observation` (single
+    /// entity) and `resume_status` (single-pass over all).
+    fn observation_reconcile_event(
+        &self,
+        observation: &Observation,
+    ) -> Result<Option<Event>, WorkspaceError> {
+        let current = read_observation_fingerprints(
+            &self.repository_root,
+            &observation.path,
+            &observation.selector,
+            observation.normalizer,
+            observation.observed_raw_fingerprint.as_deref(),
+            &observation.observed_input_fingerprint,
+        );
+        let (current_unit, current_container) = current
+            .as_ref()
+            .map(|(unit, container)| (Some(unit.as_str()), Some(container.as_str())))
+            .unwrap_or((None, None));
+        let reconciliation_fingerprint = observation_reconciliation_fingerprint(
+            &self.repository_root,
+            &observation.path,
+            &observation.selector,
+            current_unit,
+            current_container,
+        )?;
+
+        let (freshness, reason) = match &current {
+            Ok((unit, container)) if unit == &observation.observed_input_fingerprint => {
+                let reason = if container == &observation.observed_container_fingerprint {
+                    "supporting input unchanged"
+                } else {
+                    "observed unit unchanged; container changed outside mediated unit"
+                };
+                (FreshnessWithinScope::Current, reason.to_owned())
+            }
+            Ok(_) => (
+                FreshnessWithinScope::Stale,
+                "supporting input changed".to_owned(),
+            ),
+            Err(WorkspaceError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => (
+                FreshnessWithinScope::Stale,
+                "supporting input unavailable".to_owned(),
+            ),
+            Err(_) => (
+                FreshnessWithinScope::Unknown,
+                "supporting input could not be verified".to_owned(),
+            ),
+        };
+
+        if verdict_unchanged(
+            &observation.report,
+            &freshness,
+            &reason,
+            &reconciliation_fingerprint,
+        ) {
+            return Ok(None);
+        }
+        Ok(Some(Event::ObservationReconciled {
+            observation_id: observation.id,
+            freshness,
+            reason,
+            reconciliation_fingerprint,
+        }))
+    }
+
+    /// Recompute a claim's verdict and return the `ClaimReconciled` event, or
+    /// `None` when unchanged. Reads the claim's inputs; does not touch the log.
+    fn claim_reconcile_event(&self, claim: &Claim) -> Result<Option<Event>, WorkspaceError> {
+        let (freshness, reason, fingerprint_inputs) =
+            assess_claim_inputs(&self.repository_root, &claim.inputs);
+        let reconciliation_fingerprint =
+            scoped_reconciliation_fingerprint(&self.repository_root, &fingerprint_inputs)?;
+        if verdict_unchanged(
+            &claim.report,
+            &freshness,
+            &reason,
+            &reconciliation_fingerprint,
+        ) {
+            return Ok(None);
+        }
+        Ok(Some(Event::ClaimReconciled {
+            claim_id: claim.id,
+            freshness,
+            reason,
+            reconciliation_fingerprint,
+        }))
+    }
+
+    /// Recompute an evidence record's verdict and return the
+    /// `EvidenceReconciled` event, or `None` when unchanged. Reads the
+    /// evidence's inputs; does not touch the log.
+    fn evidence_reconcile_event(
+        &self,
+        evidence: &Evidence,
+    ) -> Result<Option<Event>, WorkspaceError> {
+        let (freshness, reason, fingerprint_inputs) =
+            assess_claim_inputs(&self.repository_root, &evidence.inputs);
+        let reconciliation_fingerprint =
+            scoped_reconciliation_fingerprint(&self.repository_root, &fingerprint_inputs)?;
+        if verdict_unchanged(
+            &evidence.report,
+            &freshness,
+            &reason,
+            &reconciliation_fingerprint,
+        ) {
+            return Ok(None);
+        }
+        Ok(Some(Event::EvidenceReconciled {
+            evidence_id: evidence.id,
+            freshness,
+            reason,
+            reconciliation_fingerprint,
+        }))
     }
 
     /// Draw a named line in the log. Reconciles everything to current truth first
@@ -1034,75 +1186,20 @@ impl Workspace {
             .observations
             .get(&observation_id)
             .ok_or(WorkspaceError::ObservationNotFound(observation_id))?;
-        let current = read_observation_fingerprints(
-            &self.repository_root,
-            &observation.path,
-            &observation.selector,
-            observation.normalizer,
-            observation.observed_raw_fingerprint.as_deref(),
-            &observation.observed_input_fingerprint,
-        );
-        let (current_unit, current_container) = current
-            .as_ref()
-            .map(|(unit, container)| (Some(unit.as_str()), Some(container.as_str())))
-            .unwrap_or((None, None));
-        let reconciliation_fingerprint = observation_reconciliation_fingerprint(
-            &self.repository_root,
-            &observation.path,
-            &observation.selector,
-            current_unit,
-            current_container,
-        )?;
-
-        let (freshness, reason) = match &current {
-            Ok((unit, container)) if unit == &observation.observed_input_fingerprint => {
-                let reason = if container == &observation.observed_container_fingerprint {
-                    "supporting input unchanged"
-                } else {
-                    "observed unit unchanged; container changed outside mediated unit"
-                };
-                (FreshnessWithinScope::Current, reason.to_owned())
+        // No-op suppression lives in the shared helper: it recomputes the
+        // verdict from current inputs (F9 guard) and returns an event only when
+        // it differs from the last persisted one. On the unchanged path the
+        // stored observation already is what re-projection would return.
+        match self.observation_reconcile_event(observation)? {
+            None => Ok(observation.clone()),
+            Some(event) => {
+                self.append(event)?;
+                self.project()?
+                    .observations
+                    .remove(&observation_id)
+                    .ok_or(WorkspaceError::ObservationNotFound(observation_id))
             }
-            Ok(_) => (
-                FreshnessWithinScope::Stale,
-                "supporting input changed".to_owned(),
-            ),
-            Err(WorkspaceError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => (
-                FreshnessWithinScope::Stale,
-                "supporting input unavailable".to_owned(),
-            ),
-            Err(_) => (
-                FreshnessWithinScope::Unknown,
-                "supporting input could not be verified".to_owned(),
-            ),
-        };
-
-        // No-op suppression: the verdict above was recomputed from current
-        // inputs (F9 guard); persisting it again is required only when it
-        // differs from the last persisted verdict. On the unchanged path the
-        // stored observation is already exactly what re-projection would
-        // return — every other report field is static between reconciles —
-        // so it can be returned without re-projecting the log.
-        if verdict_unchanged(
-            &observation.report,
-            &freshness,
-            &reason,
-            &reconciliation_fingerprint,
-        ) {
-            return Ok(observation.clone());
         }
-
-        self.append(Event::ObservationReconciled {
-            observation_id,
-            freshness,
-            reason,
-            reconciliation_fingerprint,
-        })?;
-
-        self.project()?
-            .observations
-            .remove(&observation_id)
-            .ok_or(WorkspaceError::ObservationNotFound(observation_id))
     }
 
     pub fn record_claim(
@@ -1221,31 +1318,16 @@ impl Workspace {
             .claims
             .get(&claim_id)
             .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
-        let (freshness, reason, fingerprint_inputs) =
-            assess_claim_inputs(&self.repository_root, &claim.inputs);
-        let reconciliation_fingerprint =
-            scoped_reconciliation_fingerprint(&self.repository_root, &fingerprint_inputs)?;
-        // No-op suppression, as in `reconcile_observation`: the verdict is
-        // always recomputed; only an unchanged verdict is not re-emitted.
-        if verdict_unchanged(
-            &claim.report,
-            &freshness,
-            &reason,
-            &reconciliation_fingerprint,
-        ) {
-            return Ok(claim.clone());
+        match self.claim_reconcile_event(claim)? {
+            None => Ok(claim.clone()),
+            Some(event) => {
+                self.append(event)?;
+                self.project()?
+                    .claims
+                    .remove(&claim_id)
+                    .ok_or(WorkspaceError::ClaimNotFound(claim_id))
+            }
         }
-        self.append(Event::ClaimReconciled {
-            claim_id,
-            freshness,
-            reason,
-            reconciliation_fingerprint,
-        })?;
-
-        self.project()?
-            .claims
-            .remove(&claim_id)
-            .ok_or(WorkspaceError::ClaimNotFound(claim_id))
     }
 
     pub fn supersede_claim(
@@ -1407,30 +1489,16 @@ impl Workspace {
             .evidence
             .get(&evidence_id)
             .ok_or(WorkspaceError::EvidenceNotFound(evidence_id))?;
-        let (freshness, reason, fingerprint_inputs) =
-            assess_claim_inputs(&self.repository_root, &evidence.inputs);
-        let reconciliation_fingerprint =
-            scoped_reconciliation_fingerprint(&self.repository_root, &fingerprint_inputs)?;
-        // No-op suppression, as in `reconcile_observation`.
-        if verdict_unchanged(
-            &evidence.report,
-            &freshness,
-            &reason,
-            &reconciliation_fingerprint,
-        ) {
-            return Ok(evidence.clone());
+        match self.evidence_reconcile_event(evidence)? {
+            None => Ok(evidence.clone()),
+            Some(event) => {
+                self.append(event)?;
+                self.project()?
+                    .evidence
+                    .remove(&evidence_id)
+                    .ok_or(WorkspaceError::EvidenceNotFound(evidence_id))
+            }
         }
-        self.append(Event::EvidenceReconciled {
-            evidence_id,
-            freshness,
-            reason,
-            reconciliation_fingerprint,
-        })?;
-
-        self.project()?
-            .evidence
-            .remove(&evidence_id)
-            .ok_or(WorkspaceError::EvidenceNotFound(evidence_id))
     }
 
     pub fn apply_file_mutation(
@@ -1704,6 +1772,8 @@ impl Workspace {
         }
 
         let reader = BufReader::new(File::open(path)?);
+        self.event_log_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut projection = Projection::default();
         for (index, line) in reader.lines().enumerate() {
             let line = line?;
