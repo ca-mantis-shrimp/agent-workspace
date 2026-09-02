@@ -271,3 +271,62 @@ Two lessons worth keeping:
 Still undone: a checkpoint records the objective but not an explicit "completed"
 vs "replaced" disposition, and the ~750-event live log is mostly redundant
 reconciliations — no-op suppression is now the loudest unaddressed seam.
+
+## Fifth run — the skill as written, and the suppression slice (Pi)
+
+First run cold-started purely through the skill text: build → `status` → `delta`,
+three commands, no memory archaeology. `delta` did the decisive work — it showed
+the prior session had bound *no-op event suppression* as the objective with zero
+work since the `checkpoint-delta-shipped` line. The objective handoff (bind, then
+a later session picks it up) worked exactly as the checkpoint design intended.
+
+The slice itself shipped fast (commit `b8c9856`): all three reconcile seams
+recompute every verdict but persist only changed ones; the no-op path skips a
+redundant re-projection too. F9 holds by construction — suppression conditions
+persistence, never computation, and a test proves an out-of-band edit after a
+fully suppressed status is still caught. Live numbers: a status over real edits
+appended 24 honest verdict changes; the next status appended zero. The log had
+reached ~970 events, most of them redundant reconciliations.
+
+New findings this run:
+
+- **Transient claims are invisible to delta.** A claim recorded and superseded
+  entirely inside one window (my 15→16 chain) appears in neither
+  `claims_recorded` nor `claims_superseded` — the delta diffs active sets, and
+  the claim is active in neither. The durable log keeps it; the resume view
+  doesn't. Documented as a known limitation: resumption cares about live
+  beliefs.
+- **The drift-refresh loop works but is manual.** A post-claim docs edit staled
+  claim 16; refreshing via observe → re-claim → supersede (16→17) took three
+  commands. Honest, but it's the same bookkeeping tax the adapter auto-capture
+  track exists to eliminate.
+- **Second formatter-noise incident.** Between turns, an edit-time hook
+  reformatted `tests/walking_skeleton.rs` with non-rustfmt style; `cargo fmt
+  --check` caught it and it was reverted. The workspace would have flagged it
+  too (the claim citing that file would stale). This keeps happening — worth a
+  repo-level guard (fmt gate in CI or a pre-commit hook) rather than vigilance.
+
+### Suggested objectives, in order
+
+1. **Writer locking (kernel, small).** Status is the hot path for agent and
+   future Neovim projection alike; today two concurrent statuses collide as
+   `CorruptLog`. An advisory lock file on the workspace directory that makes
+   concurrent writers serialize (or fail with a clear lock error) is a small,
+   sharp slice. Candidate statement: "concurrent statuses either serialize or
+   fail loud with a lock error, never corrupt the log."
+2. **Materialization efficiency (kernel, medium).** Every command replays the
+   whole log; `status` replays it once per item plus the append. No-op
+   suppression slows growth but replay is still O(log). Options: single-pass
+   status (compute all verdicts in one projection, then batch-append the
+   changed ones — F9-safe because the projection happens before the append), or
+   checkpoint-anchored snapshots + tail replay. Careful: cache *inputs and
+   projections*, never verdicts.
+3. **Close the kernel action, pivot to the Pi interface (strategic).** The
+   biggest product gap is adoption tax: observe/claim/supersede are all manual.
+   The first pi-interface slice should be adapter auto-capture — a thin
+   extension that records observations when the agent reads files — so the
+   workspace fills itself. Suppression and delta make that firehose affordable;
+   that is the sequence paying off.
+4. **Small lifecycle items (any time).** An explicit "objective completed"
+   disposition distinct from "replaced"; a concise `status` mode (delta is the
+   resume surface; status at full verbosity is 50KB+).
