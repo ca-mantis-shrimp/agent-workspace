@@ -40,6 +40,21 @@ def expect(name, condition):
     return condition
 
 
+def load_json(text):
+    try:
+        return json.loads(text)
+    except Exception:
+        return {}
+
+
+def make_dir(path):
+    try:
+        os.makedirs(path)
+        return True
+    except Exception:
+        return False
+
+
 def main() -> int:
     if not os.path.exists(BINARY):
         print(f"build the kernel first: {BINARY} is missing", file=sys.stderr)
@@ -49,16 +64,73 @@ def main() -> int:
 
     # Happy path: inside this repo, orientation projects the bound objective and
     # both kernel sections, and never fails the session.
-    code, out = drive({"hook_event_name": "SessionStart", "source": "startup", "cwd": REPO})
+    code, out = drive(
+        {"hook_event_name": "SessionStart", "source": "startup", "cwd": REPO}
+    )
     passed &= expect("happy: exit 0", code == 0)
-    passed &= expect("happy: framing header present", "orientation (claude-code adapter)" in out)
-    passed &= expect("happy: status section present", "# status" in out)
-    passed &= expect("happy: delta section present", "# delta since last checkpoint" in out)
+    passed &= expect(
+        "happy: framing header present", "orientation (claude-code adapter)" in out
+    )
+    passed &= expect(
+        "happy: status section present", "# status (verbatim kernel JSON)" in out
+    )
+    passed &= expect(
+        "happy: delta section present", "# delta since last checkpoint" in out
+    )
     passed &= expect("happy: forwards kernel objective verbatim", '"objective"' in out)
+
+    # Claude shows only a bounded inline preview of large command-hook output.
+    # The compact index must therefore carry the essential orientation before
+    # the verbatim payload begins: exact objective/checkpoint and every active
+    # claim's kernel-reported freshness + scope.
+    index_heading = "# preview index (transport summary of kernel status)\n"
+    status_heading = "\n\n# status (verbatim kernel JSON)"
+    index_start = out.index(index_heading) + len(index_heading)
+    index_end = out.index(status_heading)
+    index = load_json(out[index_start:index_end])
+    kernel_status = load_json(
+        subprocess.run(
+            [
+                BINARY,
+                "status",
+                "--repository",
+                REPO,
+                "--workspace",
+                os.path.join(REPO, ".agent-workspace"),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=20,
+        ).stdout
+    )
+    passed &= expect(
+        "happy: preview carries exact objective",
+        index["objective"] == kernel_status["objective"],
+    )
+    passed &= expect(
+        "happy: preview carries exact latest checkpoint",
+        index["latest_checkpoint"] == kernel_status["latest_checkpoint"],
+    )
+    projected_claims = [
+        (claim["id"], claim["freshness"], claim["scope"]) for claim in index["claims"]
+    ]
+    kernel_claims = [
+        (claim["id"], claim["freshness"], claim["scope"])
+        for claim in kernel_status["claims"]
+    ]
+    passed &= expect(
+        "happy: preview indexes every active claim", projected_claims == kernel_claims
+    )
+    passed &= expect(
+        "happy: essential preview stays below 1800 bytes", index_end < 1800
+    )
 
     # No Git checkout: quiet and harmless.
     with tempfile.TemporaryDirectory() as plain:
-        code, out = drive({"hook_event_name": "SessionStart", "source": "startup", "cwd": plain})
+        code, out = drive(
+            {"hook_event_name": "SessionStart", "source": "startup", "cwd": plain}
+        )
         passed &= expect("no-git: exit 0", code == 0)
         passed &= expect("no-git: emits nothing", out == "")
 
@@ -66,9 +138,14 @@ def main() -> int:
     # objective, no claims, no checkpoint is nothing to orient to).
     with tempfile.TemporaryDirectory() as fresh:
         subprocess.run(["git", "-C", fresh, "init", "-q"], check=True)
-        os.makedirs(os.path.join(fresh, "target", "debug"))
+        passed &= expect(
+            "empty-workspace: fixture directory created",
+            make_dir(os.path.join(fresh, "target", "debug")),
+        )
         os.symlink(BINARY, os.path.join(fresh, "target", "debug", "agent-workspace"))
-        code, out = drive({"hook_event_name": "SessionStart", "source": "startup", "cwd": fresh})
+        code, out = drive(
+            {"hook_event_name": "SessionStart", "source": "startup", "cwd": fresh}
+        )
         passed &= expect("empty-workspace: exit 0", code == 0)
         passed &= expect("empty-workspace: emits nothing", out == "")
 

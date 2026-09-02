@@ -679,3 +679,40 @@ typecheck, 33 Rust tests, fmt, clippy pass. A fresh `pi -p` session oriented via
 the tools alone — objective, one current claim, latest checkpoint — with zero
 CLI shelling. Commit `e6c8ef0`; claim 38 records the slice, claim 39 supersedes
 the run-8 handoff umbrella (claim 37) now that its next objective was consumed.
+
+## 2026-09-02 — Claude Code adapter: live orientation dogfood
+
+The Claude Code adapter now closes the same two-organ loop as Pi: a
+`PostToolUse(Read)` hook records ambient reads through the kernel-owned
+`observe-read` planner, and a `SessionStart` hook pushes durable orientation
+back into a cold model context. Both hooks are transports over kernel semantics;
+they do not replace Claude Code's native tools.
+
+The first real cold-session drive found a boundary the synthetic hook drive did
+not: Claude bounds the inline preview of command-hook stdout. The hook emitted
+17,282 bytes (2,659-byte brief status plus a 14,350-byte checkpoint delta), and
+the model-visible preview ended partway through claim 44. Claim 45 and the latest
+checkpoint were absent. Exiting 0 and containing both sections in raw stdout was
+therefore necessary but not sufficient acceptance evidence.
+
+The repair keeps the complete kernel status and delta verbatim, but precedes
+them with a compact preview index containing the exact kernel objective and
+latest checkpoint plus every active claim's id, freshness, scope, and a
+48-character transport-truncated version of its already-bounded kernel
+headline. This is adapter framing, not a second freshness model: no verdict is
+computed or changed. Claude can reveal the full saved hook output when it needs
+the audit projection.
+
+Executable acceptance now checks 16 conditions: exact objective and checkpoint,
+exact claim id/freshness/scope rows, an essential preamble below 1,800 bytes,
+verbatim status and delta sections, and harmless silence for no-Git,
+empty-workspace, and malformed-input cases. A second genuinely fresh
+`claude -p` session, forbidden from calling tools or reconstructing from files,
+reported the exact objective, checkpoint `run-11-orientation-on-wake-shipped`,
+and all six active claims grouped correctly (current 40/44; stale 38/41/42/45),
+with no requested field missing from inline context.
+
+Residual: the preview index is bounded per headline but not yet by active-claim
+cardinality. If the standing claim set grows enough to cross Claude's preview
+budget, the kernel should gain an explicit bounded wake projection rather than
+letting the adapter invent claim-prioritization semantics.

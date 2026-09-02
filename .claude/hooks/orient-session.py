@@ -14,10 +14,13 @@ from memory alone, which is the exact fragility this workspace exists to end.
 Like organ 1, this is a *thin transport*. It owns no orientation semantics. It
 shells the kernel's own `status` (brief) and checkpoint `delta` and forwards
 their JSON verbatim; every decision about what freshness means, what a delta
-is, what a claim is, lives in the kernel. The one framing line it prepends is an
-*adapter* concern (how to read the projection), mirroring the guidance the Pi
-adapter attaches to its workspace_status / workspace_delta tools — the data
-underneath stays kernel-exact.
+is, what a claim is, lives in the kernel. Claude bounds the inline preview of a
+command hook's stdout, so the adapter first emits a compact *preview index* of
+kernel-reported fields (objective, checkpoint, claim freshness/scope, bounded
+headlines). That index computes no verdict; it is transport framing that keeps
+the essential orientation ahead of Claude's preview boundary. The complete
+kernel projections follow unchanged and remain revealable from Claude's saved
+hook output.
 
 Commitments, in order of importance:
 
@@ -37,6 +40,7 @@ startup / resume / clear / compact / fork; orientation is useful on all of
 them — each re-enters with a reduced context — so we do not filter by source.
 """
 
+import contextlib
 import json
 import subprocess
 import sys
@@ -45,10 +49,11 @@ from workspace_runtime import runtime_for
 
 FRAMING = (
     "=== agent-workspace orientation (claude-code adapter) ===\n"
-    "Durable workspace state at session start, projected from the kernel. "
-    "A claim reported 'stale' outranks your remembered belief about it — "
-    "re-verify before you act on it.\n"
+    "Kernel projection. 'stale' outranks memory: re-verify before acting. "
+    "The preview index stays inline; full status/delta follow and may be saved "
+    "by Claude when its hook-output preview is exceeded.\n"
 )
+PREVIEW_HEADLINE_CHARS = 48
 
 
 def kernel_json(binary: str, root: str, workspace: str, command: list):
@@ -65,23 +70,71 @@ def kernel_json(binary: str, root: str, workspace: str, command: list):
     return result.stdout
 
 
-def is_empty(status_json: str) -> bool:
-    """True when the workspace holds nothing worth orienting to. A parse failure
-    is treated as non-empty: if the kernel emitted status, we forward it rather
-    than silently swallow a projection we merely failed to introspect."""
+def parse_status(status_json: str):
+    """Parse status only for adapter framing. A parse failure returns None: the
+    kernel payload is still forwarded verbatim rather than reinterpreted."""
     try:
-        status = json.loads(status_json)
+        return json.loads(status_json)
     except Exception:
-        return False
-    return (
+        return None
+
+
+def is_empty(status) -> bool:
+    """True when the workspace holds nothing worth orienting to."""
+    return status is not None and (
         status.get("objective") is None
         and not status.get("claims")
         and status.get("latest_checkpoint") is None
     )
 
 
+def preview_index(status) -> str:
+    """A compact table of contents for Claude's bounded hook-output preview.
+
+    Values and verdicts come straight from kernel brief status. The adapter only
+    selects, orders, and transport-truncates already-bounded headlines.
+    """
+    if status is None:
+        return "status unavailable in preview index; see verbatim payload below"
+
+    claims = []
+    for claim in status.get("claims", []):
+        headline = claim.get("headline", "")
+        if len(headline) > PREVIEW_HEADLINE_CHARS:
+            headline = headline[: PREVIEW_HEADLINE_CHARS - 1].rstrip() + "…"
+        claims.append(
+            {
+                "id": claim.get("id"),
+                "freshness": claim.get("freshness"),
+                "scope": claim.get("scope"),
+                "headline": headline,
+            }
+        )
+
+    counts = status.get("counts") or {}
+    index = {
+        "objective": status.get("objective"),
+        "latest_checkpoint": status.get("latest_checkpoint"),
+        "claims": claims,
+        "counts": {
+            "active_claims": counts.get("active_claims"),
+            "open_transactions": counts.get("open_transactions"),
+        },
+    }
+    return json.dumps(index, ensure_ascii=False, separators=(",", ":"))
+
+
+def read_event():
+    try:
+        return json.load(sys.stdin)
+    except Exception:
+        return None
+
+
 def main() -> None:
-    event = json.load(sys.stdin)
+    event = read_event()
+    if not isinstance(event, dict):
+        return
 
     runtime = runtime_for(event.get("cwd") or ".")
     if runtime is None:
@@ -89,25 +142,35 @@ def main() -> None:
     root, binary, workspace = runtime
 
     status = kernel_json(binary, root, workspace, ["status"])
-    if status is None or is_empty(status):
+    if status is None:
+        return
+    parsed_status = parse_status(status)
+    if is_empty(parsed_status):
         return
 
-    sections = [FRAMING, "# status", status.rstrip("\n")]
+    sections = [
+        FRAMING,
+        "# preview index (transport summary of kernel status)",
+        preview_index(parsed_status),
+        "# status (verbatim kernel JSON)",
+        status.rstrip("\n"),
+    ]
 
     # Delta is best-effort: a workspace with no checkpoint yet still deserves its
     # status, so a missing/failed delta narrows the orientation, never suppresses
     # it.
     delta = kernel_json(binary, root, workspace, ["delta"])
     if delta is not None:
-        sections += ["# delta since last checkpoint", delta.rstrip("\n")]
+        sections += [
+            "# delta since last checkpoint (verbatim kernel JSON)",
+            delta.rstrip("\n"),
+        ]
 
     print("\n\n".join(sections))
 
 
 if __name__ == "__main__":
-    try:
+    # Commitment #1: never turn a session start into a failure.
+    with contextlib.suppress(Exception):
         main()
-    except Exception:
-        # Commitment #1: never turn a session start into a failure.
-        pass
     sys.exit(0)
