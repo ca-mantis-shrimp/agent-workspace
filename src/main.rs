@@ -63,6 +63,10 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 print_selected_json(&status.brief(), options.compact)?;
             }
         }
+        "working-set" => {
+            let status = workspace.resume_status()?;
+            print_selected_json(&status.working_set_view(), options.compact)?;
+        }
         "checkpoint" => {
             let label = options
                 .label

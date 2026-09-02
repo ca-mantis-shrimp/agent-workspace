@@ -2888,6 +2888,205 @@ fn claim_dependency_auto_detects_normalizer() {
     );
 }
 
+#[test]
+fn working_set_view_projects_ranked_semantic_locations_uncited_and_trail() {
+    let fixture = GitFixture::with_files(&[
+        ("src/a.rs", "pub fn a() -> i32 { 1 }\n"),
+        ("src/b.rs", "pub fn b() -> i32 { 1 }\n"),
+        ("src/c.rs", "pub fn c() -> i32 { 1 }\n"),
+        ("src/d.rs", "pub fn d() -> i32 { 1 }\n"),
+    ]);
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_string();
+    let ws = workspace.to_str().unwrap().to_string();
+
+    let observe = |path: &str| -> Observation {
+        let out = invoke(&[
+            "observe",
+            "--repository",
+            repo.as_str(),
+            "--workspace",
+            ws.as_str(),
+            "--path",
+            path,
+        ]);
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let focus = |id: u64, reason: &str| {
+        invoke(&[
+            "focus",
+            "--repository",
+            repo.as_str(),
+            "--workspace",
+            ws.as_str(),
+            "--observation",
+            &id.to_string(),
+            "--reason",
+            reason,
+        ]);
+    };
+    let working_set = || -> Value {
+        let out = invoke(&[
+            "working-set",
+            "--repository",
+            repo.as_str(),
+            "--workspace",
+            ws.as_str(),
+        ]);
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+
+    let a = observe("src/a.rs");
+    let b = observe("src/b.rs");
+    let c = observe("src/c.rs");
+    observe("src/d.rs");
+
+    // a.rs is cited by an active claim; b.rs and c.rs are focused into the
+    // working set (b revisited last); d.rs is only observed.
+    invoke(&[
+        "claim",
+        "--repository",
+        repo.as_str(),
+        "--workspace",
+        ws.as_str(),
+        "--statement",
+        "a returns one",
+        "--observation",
+        &a.id.to_string(),
+    ]);
+    focus(b.id, "investigate b");
+    focus(c.id, "investigate c");
+    focus(b.id, "recheck b");
+
+    let view = working_set();
+
+    // Criterion 3: a focused entry is a *semantic location* carrying the
+    // observation's coordinates, not a bare id.
+    let locations = view["locations"].as_array().unwrap();
+    assert_eq!(
+        locations.len(),
+        2,
+        "b and c are focused; a is cited, d is not"
+    );
+    let top = &locations[0];
+    assert_eq!(top["observation_id"].as_u64().unwrap(), b.id);
+    assert_eq!(top["path"], "src/b.rs");
+    assert_eq!(top["selector"]["kind"], "whole_file");
+    assert_eq!(top["freshness"], "current");
+    // Latest focus reason wins, and the revisit makes b the most recent.
+    assert_eq!(top["reason"], "recheck b");
+    assert!(
+        top["focus_sequence"].as_u64().unwrap() > locations[1]["focus_sequence"].as_u64().unwrap(),
+        "revisited b outranks c by recency"
+    );
+    assert!(!top["observed_revision"].as_str().unwrap().is_empty());
+    assert!(!top["relocation_fingerprint"].as_str().unwrap().is_empty());
+
+    // Criterion 1: only current observations neither cited nor focused surface as
+    // attention candidates — here just d.rs.
+    let uncited = view["uncited"].as_array().unwrap();
+    assert_eq!(uncited.len(), 1);
+    assert_eq!(uncited[0]["path"], "src/d.rs");
+
+    // Criterion 6 (trail): every visit, most recent first, revisits included.
+    let trail = view["trail"].as_array().unwrap();
+    assert_eq!(trail.len(), 3);
+    assert_eq!(trail[0]["reason"], "recheck b");
+    assert_eq!(trail[1]["reason"], "investigate c");
+    assert_eq!(trail[2]["reason"], "investigate b");
+
+    // Criterion 5 + ranking: an out-of-band edit under a focused location stales
+    // it, and stale sorts ahead of current so a cap can never hide it.
+    fs::write(
+        fixture.repository.join("src/b.rs"),
+        "pub fn b() -> i32 { 999 }\n",
+    )
+    .unwrap();
+    let after_edit = working_set();
+    let top = &after_edit["locations"][0];
+    assert_eq!(top["observation_id"].as_u64().unwrap(), b.id);
+    assert_eq!(top["freshness"], "stale", "edited location is stale-first");
+
+    // Criterion 6 (restart): a cold re-invocation recovers the same ordered
+    // trail from the event log alone.
+    let resumed = working_set();
+    let resumed_trail = resumed["trail"].as_array().unwrap();
+    assert_eq!(resumed_trail.len(), 3);
+    assert_eq!(resumed_trail[0]["reason"], "recheck b");
+    assert_eq!(resumed_trail[2]["reason"], "investigate b");
+}
+
+#[test]
+fn working_set_view_hard_bounds_each_section_with_explicit_omissions() {
+    // 13 focused locations, 13 uncited candidates, and 17 total focus visits —
+    // each one over its cap by exactly one — so every omission counter is proven.
+    let files: Vec<(String, String)> = (0..26)
+        .map(|i| (format!("src/f{i:02}.rs"), format!("pub fn f{i}() {{}}\n")))
+        .collect();
+    let file_refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, body)| (path.as_str(), body.as_str()))
+        .collect();
+    let fixture = GitFixture::with_files(&file_refs);
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_string();
+    let ws = workspace.to_str().unwrap().to_string();
+
+    let observe = |path: &str| -> Observation {
+        let out = invoke(&[
+            "observe",
+            "--repository",
+            repo.as_str(),
+            "--workspace",
+            ws.as_str(),
+            "--path",
+            path,
+        ]);
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let focus = |id: u64| {
+        invoke(&[
+            "focus",
+            "--repository",
+            repo.as_str(),
+            "--workspace",
+            ws.as_str(),
+            "--observation",
+            &id.to_string(),
+            "--reason",
+            "bound fixture",
+        ]);
+    };
+
+    let ids: Vec<u64> = (0..26)
+        .map(|i| observe(&format!("src/f{i:02}.rs")).id)
+        .collect();
+    // Focus the first 13 (distinct locations); leave the last 13 as uncited
+    // candidates; revisit 4 to push the trail to 17 visits.
+    for &id in &ids[..13] {
+        focus(id);
+    }
+    for &id in &ids[..4] {
+        focus(id);
+    }
+
+    let out = invoke(&[
+        "working-set",
+        "--repository",
+        repo.as_str(),
+        "--workspace",
+        ws.as_str(),
+    ]);
+    let view: Value = serde_json::from_slice(&out.stdout).unwrap();
+
+    assert_eq!(view["locations"].as_array().unwrap().len(), 12);
+    assert_eq!(view["locations_omitted"].as_u64().unwrap(), 1);
+    assert_eq!(view["uncited"].as_array().unwrap().len(), 12);
+    assert_eq!(view["uncited_omitted"].as_u64().unwrap(), 1);
+    assert_eq!(view["trail"].as_array().unwrap().len(), 16);
+    assert_eq!(view["trail_omitted"].as_u64().unwrap(), 1);
+}
+
 fn claim_ids(claims: &[Claim]) -> Vec<u64> {
     claims.iter().map(|claim| claim.id).collect()
 }

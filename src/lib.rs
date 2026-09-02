@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -367,6 +368,13 @@ pub struct Objective {
 pub struct WorkingSetEntry {
     pub observation_id: u64,
     pub reason: String,
+    /// Monotonic focus ordinal stamped at projection time from the order of
+    /// `ObservationFocused` events. It is the *recency* signal — higher means
+    /// focused more recently — and the position a location occupies in the
+    /// navigation trail. Derived, never stored on the event, so the append-only
+    /// log stays untouched and old logs replay identically (absent → 0).
+    #[serde(default)]
+    pub focus_sequence: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -434,6 +442,8 @@ pub struct CheckpointMarker {
 pub struct WorkspaceStatus {
     pub objective: Option<Objective>,
     pub working_set: Vec<WorkingSetEntry>,
+    #[serde(default)]
+    pub navigation_trail: Vec<WorkingSetEntry>,
     pub observations: Vec<Observation>,
     pub claims: Vec<Claim>,
     #[serde(default)]
@@ -552,6 +562,162 @@ impl WorkspaceStatus {
         }
     }
 }
+
+/// A focused working-set entry joined to the observation it cites: the durable
+/// pointer (`observation_id`, `reason`, `focus_sequence`) resolved into the
+/// coordinates that make it a *location* — path, selector, the revision it was
+/// observed at, and a relocation anchor. This is a pure projection, never a
+/// stored entity: the observation already persists these coordinates, so
+/// materializing them here keeps one source of truth and cannot drift from it.
+#[derive(Clone, Debug, Serialize)]
+pub struct SemanticLocation {
+    pub observation_id: u64,
+    pub path: PathBuf,
+    pub selector: ObservationSelector,
+    pub observed_revision: String,
+    /// The enclosing container's fingerprint at observation time — the anchor a
+    /// later reconcile compares against to notice the file moved underneath the
+    /// location. Not a symbol identity: perfect relocation across refactors is a
+    /// declared non-goal for this slice.
+    pub relocation_fingerprint: String,
+    /// Freshness read straight off the already-reconciled observation. `stale`
+    /// here means an edit landed under a location you are still attending to.
+    pub freshness: FreshnessWithinScope,
+    pub reason: String,
+    pub focus_sequence: u64,
+}
+
+/// A current observation not yet cited by any active claim and not already in
+/// the working set: an attention *candidate*, the raw material a focus turns
+/// into a location. Deliberately thin — enough to decide whether to focus it,
+/// no heavier.
+#[derive(Clone, Debug, Serialize)]
+pub struct UncitedObservation {
+    pub observation_id: u64,
+    pub path: PathBuf,
+    pub selector: ObservationSelector,
+}
+
+/// The bounded attention model: ranked semantic locations currently in focus,
+/// the uncited candidates that could join them, and the ordered trail of how
+/// focus moved. Every section is hard-capped with an explicit `_omitted` count
+/// so a cap is always visible, never silent — the same contract `BriefStatus`
+/// keeps for claims. It retains no whole-file payload: locations point at
+/// observations, which is where reveal-on-demand already lives.
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkingSetView {
+    pub locations: Vec<SemanticLocation>,
+    pub locations_omitted: usize,
+    pub uncited: Vec<UncitedObservation>,
+    pub uncited_omitted: usize,
+    /// Most-recent focus first; revisits included. Recovers verbatim on restart
+    /// because it is replayed from the `ObservationFocused` event order.
+    pub trail: Vec<WorkingSetEntry>,
+    pub trail_omitted: usize,
+}
+
+impl WorkspaceStatus {
+    /// Project the reconciled status into the bounded working-set attention
+    /// model. Pure over an already-reconciled [`WorkspaceStatus`]: it reads each
+    /// observation's stored freshness and coordinates and touches neither the
+    /// log nor the worktree, exactly like [`WorkspaceStatus::brief`].
+    pub fn working_set_view(&self) -> WorkingSetView {
+        let observations: BTreeMap<u64, &Observation> =
+            self.observations.iter().map(|o| (o.id, o)).collect();
+
+        // Ranked, bounded locations: stale-first (a cap must never preferentially
+        // hide invalidated attention), then most-recently focused.
+        let mut located: Vec<SemanticLocation> = self
+            .working_set
+            .iter()
+            .filter_map(|entry| {
+                let observation = observations.get(&entry.observation_id)?;
+                Some(SemanticLocation {
+                    observation_id: entry.observation_id,
+                    path: observation.path.clone(),
+                    selector: observation.selector.clone(),
+                    observed_revision: observation.observed_revision.clone(),
+                    relocation_fingerprint: observation.observed_container_fingerprint.clone(),
+                    freshness: observation.report.freshness_within_scope.clone(),
+                    reason: entry.reason.clone(),
+                    focus_sequence: entry.focus_sequence,
+                })
+            })
+            .collect();
+        located.sort_by_key(|location| {
+            (
+                freshness_rank(&location.freshness),
+                Reverse(location.focus_sequence),
+            )
+        });
+        let locations_omitted = located.len().saturating_sub(WORKING_SET_LOCATION_LIMIT);
+        located.truncate(WORKING_SET_LOCATION_LIMIT);
+
+        // Uncited candidates: current observations no active claim supports and
+        // that are not already focused. Stable by id so the surface is
+        // deterministic across runs.
+        let cited: BTreeSet<u64> = self
+            .claims
+            .iter()
+            .flat_map(|claim| claim.supporting_observation_ids.iter().copied())
+            .collect();
+        let focused: BTreeSet<u64> = self.working_set.iter().map(|e| e.observation_id).collect();
+        let mut uncited: Vec<UncitedObservation> = self
+            .observations
+            .iter()
+            .filter(|observation| {
+                observation.report.freshness_within_scope == FreshnessWithinScope::Current
+                    && !cited.contains(&observation.id)
+                    && !focused.contains(&observation.id)
+            })
+            .map(|observation| UncitedObservation {
+                observation_id: observation.id,
+                path: observation.path.clone(),
+                selector: observation.selector.clone(),
+            })
+            .collect();
+        let uncited_omitted = uncited.len().saturating_sub(WORKING_SET_UNCITED_LIMIT);
+        uncited.truncate(WORKING_SET_UNCITED_LIMIT);
+
+        // Trail: most recent focus first, bounded to the recent window.
+        let trail_omitted = self
+            .navigation_trail
+            .len()
+            .saturating_sub(WORKING_SET_TRAIL_LIMIT);
+        let trail: Vec<WorkingSetEntry> = self
+            .navigation_trail
+            .iter()
+            .rev()
+            .take(WORKING_SET_TRAIL_LIMIT)
+            .cloned()
+            .collect();
+
+        WorkingSetView {
+            locations: located,
+            locations_omitted,
+            uncited,
+            uncited_omitted,
+            trail,
+            trail_omitted,
+        }
+    }
+}
+
+/// Order freshness so a truncating cap surfaces invalidated state first.
+fn freshness_rank(freshness: &FreshnessWithinScope) -> u8 {
+    match freshness {
+        FreshnessWithinScope::Stale => 0,
+        FreshnessWithinScope::Unknown => 1,
+        FreshnessWithinScope::Current => 2,
+    }
+}
+
+/// Hard cardinality bounds for the working-set attention surface. Like the brief
+/// claim cap, these keep model-entry cost bounded; each is paired with an
+/// explicit omission count so truncation is always visible.
+const WORKING_SET_LOCATION_LIMIT: usize = 12;
+const WORKING_SET_UNCITED_LIMIT: usize = 12;
+const WORKING_SET_TRAIL_LIMIT: usize = 16;
 
 /// Hard cardinality and per-headline bounds for model-entry orientation. Stale
 /// claims rank first so a cap never preferentially hides invalidated beliefs.
@@ -926,6 +1092,7 @@ impl Workspace {
         Ok(WorkspaceStatus {
             objective: projection.objective,
             working_set: projection.working_set.into_values().collect(),
+            navigation_trail: projection.navigation_trail,
             observations: projection.observations.into_values().collect(),
             claims,
             superseded_claims,
@@ -2014,6 +2181,13 @@ impl Workspace {
 struct Projection {
     objective: Option<Objective>,
     working_set: BTreeMap<u64, WorkingSetEntry>,
+    /// Ordered focus history — one entry per `ObservationFocused` event,
+    /// revisits included. The deduped `working_set` map answers "what am I
+    /// attending to"; this Vec answers "in what order did I get here", which the
+    /// map's key ordering cannot express. Both are replayed from the same event
+    /// stream, so both recover on restart for free.
+    navigation_trail: Vec<WorkingSetEntry>,
+    next_focus_ordinal: u64,
     observations: BTreeMap<u64, Observation>,
     claims: BTreeMap<u64, Claim>,
     evidence: BTreeMap<u64, Evidence>,
@@ -2059,13 +2233,18 @@ impl Projection {
                 if !self.observations.contains_key(&observation_id) {
                     return Err(WorkspaceError::ObservationNotFound(observation_id));
                 }
-                self.working_set.insert(
+                let focus_sequence = self.next_focus_ordinal;
+                self.next_focus_ordinal += 1;
+                let entry = WorkingSetEntry {
                     observation_id,
-                    WorkingSetEntry {
-                        observation_id,
-                        reason,
-                    },
-                );
+                    reason,
+                    focus_sequence,
+                };
+                // The trail keeps every visit in order; the working set keeps the
+                // latest visit per observation, so a re-focus moves that location
+                // to the front of recency rather than accumulating duplicates.
+                self.navigation_trail.push(entry.clone());
+                self.working_set.insert(observation_id, entry);
             }
             Event::ObservationRecorded {
                 observation_id,

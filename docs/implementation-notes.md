@@ -763,3 +763,46 @@ model-boundary redrive then read `README.md` through the native tool and, withou
 Bash or a manual kernel call, produced observation 154 (`pi.read`, whole-file,
 5,004 source/model-visible bytes); bounded delta advanced from 17 to 18 recorded
 observations and retained only its sixteen most recent ids.
+
+## 2026-09-02 — Semantic working set (first attention-model slice)
+
+Run 13 ended with 166+ observations but only provenance-oriented access: the
+system sensed and remembered well and did almost nothing to *direct attention*.
+This slice turns the focused-observation stream into a bounded, ranked,
+restart-safe attention model, projected through a new `working-set` command.
+
+- **A semantic location is a projection, not a stored entity.** The observation
+  a `WorkingSetEntry` cites already persists path, selector, revision, and
+  container fingerprint. Materializing `SemanticLocation` by joining entry →
+  observation at status time keeps one source of truth that cannot drift, mirrors
+  exactly how `BriefClaim` is derived, and honors the charter's "small durable
+  vocabulary" constraint. A projection is trivially promotable to an entity later
+  if that proves too thin; the reverse would be a migration. `relocation_fingerprint`
+  is the observation's container fingerprint — a file-level relocation anchor, not
+  a symbol identity (perfect cross-refactor identity is a declared non-goal).
+- **No event-schema change; the trail is derived.** `ObservationFocused` still
+  carries only `{observation_id, reason}`. A monotonic `focus_sequence` is
+  stamped at projection time from event order, so the append-only log is
+  untouched and every existing log (172 live observations, 16 pre-existing focus
+  events) replays identically — verified by running `working-set` against the
+  live workspace, which recovered a 16-entry trail with no migration.
+- **Working set vs navigation trail.** The deduped `working_set` map answers
+  "what am I attending to" (latest focus per observation wins on a revisit); the
+  ordered `navigation_trail` Vec answers "in what order did I get here" (revisits
+  included). The map's key ordering cannot express the latter, so both are kept,
+  both replayed from the same stream.
+- **Every section is hard-bounded with an explicit omission count.** Locations
+  (cap 12, ranked stale-first then most-recently-focused, so a cap can never
+  preferentially hide invalidated attention), uncited candidates (cap 12), and
+  trail (cap 16) each pair their bound with a `_omitted` count — the same
+  visible-truncation contract `BriefStatus` keeps for claims. No whole-file
+  payload is retained: locations point at observations, where reveal already lives.
+- **Uncited = current, uncited, unfocused.** The attention-candidate surface is
+  the current observations no active claim supports and that are not already
+  focused — the raw material a `focus` turns into a location.
+- **Coverage.** Two acceptance tests: one drives the full contract (join
+  coordinates, latest-reason-wins, recency ranking, uncited exclusion, ordered
+  trail, out-of-band edit → stale-first, cold-restart trail recovery); the other
+  proves all three omission counters at once with a 13/13/17 over-cap fixture.
+  40 Rust tests, strict fmt and clippy pass. Deferred: the thin Pi projection of
+  this surface (criterion 7).
