@@ -552,3 +552,40 @@ fingerprinting with no flag to remember.
   observations are rare. (3) `assess_claim_inputs` still re-reads every input
   on every status (materialization efficiency remains the open kernel item;
   the fast path removes the subprocess tax, not the I/O tax).
+
+## 2026-09-01 — Brief-default status
+
+- **Orientation is now the default projection.** `status` returns a bounded
+  `BriefStatus`: objective, every active claim's id/freshness/scope and
+  one-line headline, aggregate lifecycle and freshness counts, and the latest
+  checkpoint. `status --full` retains the complete audit projection.
+- **Scope assurance remains inseparable from freshness.** The concise claim row
+  still carries both scope source and completeness, preserving the projection
+  obligation established by S3 rather than presenting `current` as complete.
+- **Statements are bounded at a UTF-8-safe character boundary.** Headlines are
+  single-line and truncated without splitting multi-byte characters; the full
+  statement remains available in the audit view.
+- **Measured on the dogfood workspace:** the default response fell from roughly
+  176 KB to 5.6 KB while retaining the objective, every live belief's freshness
+  and scope, and counts. This closes the context-cost half of the status-cost
+  objective without weakening reconciliation.
+
+## 2026-09-01 — Single-pass status materialization
+
+- **Project once, reconcile many.** `resume_status` now projects the append-only
+  log once, computes each observation, claim, and evidence verdict against that
+  snapshot, appends only changed reconciliation events, and updates the in-memory
+  projection as those events are accepted. It no longer calls a public
+  reconcile method that replays the full log for each entity.
+- **F9 remains inviolable.** The optimization caches inputs/projection only for
+  one status operation; it never caches freshness verdicts across calls. Every
+  invocation rereads current mediated inputs and recomputes verdicts, so an
+  out-of-band edit between consecutive statuses is still detected.
+- **Event invariants remain centralized.** Newly appended reconcile events flow
+  through the same projection transition logic used by replay rather than
+  mutating materialized entities through a second ad-hoc path.
+- **Measured proof:** the live status path fell from 214 event-log reads to one.
+  Acceptance coverage asserts one projection pass, unchanged repeated verdicts,
+  no-op event suppression, and detection of an intervening out-of-band edit.
+  This closes the final walking-skeleton kernel item; persistent snapshots or
+  compaction remain unnecessary until measured log replay cost justifies them.
