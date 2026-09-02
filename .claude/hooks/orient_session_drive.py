@@ -71,59 +71,64 @@ def main() -> int:
     passed &= expect(
         "happy: framing header present", "orientation (claude-code adapter)" in out
     )
-    passed &= expect(
-        "happy: status section present", "# status (verbatim kernel JSON)" in out
+    status_heading = "# status (verbatim bounded kernel JSON)\n\n"
+    delta_heading = (
+        "\n\n# delta since last checkpoint (verbatim bounded kernel JSON)\n\n"
     )
-    passed &= expect(
-        "happy: delta section present", "# delta since last checkpoint" in out
-    )
-    passed &= expect("happy: forwards kernel objective verbatim", '"objective"' in out)
+    passed &= expect("happy: status section present", status_heading in out)
+    passed &= expect("happy: delta section present", delta_heading in out)
 
-    # Claude shows only a bounded inline preview of large command-hook output.
-    # The compact index must therefore carry the essential orientation before
-    # the verbatim payload begins: exact objective/checkpoint and every active
-    # claim's kernel-reported freshness + scope.
-    index_heading = "# preview index (transport summary of kernel status)\n"
-    status_heading = "\n\n# status (verbatim kernel JSON)"
-    index_start = out.index(index_heading) + len(index_heading)
-    index_end = out.index(status_heading)
-    index = load_json(out[index_start:index_end])
-    kernel_status = load_json(
-        subprocess.run(
-            [
-                BINARY,
-                "status",
-                "--repository",
-                REPO,
-                "--workspace",
-                os.path.join(REPO, ".agent-workspace"),
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=20,
-        ).stdout
+    status_start = out.index(status_heading) + len(status_heading)
+    status_end = out.index(delta_heading)
+    projected_status = out[status_start:status_end]
+    kernel_status = subprocess.run(
+        [
+            BINARY,
+            "status",
+            "--compact",
+            "--repository",
+            REPO,
+            "--workspace",
+            os.path.join(REPO, ".agent-workspace"),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=20,
+    ).stdout.rstrip("\n")
+    passed &= expect(
+        "happy: forwards bounded kernel status verbatim",
+        projected_status == kernel_status,
+    )
+    parsed_status = load_json(projected_status)
+    passed &= expect(
+        "happy: status carries objective", parsed_status.get("objective") is not None
+    )
+    passed &= expect("happy: essential status fits inline preview", status_end < 1_800)
+
+    delta_start = status_end + len(delta_heading)
+    projected_delta = out[delta_start:].rstrip("\n")
+    kernel_delta = subprocess.run(
+        [
+            BINARY,
+            "delta",
+            "--compact",
+            "--repository",
+            REPO,
+            "--workspace",
+            os.path.join(REPO, ".agent-workspace"),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=20,
+    ).stdout.rstrip("\n")
+    passed &= expect(
+        "happy: forwards bounded kernel delta verbatim",
+        projected_delta == kernel_delta,
     )
     passed &= expect(
-        "happy: preview carries exact objective",
-        index["objective"] == kernel_status["objective"],
-    )
-    passed &= expect(
-        "happy: preview carries exact latest checkpoint",
-        index["latest_checkpoint"] == kernel_status["latest_checkpoint"],
-    )
-    projected_claims = [
-        (claim["id"], claim["freshness"], claim["scope"]) for claim in index["claims"]
-    ]
-    kernel_claims = [
-        (claim["id"], claim["freshness"], claim["scope"])
-        for claim in kernel_status["claims"]
-    ]
-    passed &= expect(
-        "happy: preview indexes every active claim", projected_claims == kernel_claims
-    )
-    passed &= expect(
-        "happy: essential preview stays below 1800 bytes", index_end < 1800
+        "happy: combined wake output stays below 3000 bytes", len(out) < 3_000
     )
 
     # No Git checkout: quiet and harmless.

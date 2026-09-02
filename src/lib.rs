@@ -260,6 +260,9 @@ pub struct ReadCaptureRequest {
     /// kernel matches this exactly against the file and knows no presentation
     /// format of its own.
     pub model_visible_text: String,
+    /// Total bytes delivered at the model boundary, including harness chrome
+    /// stripped from `model_visible_text` before kernel matching.
+    pub model_visible_bytes: Option<usize>,
     /// Whether the harness reported the native read result as truncated.
     pub truncated: bool,
 }
@@ -270,7 +273,7 @@ pub struct ReadCaptureRequest {
 /// capture vanishing without trace.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReadCaptureOutcome {
-    Captured(ObservationCapture),
+    Captured(Box<ObservationCapture>),
     Skipped { reason: String },
 }
 
@@ -443,8 +446,9 @@ pub struct WorkspaceStatus {
 
 /// The default `status` output: the orientation surface an agent resumes from,
 /// not the full audit dump (`--full`, [`WorkspaceStatus`]). It carries the
-/// objective in force, every *active* claim as a scannable headline with its
-/// freshness and scope, a freshness histogram, and counts — nothing heavier.
+/// objective in force, a bounded stale-first window of active claims as
+/// scannable headlines with freshness and scope, a freshness histogram, and
+/// counts — nothing heavier. `claims_omitted` makes truncation explicit.
 /// Observations, superseded claims, evidence, transactions, and per-claim
 /// operational coverage collapse to counts you can expand with `--full` or
 /// `reveal`. This is a pure projection over an already-reconciled
@@ -454,6 +458,7 @@ pub struct WorkspaceStatus {
 pub struct BriefStatus {
     pub objective: Option<Objective>,
     pub claims: Vec<BriefClaim>,
+    pub claims_omitted: usize,
     pub counts: BriefCounts,
     pub latest_checkpoint: Option<BriefCheckpoint>,
 }
@@ -498,26 +503,36 @@ impl WorkspaceStatus {
     /// report — this method never touches the log or the worktree.
     pub fn brief(&self) -> BriefStatus {
         let mut freshness = FreshnessHistogram::default();
-        let claims = self
-            .claims
-            .iter()
-            .map(|claim| {
-                match claim.report.freshness_within_scope {
-                    FreshnessWithinScope::Current => freshness.current += 1,
-                    FreshnessWithinScope::Stale => freshness.stale += 1,
-                    FreshnessWithinScope::Unknown => freshness.unknown += 1,
-                }
-                BriefClaim {
-                    id: claim.id,
-                    freshness: claim.report.freshness_within_scope.clone(),
-                    scope: claim.report.scope_assurance.clone(),
-                    headline: claim_headline(&claim.statement, BRIEF_HEADLINE_MAX_CHARS),
-                }
+        for claim in &self.claims {
+            match claim.report.freshness_within_scope {
+                FreshnessWithinScope::Current => freshness.current += 1,
+                FreshnessWithinScope::Stale => freshness.stale += 1,
+                FreshnessWithinScope::Unknown => freshness.unknown += 1,
+            }
+        }
+        let mut ranked_claims: Vec<&Claim> = self.claims.iter().collect();
+        ranked_claims.sort_by_key(|claim| {
+            let freshness_rank = match claim.report.freshness_within_scope {
+                FreshnessWithinScope::Stale => 0,
+                FreshnessWithinScope::Unknown => 1,
+                FreshnessWithinScope::Current => 2,
+            };
+            (freshness_rank, claim.id)
+        });
+        let claims = ranked_claims
+            .into_iter()
+            .take(BRIEF_CLAIM_LIMIT)
+            .map(|claim| BriefClaim {
+                id: claim.id,
+                freshness: claim.report.freshness_within_scope.clone(),
+                scope: claim.report.scope_assurance.clone(),
+                headline: claim_headline(&claim.statement, BRIEF_HEADLINE_MAX_CHARS),
             })
             .collect();
         BriefStatus {
             objective: self.objective.clone(),
             claims,
+            claims_omitted: self.claims.len().saturating_sub(BRIEF_CLAIM_LIMIT),
             counts: BriefCounts {
                 active_claims: self.claims.len(),
                 superseded_claims: self.superseded_claims.len(),
@@ -538,9 +553,10 @@ impl WorkspaceStatus {
     }
 }
 
-/// Headline budget for a [`BriefClaim`]: enough to carry a thesis-first claim's
-/// point, short enough that a dozen of them scan at a glance.
-const BRIEF_HEADLINE_MAX_CHARS: usize = 160;
+/// Hard cardinality and per-headline bounds for model-entry orientation. Stale
+/// claims rank first so a cap never preferentially hides invalidated beliefs.
+const BRIEF_CLAIM_LIMIT: usize = 8;
+const BRIEF_HEADLINE_MAX_CHARS: usize = 80;
 
 /// Truncate a claim statement to a scannable headline on a word boundary,
 /// marking the cut with a trailing `…`. Statements at or under the budget are
@@ -585,6 +601,85 @@ pub struct DeltaStatus {
     pub transactions_opened: Vec<Transaction>,
     pub transactions_closed: Vec<Transaction>,
 }
+
+/// Bounded default delta. Full entities remain available through `delta --full`;
+/// this projection answers only what kind of change occurred and which recent
+/// entity ids to reveal next.
+#[derive(Clone, Debug, Serialize)]
+pub struct BriefDeltaStatus {
+    pub checkpoint: BriefCheckpoint,
+    pub objective_change: Option<BriefObjectiveChange>,
+    pub claims_recorded: BriefIdSet,
+    pub claims_superseded: BriefIdSet,
+    pub claims_staled: BriefIdSet,
+    pub observations_recorded: BriefIdSet,
+    pub transactions_opened: BriefIdSet,
+    pub transactions_closed: BriefIdSet,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BriefObjectiveChange {
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BriefIdSet {
+    pub total: usize,
+    pub recent_ids: Vec<u64>,
+    pub omitted: usize,
+}
+
+impl BriefIdSet {
+    fn from_ids(ids: impl IntoIterator<Item = u64>) -> Self {
+        let ids: Vec<u64> = ids.into_iter().collect();
+        let omitted = ids.len().saturating_sub(BRIEF_DELTA_ID_LIMIT);
+        Self {
+            total: ids.len(),
+            recent_ids: ids.into_iter().skip(omitted).collect(),
+            omitted,
+        }
+    }
+}
+
+impl DeltaStatus {
+    pub fn brief(&self) -> BriefDeltaStatus {
+        BriefDeltaStatus {
+            checkpoint: BriefCheckpoint {
+                label: self.checkpoint.label.clone(),
+                sequence: self.checkpoint.sequence,
+            },
+            objective_change: self
+                .objective_change
+                .as_ref()
+                .map(|change| BriefObjectiveChange {
+                    before: change.before.as_ref().map(|objective| {
+                        claim_headline(&objective.intent, BRIEF_OBJECTIVE_MAX_CHARS)
+                    }),
+                    after: change.after.as_ref().map(|objective| {
+                        claim_headline(&objective.intent, BRIEF_OBJECTIVE_MAX_CHARS)
+                    }),
+                }),
+            claims_recorded: BriefIdSet::from_ids(self.claims_recorded.iter().map(|item| item.id)),
+            claims_superseded: BriefIdSet::from_ids(
+                self.claims_superseded.iter().map(|item| item.id),
+            ),
+            claims_staled: BriefIdSet::from_ids(self.claims_staled.iter().map(|item| item.id)),
+            observations_recorded: BriefIdSet::from_ids(
+                self.observations_recorded.iter().map(|item| item.id),
+            ),
+            transactions_opened: BriefIdSet::from_ids(
+                self.transactions_opened.iter().map(|item| item.id),
+            ),
+            transactions_closed: BriefIdSet::from_ids(
+                self.transactions_closed.iter().map(|item| item.id),
+            ),
+        }
+    }
+}
+
+const BRIEF_DELTA_ID_LIMIT: usize = 16;
+const BRIEF_OBJECTIVE_MAX_CHARS: usize = 120;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct EventRecord {
@@ -1233,11 +1328,15 @@ impl Workspace {
             selector: plan.selector,
             normalizer: Normalizer::detect_for_path(&path),
             retain_native_payload: false,
-            model_visible_bytes: Some(request.model_visible_text.len()),
+            model_visible_bytes: Some(
+                request
+                    .model_visible_bytes
+                    .unwrap_or(request.model_visible_text.len()),
+            ),
             expected_raw_fingerprint: Some(plan.expected_raw_fingerprint),
         };
         let capture = self.capture_file_observation(path, provider, options)?;
-        Ok(ReadCaptureOutcome::Captured(capture))
+        Ok(ReadCaptureOutcome::Captured(Box::new(capture)))
     }
 
     pub fn reveal_observation(

@@ -1,15 +1,34 @@
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
+import { Buffer } from "node:buffer";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { readFile, realpath } from "node:fs/promises";
-import { join, resolve } from "node:path";
-import {
-	decodeUtf8,
-	isSensitivePath,
-	planReadCapture,
-	repositoryRelativePath,
-	type ReadParameters,
-} from "./capture.ts";
+import { access, realpath } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+
+interface ReadParameters {
+	path: string;
+	offset?: number;
+	limit?: number;
+}
+
+function repositoryRelativePath(
+	repositoryRoot: string,
+	cwd: string,
+	requestedPath: string,
+): string | undefined {
+	const absolute = resolve(cwd, requestedPath.replace(/^@/, ""));
+	const candidate = relative(resolve(repositoryRoot), absolute);
+	if (candidate === "" || candidate === ".") return undefined;
+	if (
+		candidate === ".." ||
+		candidate.startsWith(`..${sep}`) ||
+		isAbsolute(candidate)
+	) {
+		return undefined;
+	}
+	return candidate.split(sep).join("/");
+}
 
 interface ReadToolCallEvent {
 	toolName: string;
@@ -38,6 +57,13 @@ function textResult(message: ToolResultMessage): string | undefined {
 	if (message.isError || message.content.length !== 1) return undefined;
 	const [content] = message.content;
 	return content?.type === "text" ? content.text : undefined;
+}
+
+const PI_PAGINATION_NOTICE =
+	/\n\n\[\d+ more lines in file\. Use offset=\d+ to continue\.\]$/;
+
+function stripPiReadChrome(resultText: string): string {
+	return resultText.replace(PI_PAGINATION_NOTICE, "");
 }
 
 function nativeReadWasTruncated(details: unknown): boolean {
@@ -77,8 +103,45 @@ export default function (pi: ExtensionAPI) {
 			binary: join(root, "target", "debug", "agent-workspace"),
 			workspace: join(root, ".agent-workspace"),
 		};
+		try {
+			await access(runtime.binary);
+		} catch {
+			// Do not cache this miss: a build later in the same Pi session should
+			// activate the adapter without requiring a restart.
+			return undefined;
+		}
 		runtimes.set(cwd, runtime);
 		return runtime;
+	}
+
+	function execWithInput(
+		command: string,
+		args: string[],
+		input: string,
+		signal?: AbortSignal,
+	): Promise<{ code: number; stdout: string; stderr: string }> {
+		return new Promise((resolvePromise, rejectPromise) => {
+			const child = spawn(command, args, {
+				stdio: ["pipe", "pipe", "pipe"],
+				signal,
+			});
+			let stdout = "";
+			let stderr = "";
+			child.stdout.setEncoding("utf8");
+			child.stderr.setEncoding("utf8");
+			child.stdout.on("data", (chunk: string) => (stdout += chunk));
+			child.stderr.on("data", (chunk: string) => (stderr += chunk));
+			const timeout = setTimeout(() => child.kill("SIGKILL"), 10_000);
+			child.on("error", (error) => {
+				clearTimeout(timeout);
+				rejectPromise(error);
+			});
+			child.on("close", (code) => {
+				clearTimeout(timeout);
+				resolvePromise({ code: code ?? 1, stdout, stderr });
+			});
+			child.stdin.end(input);
+		});
 	}
 
 	async function captureRead(
@@ -99,51 +162,37 @@ export default function (pi: ExtensionAPI) {
 			runtime.root,
 			canonical,
 		);
-		if (
-			!repositoryPath ||
-			repositoryPath.startsWith(".agent-workspace/") ||
-			isSensitivePath(repositoryPath)
-		) {
-			return;
-		}
+		if (!repositoryPath || repositoryPath.startsWith(".agent-workspace/")) return;
 
-		const bytes = await readFile(canonical);
-		const fileContent = decodeUtf8(bytes);
-		if (fileContent === undefined) return;
-		const decision = planReadCapture(
-			fileContent,
-			{ ...parameters, path: repositoryPath },
-			resultText,
-			{ truncated: nativeReadWasTruncated(message.details) },
-		);
-		if (!decision.capture) return;
-
+		const semanticReadText = stripPiReadChrome(resultText);
 		const args = [
-			"observe",
+			"observe-read",
 			"--repository",
 			runtime.root,
 			"--workspace",
 			runtime.workspace,
 			"--path",
-			decision.plan.repositoryPath,
+			repositoryPath,
 			"--provider",
 			"pi.read",
 			"--model-visible-bytes",
-			decision.plan.modelVisibleBytes.toString(),
-			"--expected-raw-fingerprint",
-			decision.plan.expectedRawFingerprint,
+			Buffer.byteLength(resultText, "utf8").toString(),
 		];
-		if (decision.plan.byteRange) {
-			args.push(
-				"--range",
-				`${decision.plan.byteRange.start}:${decision.plan.byteRange.end}`,
-			);
-		}
+		if (parameters.offset !== undefined)
+			args.push("--offset", parameters.offset.toString());
+		if (parameters.limit !== undefined)
+			args.push("--limit", parameters.limit.toString());
+		if (nativeReadWasTruncated(message.details)) args.push("--truncated");
 
-		const captured = await pi.exec(runtime.binary, args, {
+		// Pi's extension exec API has no stdin channel. Spawn the kernel directly
+		// so arbitrary model-visible read text stays off argv and ephemeral files;
+		// observe-read consumes it on stdin and owns every capture decision.
+		const captured = await execWithInput(
+			runtime.binary,
+			args,
+			semanticReadText,
 			signal,
-			timeout: 10_000,
-		});
+		);
 		if (captured.code !== 0) return;
 	}
 
@@ -201,7 +250,7 @@ export default function (pi: ExtensionAPI) {
 					{
 						type: "text",
 						text:
-							"No agent-workspace runtime here: this directory is not inside a Git repository checkout.",
+							"No agent-workspace runtime here: this is not a Git checkout with a built target/debug/agent-workspace binary.",
 					},
 				],
 				details: { runtime: "absent" },
@@ -240,7 +289,7 @@ export default function (pi: ExtensionAPI) {
 		name: "workspace_status",
 		label: "Workspace Status",
 		description:
-			"Orient in the persistent agent workspace: the bound objective, active claims with freshness (current/stale/unknown), open transactions, and the latest checkpoint. Brief projection by default; `full` returns the complete status record.",
+			"Orient in the persistent agent workspace: objective, a kernel-bounded stale-first claim window with explicit omission count, aggregate freshness, open transactions, and latest checkpoint. `full` returns the complete audit record.",
 		promptSnippet:
 			"Workspace orientation: objective, claim freshness, checkpoints.",
 		promptGuidelines: [
@@ -255,7 +304,7 @@ export default function (pi: ExtensionAPI) {
 			),
 		}),
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			const command = params.full ? ["status", "--full"] : ["status"];
+			const command = params.full ? ["status", "--full"] : ["status", "--compact"];
 			return runKernel(ctx.cwd, command, signal);
 		},
 	});
@@ -264,12 +313,18 @@ export default function (pi: ExtensionAPI) {
 		name: "workspace_delta",
 		label: "Workspace Delta",
 		description:
-			"What changed in the agent workspace since the last checkpoint: objective shifts, claims recorded/superseded/staled, new observations and transactions. The concise resume surface to consult right after workspace_status.",
+			"Kernel-bounded changes since a checkpoint: objective shift plus total/recent ids for claims, observations, and transactions. The concise resume surface after workspace_status; `full` returns complete entities.",
 		promptSnippet: "Workspace resume surface: changes since the last checkpoint.",
 		promptGuidelines: [
 			"Call workspace_delta right after workspace_status when resuming: it shows only what changed since the checkpoint, instead of the full projection.",
 		],
 		parameters: Type.Object({
+			full: Type.Optional(
+				Type.Boolean({
+					description:
+						"Return complete changed entities instead of the bounded id summary.",
+				}),
+			),
 			since: Type.Optional(
 				Type.String({
 					description:
@@ -278,9 +333,10 @@ export default function (pi: ExtensionAPI) {
 			),
 		}),
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			const command = params.since
-				? ["delta", "--since", params.since]
-				: ["delta"];
+			const command = ["delta"];
+			if (params.full) command.push("--full");
+			else command.push("--compact");
+			if (params.since) command.push("--since", params.since);
 			return runKernel(ctx.cwd, command, signal);
 		},
 	});

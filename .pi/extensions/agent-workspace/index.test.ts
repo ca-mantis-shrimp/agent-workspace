@@ -1,19 +1,35 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import registerAgentWorkspace from "./index.ts";
 
-test("successful bounded read results invoke the kernel with provider and visible-byte metadata", async () => {
+test("successful reads stream model-visible text to kernel-owned observe-read", async () => {
 	const root = await mkdtemp(join(tmpdir(), "agent-workspace-extension-"));
 	await mkdir(join(root, "src"));
+	await mkdir(join(root, "target", "debug"), { recursive: true });
 	await writeFile(
 		join(root, "src", "example.txt"),
 		"zero\nαlpha\nbeta\ntail\n",
 		"utf8",
 	);
+	const capturePath = join(root, "capture.json");
+	const binary = join(root, "target", "debug", "agent-workspace");
+	await writeFile(
+		binary,
+		`#!/usr/bin/env node
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => stdin += chunk);
+process.stdin.on("end", () => {
+  require("node:fs").writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ args: process.argv.slice(2), stdin }));
+  process.stdout.write("{}\\n");
+});
+`,
+	);
+	await chmod(binary, 0o755);
 
 	let toolCallHandler: ((event: unknown) => void) | undefined;
 	let contextHandler:
@@ -22,7 +38,6 @@ test("successful bounded read results invoke the kernel with provider and visibl
 				ctx: { cwd: string; signal?: AbortSignal },
 		  ) => Promise<void>)
 		| undefined;
-	let observedArguments: string[] | undefined;
 	const fakePi = {
 		on(event: string, handler: unknown) {
 			if (event === "tool_call")
@@ -30,19 +45,17 @@ test("successful bounded read results invoke the kernel with provider and visibl
 			if (event === "context") contextHandler = handler as typeof contextHandler;
 		},
 		registerTool() {},
-		async exec(command: string, args: string[]) {
-			if (command === "git")
-				return { code: 0, stdout: `${root}\n`, stderr: "", killed: false };
-			observedArguments = args;
-			return { code: 0, stdout: "{}", stderr: "", killed: false };
+		async exec(command: string) {
+			assert.equal(command, "git");
+			return { code: 0, stdout: `${root}\n`, stderr: "", killed: false };
 		},
 	} as unknown as ExtensionAPI;
 
 	registerAgentWorkspace(fakePi);
 	assert.ok(toolCallHandler);
 	assert.ok(contextHandler);
-	const selected = "αlpha\nbeta";
-	const visible = `${selected}\n\n[1 more lines in file. Use offset=4 to continue.]`;
+	const visible =
+		"αlpha\nbeta\n\n[1 more lines in file. Use offset=4 to continue.]";
 	toolCallHandler({
 		toolName: "read",
 		toolCallId: "read-1",
@@ -64,34 +77,26 @@ test("successful bounded read results invoke the kernel with provider and visibl
 		{ cwd: root },
 	);
 
-	assert.ok(observedArguments);
-	assert.deepEqual(observedArguments.slice(0, 7), [
-		"observe",
-		"--repository",
-		root,
-		"--workspace",
-		join(root, ".agent-workspace"),
-		"--path",
-		"src/example.txt",
-	]);
+	const captured = JSON.parse(await readFile(capturePath, "utf8")) as {
+		args: string[];
+		stdin: string;
+	};
+	assert.equal(captured.args[0], "observe-read");
 	assert.equal(
-		observedArguments[observedArguments.indexOf("--provider") + 1],
+		captured.args[captured.args.indexOf("--path") + 1],
+		"src/example.txt",
+	);
+	assert.equal(
+		captured.args[captured.args.indexOf("--provider") + 1],
 		"pi.read",
 	);
+	assert.equal(captured.args[captured.args.indexOf("--offset") + 1], "2");
+	assert.equal(captured.args[captured.args.indexOf("--limit") + 1], "2");
 	assert.equal(
-		observedArguments[observedArguments.indexOf("--model-visible-bytes") + 1],
+		captured.args[captured.args.indexOf("--model-visible-bytes") + 1],
 		Buffer.byteLength(visible).toString(),
 	);
-	assert.equal(
-		observedArguments[observedArguments.indexOf("--range") + 1],
-		`${Buffer.byteLength("zero\n")}:${Buffer.byteLength("zero\nαlpha\nbeta")}`,
-	);
-	assert.match(
-		observedArguments[
-			observedArguments.indexOf("--expected-raw-fingerprint") + 1
-		],
-		/^[0-9a-f]{64}$/,
-	);
+	assert.equal(captured.stdin, "αlpha\nbeta");
 });
 
 type FakeExec = (command: string, args: string[]) => Promise<ExecOutcome>;
@@ -127,6 +132,11 @@ function registerWithFakePi(exec: FakeExec): Map<string, RegisteredTool> {
 	return tools;
 }
 
+async function installKernelPlaceholder(root: string): Promise<void> {
+	await mkdir(join(root, "target", "debug"), { recursive: true });
+	await writeFile(join(root, "target", "debug", "agent-workspace"), "stub");
+}
+
 function repositoryRootStub(root: string): FakeExec {
 	return (command, args) => {
 		if (command === "git")
@@ -141,6 +151,7 @@ function repositoryRootStub(root: string): FakeExec {
 
 test("workspace_status projects the kernel brief status by default and supports full", async () => {
 	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
+	await installKernelPlaceholder(root);
 	const calls: string[][] = [];
 	const exec: FakeExec = (command, args) => {
 		if (command !== "git") calls.push(args);
@@ -153,14 +164,15 @@ test("workspace_status projects the kernel brief status by default and supports 
 	const brief = await status.execute("call-1", {}, undefined, undefined, {
 		cwd: root,
 	});
-	assert.deepEqual(calls[0].slice(0, 5), [
+	assert.deepEqual(calls[0].slice(0, 6), [
 		"status",
+		"--compact",
 		"--repository",
 		root,
 		"--workspace",
 		join(root, ".agent-workspace"),
 	]);
-	assert.equal(calls[0].length, 5, "brief status adds no extra flags");
+	assert.equal(calls[0].length, 6);
 	assert.equal(brief.content[0].text, "executed:status");
 
 	await status.execute("call-2", { full: true }, undefined, undefined, {
@@ -178,6 +190,7 @@ test("workspace_status projects the kernel brief status by default and supports 
 
 test("workspace_delta passes the checkpoint selector through to the kernel", async () => {
 	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
+	await installKernelPlaceholder(root);
 	const calls: string[][] = [];
 	const exec: FakeExec = (command, args) => {
 		if (command !== "git") calls.push(args);
@@ -189,6 +202,7 @@ test("workspace_delta passes the checkpoint selector through to the kernel", asy
 
 	await delta.execute("call-1", {}, undefined, undefined, { cwd: root });
 	assert.equal(calls[0][0], "delta");
+	assert.ok(calls[0].includes("--compact"));
 	assert.ok(
 		!calls[0].includes("--since"),
 		"default delta diffs against the latest checkpoint",
@@ -206,6 +220,12 @@ test("workspace_delta passes the checkpoint selector through to the kernel", asy
 	const since = calls[1].indexOf("--since");
 	assert.notEqual(since, -1);
 	assert.equal(calls[1][since + 1], "session-8-claims-curated");
+
+	await delta.execute("call-3", { full: true }, undefined, undefined, {
+		cwd: root,
+	});
+	assert.ok(calls[2].includes("--full"));
+	assert.ok(!calls[2].includes("--compact"));
 });
 
 test("orientation tools degrade to plain text outside a repository and throw on kernel failure", async () => {
@@ -221,17 +241,36 @@ test("orientation tools degrade to plain text outside a repository and throw on 
 	const absent = await status.execute("call-1", {}, undefined, undefined, {
 		cwd: outside,
 	});
-	assert.match(absent.content[0].text, /not inside a Git repository/);
+	assert.match(absent.content[0].text, /not a Git checkout/);
+
+	const missingRoot = await mkdtemp(
+		join(tmpdir(), "agent-workspace-no-binary-"),
+	);
+	const missing = registerWithFakePi(async (command) => {
+		assert.equal(command, "git");
+		return { code: 0, stdout: `${missingRoot}\n`, stderr: "" };
+	});
+	const missingStatus = missing.get("workspace_status");
+	assert.ok(missingStatus);
+	const noBinary = await missingStatus.execute(
+		"call-2",
+		{},
+		undefined,
+		undefined,
+		{ cwd: missingRoot },
+	);
+	assert.match(noBinary.content[0].text, /built target\/debug\/agent-workspace/);
 
 	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
-	const failing = registerWithFakePi(async (command, args) => {
+	await installKernelPlaceholder(root);
+	const failing = registerWithFakePi(async (command) => {
 		if (command === "git") return { code: 0, stdout: `${root}\n`, stderr: "" };
 		return { code: 2, stdout: "", stderr: "workspace error" };
 	});
 	const failingStatus = failing.get("workspace_status");
 	assert.ok(failingStatus);
 	await assert.rejects(
-		failingStatus.execute("call-2", {}, undefined, undefined, { cwd: root }),
+		failingStatus.execute("call-3", {}, undefined, undefined, { cwd: root }),
 		/workspace error/,
 	);
 });

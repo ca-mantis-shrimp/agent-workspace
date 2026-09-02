@@ -66,10 +66,11 @@ evidence gating, restart-safe status, clean-base reversible file transactions,
 byte-accounted bounded perception with reveal-on-demand, and explicit claim
 supersession that separates active drift from retired beliefs. Default status is
 a concise orientation surface backed by single-pass log projection; `--full`
-retains the audit view. Dogfood evidence revised the original linear action
-sequence: the active action is now `pi-interface`, beginning with read
-auto-capture so adapter use can shape the broader working-set, findings, and
-transaction layers instead of waiting for them to be designed in isolation.
+retains the audit view. The Pi and Claude Code adapters now share kernel-owned
+read-capture and bounded orientation semantics and have both been live-dogfooded;
+the adapter phase is complete. The next product slice is the semantic-location
+and bounded-working-set layer, where accumulated observations become an
+intentional navigable working set rather than a provenance-only stream.
 Implementation choices settled by running code are recorded in
 [`docs/implementation-notes.md`](docs/implementation-notes.md).
 
@@ -85,11 +86,20 @@ cargo build
 pi
 ```
 
-A bounded `read` records provider `pi.read`, the corresponding UTF-8 byte-range
-selector, source bytes, and the finalized model-visible byte count. Failed,
-truncated, drifted, out-of-repository, workspace-internal, and sensitive-path
-reads fail closed and record nothing; native payload retention remains off.
-Inspect captures with `agent-workspace status --full`.
+A bounded `read` streams its chrome-stripped model-visible text to the kernel's
+harness-agnostic `observe-read`; the kernel—not the extension—maps lines to a
+UTF-8 byte selector and validates drift, sensitivity, and containment. The
+adapter separately preserves the complete model-visible byte count, including
+Pi pagination chrome. Failed, truncated, drifted, out-of-repository,
+workspace-internal, and sensitive-path reads fail closed; native payload
+retention remains off.
+
+The extension also exposes kernel-bounded `workspace_status` and
+`workspace_delta` projections. Their defaults use compact JSON, cap claim and
+change cardinality with explicit omission counts, and retain `full` expansion
+for audit. The Claude Code `SessionStart` hook consumes the same bounded kernel
+surfaces, so model-entry limits are shared semantics rather than adapter-local
+summaries.
 
 ## Principles
 

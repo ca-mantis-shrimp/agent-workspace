@@ -58,9 +58,9 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
         "status" => {
             let status = workspace.resume_status()?;
             if options.full {
-                print_json(&status)?;
+                print_selected_json(&status, options.compact)?;
             } else {
-                print_json(&status.brief())?;
+                print_selected_json(&status.brief(), options.compact)?;
             }
         }
         "checkpoint" => {
@@ -69,7 +69,14 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 .ok_or_else(|| CliError::Usage("checkpoint requires --label".to_owned()))?;
             print_json(&workspace.checkpoint(label, options.note)?)?;
         }
-        "delta" => print_json(&workspace.delta_since(options.since.as_deref())?)?,
+        "delta" => {
+            let delta = workspace.delta_since(options.since.as_deref())?;
+            if options.full {
+                print_selected_json(&delta, options.compact)?;
+            } else {
+                print_selected_json(&delta.brief(), options.compact)?;
+            }
+        }
         "observe" => {
             let path = options
                 .path
@@ -108,6 +115,7 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                     offset: options.offset,
                     limit: options.limit,
                     model_visible_text,
+                    model_visible_bytes: options.model_visible_bytes,
                     truncated: options.truncated,
                 },
             )?;
@@ -224,7 +232,15 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
 }
 
 fn print_json(value: &impl Serialize) -> Result<(), CliError> {
-    println!("{}", serde_json::to_string_pretty(value)?);
+    print_selected_json(value, false)
+}
+
+fn print_selected_json(value: &impl Serialize, compact: bool) -> Result<(), CliError> {
+    if compact {
+        println!("{}", serde_json::to_string(value)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(value)?);
+    }
     Ok(())
 }
 
@@ -258,6 +274,7 @@ struct Options {
     note: Option<String>,
     since: Option<String>,
     full: bool,
+    compact: bool,
     offset: Option<usize>,
     limit: Option<usize>,
     truncated: bool,
@@ -293,6 +310,7 @@ impl Options {
         let mut note = None;
         let mut since = None;
         let mut full = false;
+        let mut compact = false;
         let mut offset = None;
         let mut limit = None;
         let mut truncated = false;
@@ -309,6 +327,11 @@ impl Options {
             }
             if flag == "--truncated" {
                 truncated = true;
+                index += 1;
+                continue;
+            }
+            if flag == "--compact" {
+                compact = true;
                 index += 1;
                 continue;
             }
@@ -449,6 +472,7 @@ impl Options {
             note,
             since,
             full,
+            compact,
             offset,
             limit,
             truncated,

@@ -716,3 +716,50 @@ Residual: the preview index is bounded per headline but not yet by active-claim
 cardinality. If the standing claim set grows enough to cross Claude's preview
 budget, the kernel should gain an explicit bounded wake projection rather than
 letting the adapter invent claim-prioritization semantics.
+
+## 2026-09-02 — Adapter consolidation and kernel-bounded orientation
+
+The live-preview repair above exposed the remaining architectural smell: Claude
+owned an adapter-local index only because the kernel's supposedly "brief"
+projections were not cardinality-bounded. That is now corrected at the authority
+boundary instead of normalized as adapter behavior.
+
+- **Status is bounded and honest.** Default status ranks stale, then unknown,
+  then current claims; emits at most eight 80-character headlines; and reports
+  `claims_omitted` plus aggregate counts over the complete active set. Compact
+  transport on the dogfood workspace is about 1.4 KB and executable coverage
+  holds a twelve-claim fixture below the 1,800-byte model-preview boundary.
+- **Delta is a bounded reveal index.** Default delta carries the checkpoint,
+  bounded before/after objective headlines, and total/recent-id/omitted groups
+  for recorded, superseded, or staled claims plus observations and opened or
+  closed transactions. Each id group retains the sixteen most recent ids.
+  `delta --full` preserves complete entities; `--compact` only changes JSON
+  transport. The live bounded delta is about 0.8 KB instead of growing with
+  observation payloads.
+- **Claude is thin again.** `orient-session.py` deleted its preview-index
+  semantics and forwards compact kernel status then compact kernel delta
+  verbatim. Its acceptance drive compares both sections byte-for-byte with
+  direct kernel output, holds essential status below 1,800 bytes and combined
+  wake output below 3,000, and retains all harmless/silent failure cases.
+- **Pi no longer plans captures.** The duplicate `capture.ts` and its parallel
+  tests are deleted. The extension strips only Pi-owned pagination chrome,
+  preserves the original model-visible byte count, and streams selected text on
+  stdin to kernel `observe-read`; no read payload enters argv or a temporary
+  file. Because Pi's extension `exec` API has no stdin channel, this one path
+  uses a directly spawned kernel process with timeout and abort propagation.
+- **Runtime absence is truthful.** Pi checks that the built kernel exists before
+  advertising an active runtime, does not cache a missing-binary result (a later
+  build activates without restart), and tests both no-Git and Git-without-binary
+  cases.
+- **Strict validation is restored.** `ReadCaptureOutcome::Captured` boxes its
+  large payload, clearing Rust 1.97's `large_enum_variant`; 38 Rust tests, strict
+  clippy, four Pi integration/tool tests plus typecheck, and sixteen Claude
+  adapter-drive checks pass.
+
+The kernel request now distinguishes stripped matching text from total
+model-visible bytes. This preserves the accounting boundary established in run
+8 without teaching the kernel any harness presentation format. A fresh `pi -p`
+model-boundary redrive then read `README.md` through the native tool and, without
+Bash or a manual kernel call, produced observation 154 (`pi.read`, whole-file,
+5,004 source/model-visible bytes); bounded delta advanced from 17 to 18 recorded
+observations and retained only its sixteen most recent ids.

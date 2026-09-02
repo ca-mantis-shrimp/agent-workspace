@@ -1693,6 +1693,7 @@ fn checkpoint_delta_reports_recorded_superseded_and_staled_since_a_line() {
 
     let delta = invoke(&[
         "delta",
+        "--full",
         "--repository",
         &repo,
         "--workspace",
@@ -1775,7 +1776,7 @@ fn delta_without_a_label_uses_the_latest_checkpoint() {
     let late = claim("foo is a function");
 
     let latest: DeltaStatus = serde_json::from_slice(
-        &invoke(&["delta", "--repository", &repo, "--workspace", &ws]).stdout,
+        &invoke(&["delta", "--full", "--repository", &repo, "--workspace", &ws]).stdout,
     )
     .unwrap();
     assert_eq!(latest.checkpoint.label, "second");
@@ -1784,6 +1785,7 @@ fn delta_without_a_label_uses_the_latest_checkpoint() {
     let from_first: DeltaStatus = serde_json::from_slice(
         &invoke(&[
             "delta",
+            "--full",
             "--repository",
             &repo,
             "--workspace",
@@ -1798,6 +1800,21 @@ fn delta_without_a_label_uses_the_latest_checkpoint() {
         claim_ids(&from_first.claims_recorded),
         vec![middle.id, late.id]
     );
+
+    let brief_out = invoke(&[
+        "delta",
+        "--compact",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+    ]);
+    let brief: Value = serde_json::from_slice(&brief_out.stdout).unwrap();
+    assert_eq!(brief["checkpoint"]["label"], "second");
+    assert_eq!(brief["claims_recorded"]["total"], 1);
+    assert_eq!(brief["claims_recorded"]["recent_ids"][0], late.id);
+    assert!(brief["claims_recorded"].get("statement").is_none());
+    assert!(brief_out.stdout.len() < 1_800);
 }
 
 #[test]
@@ -1848,7 +1865,7 @@ fn checkpoint_rejects_duplicate_labels_and_records_objective_change() {
     ]);
 
     let delta: DeltaStatus = serde_json::from_slice(
-        &invoke(&["delta", "--repository", &repo, "--workspace", &ws]).stdout,
+        &invoke(&["delta", "--full", "--repository", &repo, "--workspace", &ws]).stdout,
     )
     .unwrap();
     assert_eq!(
@@ -1996,6 +2013,63 @@ fn default_status_is_the_brief_orientation_surface() {
         "brief ({} bytes) must be far smaller than full ({} bytes)",
         brief_out.stdout.len(),
         full_out.stdout.len()
+    );
+}
+
+/// Model-entry status remains hard-bounded as the standing belief set grows.
+/// Truncation is explicit rather than silently pretending all active claims fit.
+#[test]
+fn brief_status_caps_claims_and_compact_transport_fits_hook_preview() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+    let observation: Observation = serde_json::from_slice(
+        &invoke(&[
+            "observe",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--path",
+            "src/lib.rs",
+        ])
+        .stdout,
+    )
+    .unwrap();
+
+    for index in 0..12 {
+        invoke(&[
+            "claim",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--statement",
+            &format!(
+                "claim {index}: a deliberately long thesis that should be bounded before model entry while the full belief remains available in audit status"
+            ),
+            "--observation",
+            &observation.id.to_string(),
+        ]);
+    }
+
+    let output = invoke(&[
+        "status",
+        "--compact",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+    ]);
+    let brief: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(brief["claims"].as_array().unwrap().len(), 8);
+    assert_eq!(brief["claims_omitted"], 4);
+    assert_eq!(brief["counts"]["active_claims"], 12);
+    assert!(
+        output.stdout.len() < 1_800,
+        "compact bounded status must fit Claude's inline hook preview: {} bytes",
+        output.stdout.len()
     );
 }
 
@@ -2912,6 +2986,8 @@ fn observe_read_bounded_maps_lines_to_utf8_byte_range() {
             "2",
             "--limit",
             "2",
+            "--model-visible-bytes",
+            "64",
         ],
         selected,
     );
@@ -2920,7 +2996,10 @@ fn observe_read_bounded_maps_lines_to_utf8_byte_range() {
     assert_eq!(value["selector"]["kind"], "byte_range");
     assert_eq!(value["selector"]["start"], "zero\n".len() as u64);
     assert_eq!(value["selector"]["end"], "zero\nαlpha\nbeta".len() as u64);
-    assert_eq!(value["model_visible_bytes"], selected.len() as u64);
+    assert_eq!(
+        value["model_visible_bytes"], 64,
+        "adapter may preserve model-boundary chrome bytes while matching stripped text"
+    );
     assert_eq!(value["content"], selected);
 }
 
