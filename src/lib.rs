@@ -220,6 +220,11 @@ pub struct Observation {
     pub native_payload_reference: Option<String>,
     #[serde(default)]
     pub ingested_bytes: usize,
+    /// Bytes of text that the harness actually placed in model context for
+    /// this observation. `None` means the capture happened outside an
+    /// instrumented model boundary (for example through the standalone CLI).
+    #[serde(default)]
+    pub model_visible_bytes: Option<usize>,
     pub report: FreshnessReport,
 }
 
@@ -228,6 +233,15 @@ pub struct ObservationCapture {
     #[serde(flatten)]
     pub observation: Observation,
     pub content: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ObservationCaptureOptions {
+    pub selector: ObservationSelector,
+    pub normalizer: Normalizer,
+    pub retain_native_payload: bool,
+    pub model_visible_bytes: Option<usize>,
+    pub expected_raw_fingerprint: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -578,6 +592,8 @@ enum Event {
         native_payload_reference: Option<String>,
         #[serde(default)]
         ingested_bytes: usize,
+        #[serde(default)]
+        model_visible_bytes: Option<usize>,
         #[serde(alias = "repository_fingerprint")]
         reconciliation_fingerprint: String,
     },
@@ -1051,14 +1067,31 @@ impl Workspace {
         &self,
         path: impl AsRef<Path>,
         provider: impl Into<String>,
-        selector: ObservationSelector,
-        normalizer: Normalizer,
-        retain_native_payload: bool,
+        options: ObservationCaptureOptions,
     ) -> Result<ObservationCapture, WorkspaceError> {
+        let ObservationCaptureOptions {
+            selector,
+            normalizer,
+            retain_native_payload,
+            model_visible_bytes,
+            expected_raw_fingerprint,
+        } = options;
         let path = validate_relative_path(path.as_ref())?;
         let resolved_path = resolve_repository_file(&self.repository_root, &path)?;
         let container = fs::read(resolved_path)?;
         let unit = select_observation_unit(&container, &selector)?;
+        if let Some(expected) = expected_raw_fingerprint.as_deref() {
+            if !is_sha256_hex(expected) {
+                return Err(WorkspaceError::InvalidObservation(
+                    "expected raw fingerprint must be a lowercase SHA-256 hex digest".to_owned(),
+                ));
+            }
+            if hex_digest(unit) != expected {
+                return Err(WorkspaceError::InvalidObservation(
+                    "selected input changed after the provider result was finalized".to_owned(),
+                ));
+            }
+        }
         let content = String::from_utf8(unit.to_vec()).map_err(|_| {
             WorkspaceError::InvalidObservation("selected source is not valid UTF-8".to_owned())
         })?;
@@ -1104,6 +1137,7 @@ impl Workspace {
             container_fingerprint: Some(container_fingerprint),
             native_payload_reference,
             ingested_bytes,
+            model_visible_bytes,
             reconciliation_fingerprint,
         })?;
 
@@ -1858,6 +1892,7 @@ impl Projection {
                 container_fingerprint,
                 native_payload_reference,
                 ingested_bytes,
+                model_visible_bytes,
                 reconciliation_fingerprint,
             } => {
                 if self.observations.contains_key(&observation_id) {
@@ -1881,6 +1916,7 @@ impl Projection {
                         observed_input_fingerprint: input_fingerprint,
                         native_payload_reference,
                         ingested_bytes,
+                        model_visible_bytes,
                         report: FreshnessReport {
                             freshness_within_scope: FreshnessWithinScope::Current,
                             scope_assurance: ScopeAssurance {

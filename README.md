@@ -73,6 +73,24 @@ transaction layers instead of waiting for them to be designed in isolation.
 Implementation choices settled by running code are recorded in
 [`docs/implementation-notes.md`](docs/implementation-notes.md).
 
+## Pi extension
+
+The project-local extension at `.pi/extensions/agent-workspace/` auto-captures
+successful text reads into the workspace without replacing Pi's native `read`
+tool. Build the kernel first, then start Pi from the repository (or use
+`/reload` in an already-running trusted session):
+
+```sh
+cargo build
+pi
+```
+
+A bounded `read` records provider `pi.read`, the corresponding UTF-8 byte-range
+selector, source bytes, and the finalized model-visible byte count. Failed,
+truncated, drifted, out-of-repository, workspace-internal, and sensitive-path
+reads fail closed and record nothing; native payload retention remains off.
+Inspect captures with `agent-workspace status --full`.
+
 ## Principles
 
 - Preserve authority rather than hiding tool differences.

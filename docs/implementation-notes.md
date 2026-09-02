@@ -589,3 +589,54 @@ fingerprinting with no flag to remember.
   no-op event suppression, and detection of an intervening out-of-band edit.
   This closes the final walking-skeleton kernel item; persistent snapshots or
   compaction remain unnecessary until measured log replay cost justifies them.
+
+## 2026-09-01 — Pi read auto-capture (first interface slice)
+
+- **The adapter observes; it does not replace authority.** The project-local Pi
+  extension leaves the built-in `read` tool untouched. It remembers a read's
+  arguments at `tool_call`, then captures its finalized `toolResult` from Pi's
+  `context` event, after `tool_result` and `message_end` middleware. The measured
+  text is therefore the model-boundary projection this extension receives, not
+  an intermediate native result or a reimplemented reader. A later-loaded
+  `context` handler can still alter that projection; Pi exposes no after-context
+  canonical-message hook, so extension ordering remains an explicit limit.
+- **Line selections become durable UTF-8 byte selectors.** The adapter maps
+  Pi's one-indexed `offset`/`limit` selection onto the kernel's half-open byte
+  range, verifies the finalized source prefix against the current file, and
+  accepts Pi's exact pagination notice separately. Unicode fixtures prove the
+  line-to-byte conversion. Whole, unpaginated reads retain whole-file scope.
+  Files are decoded with fatal UTF-8 handling; invalid bytes record nothing
+  rather than producing lossy offsets into unrelated raw bytes.
+- **The accounting boundary is now explicit and persisted.** Observation events
+  carry additive, backward-compatible `model_visible_bytes: Option<usize>`.
+  `ingested_bytes` remains source-unit bytes; `model_visible_bytes` includes
+  model-visible pagination text. Uninstrumented CLI captures replay as `None`.
+- **Privacy and failure policy are fail-closed.** The adapter records provider
+  `pi.read`, path, selector, fingerprints, and byte counts, but never retains the
+  native payload by default. Failed, image, native-truncated, selection-drifted,
+  invalid-UTF-8, out-of-repository, `.agent-workspace`, and conventionally
+  sensitive-path reads record nothing. Paths are canonicalized before both
+  containment and sensitive-target checks, so an innocuous symlink cannot bypass
+  either boundary. Capture failures are swallowed so workspace bookkeeping can
+  never turn a successful native read into a failed read.
+- **Concurrency and recursion reuse existing boundaries.** Extension-side
+  `pi.exec` is not a Pi tool call, so it cannot trigger its own hook; parallel
+  captures serialize through the kernel's existing workspace lock.
+- **Selected-byte races fail closed.** The adapter hashes the selected bytes it
+  matched to the context result and passes `--expected-raw-fingerprint`; the
+  kernel verifies that digest against its own capture read before appending.
+  A selected-unit edit in the extension→kernel window therefore records nothing.
+  A concurrent edit *outside* a bounded selection can still change the recorded
+  container fingerprint without changing the selected unit. Closing that
+  container-provenance window requires a native read result/container fingerprint
+  or a provider-snapshot import API; the adapter does not pretend otherwise.
+- **Proof.** Five TypeScript tests cover UTF-8 range mapping, finalized-visible
+  pagination accounting, containment/sensitive-path rejection, fail-closed
+  drift/truncation/invalid UTF-8, and hook-to-kernel arguments including the
+  expected selected-byte fingerprint. The extension type-checks and
+  loads through Pi. The Rust walking skeleton persists and restart-projects the
+  model-visible count; all 33 Rust tests pass. A real print-mode Pi dogfood
+  read of `README.md` (`offset=2`, `limit=3`) produced observation 77 with
+  provider `pi.read`, byte range `18:216`, 198 source bytes, 250 finalized
+  model-visible bytes (including pagination), current freshness, and no retained
+  payload.

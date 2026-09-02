@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "types": ["node"],
+    "typeRoots": [".pi/extensions/agent-workspace/node_modules/@types"],
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true
+  },
+  "include": [".pi/extensions/agent-workspace/*.ts"]
+}

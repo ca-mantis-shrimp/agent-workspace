@@ -428,3 +428,46 @@ just stops crying wolf. The committed (canonical) bytes were restored and
 - The live environment keeps lying transiently: the build was red mid-edit
   (struct fields before initializers) and the test-runner reported on that
   superseded state. Durable artifact over live signal, again.
+
+## Eighth run — correcting the plan, then crossing the Pi boundary
+
+Cold start initially produced the wrong next action. The agent treated the
+original 2026-08-31 Clearhead predecessor chain as fresher than the later field
+evidence and started `working-set`. The human challenged that conclusion. Git
+history, workspace objective/checkpoint history, and this reflection all agreed:
+run 5 explicitly said “close kernel, pivot to Pi; adapter auto-capture first,”
+run 7 repeated it, and `status-cost-closed` recorded the same handoff. The prior
+agents had updated every narrative surface except Clearhead. The graph—not the
+human's memory—was stale. Commit `147b7bc` repaired it, and claim 34 explicitly
+superseded the mistaken claim 33.
+
+That correction matters beyond project hygiene. “Clearhead is authoritative”
+cannot mean “an old plan defeats newer executable evidence.” Authority includes
+revising the plan through Clearhead when experiments invalidate it. We did not
+skip predecessor relationships; we changed the relationship with a reason and
+kept the broader capability actions visible.
+
+The first Pi slice then crossed the real boundary rather than wrapping it. A
+project-local extension observes native `read` calls and records only finalized
+context text it can match to repository bytes. A real Pi run read three lines of
+`README.md`; the workspace automatically gained observation 77 (`pi.read`, range
+`18:216`, 198 source bytes, 250 model-boundary bytes, no retained payload). That
+is the first time ordinary agent behavior populated the workspace without a
+manual `observe` command—the adoption-tax thesis finally moved from prose into
+running code.
+
+The independent review was valuable precisely because the happy-path dogfood
+passed. It found four boundary defects: sensitive directories were not matched,
+invalid UTF-8 could create lossy offsets, selected bytes had a second-read race,
+and `message_end` was not the latest available context boundary. The close fixes
+canonicalize symlink targets before policy checks, reject invalid UTF-8, pass an
+expected raw selector fingerprint for kernel-side compare-before-append, and
+capture from `context`. One limit remains honest: a later-loaded context handler
+can still alter messages, and an out-of-range concurrent edit can change the
+container fingerprint while the selected unit stays valid. Pi needs a final
+context hook or provider-snapshot import to close those windows soundly.
+
+One process wart also repeated: the harness formatter again rewrote unrelated
+Rust assertions non-canonically after an edit. The tracked fmt gate caught it;
+`cargo fmt` restored the canonical form immediately before commit. The separate
+environment action remains justified.

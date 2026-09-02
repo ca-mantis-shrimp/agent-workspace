@@ -1,5 +1,6 @@
 use agent_workspace::{
-    ClaimScopeStrategy, EvidenceOutcome, Normalizer, ObservationSelector, Workspace, WorkspaceError,
+    ClaimScopeStrategy, EvidenceOutcome, Normalizer, ObservationCaptureOptions,
+    ObservationSelector, Workspace, WorkspaceError,
 };
 use serde::Serialize;
 use std::env;
@@ -81,9 +82,13 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
             print_json(&workspace.capture_file_observation(
                 path,
                 provider,
-                options.selector.unwrap_or_default(),
-                normalizer,
-                options.retain_payload,
+                ObservationCaptureOptions {
+                    selector: options.selector.unwrap_or_default(),
+                    normalizer,
+                    retain_native_payload: options.retain_payload,
+                    model_visible_bytes: options.model_visible_bytes,
+                    expected_raw_fingerprint: options.expected_raw_fingerprint,
+                },
             )?)?;
         }
         "reveal" => {
@@ -214,6 +219,8 @@ struct Options {
     /// `None` is the `auto` default: resolve per path at dispatch.
     normalizer: Option<Normalizer>,
     retain_payload: bool,
+    model_visible_bytes: Option<usize>,
+    expected_raw_fingerprint: Option<String>,
     label: Option<String>,
     note: Option<String>,
     since: Option<String>,
@@ -244,6 +251,8 @@ impl Options {
         let mut selector = None;
         let mut normalizer = None;
         let mut retain_payload = false;
+        let mut model_visible_bytes = None;
+        let mut expected_raw_fingerprint = None;
         let mut label = None;
         let mut note = None;
         let mut since = None;
@@ -312,6 +321,12 @@ impl Options {
                         CliError::Usage(format!("invalid retain-payload value: {value}"))
                     })?
                 }
+                "--model-visible-bytes" => {
+                    model_visible_bytes = Some(value.parse().map_err(|_| {
+                        CliError::Usage(format!("invalid model-visible byte count: {value}"))
+                    })?)
+                }
+                "--expected-raw-fingerprint" => expected_raw_fingerprint = Some(value.clone()),
                 "--result" => {
                     outcome = Some(match value.as_str() {
                         "passed" => EvidenceOutcome::Passed,
@@ -371,6 +386,8 @@ impl Options {
             selector,
             normalizer,
             retain_payload,
+            model_visible_bytes,
+            expected_raw_fingerprint,
             label,
             note,
             since,

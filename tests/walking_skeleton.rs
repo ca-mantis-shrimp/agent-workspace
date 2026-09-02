@@ -148,6 +148,7 @@ fn schema_one_fingerprint_records_still_replay() {
     event.remove("container_fingerprint");
     event.remove("native_payload_reference");
     event.remove("ingested_bytes");
+    event.remove("model_visible_bytes");
     fs::write(
         &event_log_path,
         format!("{}\n", serde_json::to_string(&legacy_record).unwrap()),
@@ -179,6 +180,7 @@ fn schema_one_fingerprint_records_still_replay() {
         reconciled.observed_input_fingerprint
     );
     assert_eq!(reconciled.ingested_bytes, 0);
+    assert_eq!(reconciled.model_visible_bytes, None);
     assert_eq!(reconciled.native_payload_reference, None);
     let reveal = invoke_failure(&[
         "reveal",
@@ -941,6 +943,68 @@ fn multi_path_revert_conflict_changes_nothing() {
     ]);
     let status: WorkspaceStatus = serde_json::from_slice(&status.stdout).unwrap();
     assert_eq!(status.transactions[0].state, TransactionState::Open);
+}
+
+#[test]
+fn pi_read_capture_persists_the_model_visible_accounting_boundary() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let captured: ObservationCapture = serde_json::from_slice(
+        &invoke(&[
+            "observe",
+            "--repository",
+            fixture.repository.to_str().unwrap(),
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--path",
+            "src/lib.rs",
+            "--provider",
+            "pi.read",
+            "--range",
+            "0:3",
+            "--model-visible-bytes",
+            "57",
+        ])
+        .stdout,
+    )
+    .unwrap();
+
+    assert_eq!(captured.observation.provider, "pi.read");
+    assert_eq!(captured.observation.ingested_bytes, 3);
+    assert_eq!(captured.observation.model_visible_bytes, Some(57));
+    assert_eq!(captured.observation.native_payload_reference, None);
+
+    let status: WorkspaceStatus = serde_json::from_slice(
+        &invoke(&[
+            "status",
+            "--repository",
+            fixture.repository.to_str().unwrap(),
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--full",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(status.observations[0].model_visible_bytes, Some(57));
+
+    let raced = invoke_failure(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+        "--range",
+        "0:3",
+        "--expected-raw-fingerprint",
+        &"0".repeat(64),
+    ]);
+    assert!(
+        String::from_utf8_lossy(&raced.stderr)
+            .contains("selected input changed after the provider result was finalized")
+    );
 }
 
 #[test]
