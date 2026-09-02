@@ -370,3 +370,61 @@ each lied once this run (a stray fmt regression under a "done"; a toothless test
 that passed on an orphan file; a `claim` whose statement the shell corrupted via
 backtick substitution). Check the durable artifact, never the claim of it — the
 project's own thesis, reflected in how the work goes.
+
+## Seventh run — the auto-normalize inversion, and the tool catching its own incident (Pi, 2026-09-01)
+
+Picked up run 6's bound-but-unstarted objective through the standard cold start
+(build, status, delta) and shipped it: `--normalize auto` is now the default,
+resolving to rustfmt for `.rs` at capture time with the concrete scheme
+persisted per record; claim dependencies auto-detect kernel-side; a raw-byte
+fast path skips the formatter subprocess whenever bytes are unchanged;
+`--normalize none` is the escape hatch. One deliberate deviation from run 6's
+suggestion: **no fingerprint-scheme version bump** — records are
+self-describing and only new records get the new default, so old logs replay
+byte-identically. A global bump would have invalidated honest byte-mode
+history for no gain. 29 tests green, commit `1b70030`.
+
+### The headline: the feature prevented its first false stale within the hour
+
+Minutes after the checkpoint, an edit-time hook reformatted
+`tests/walking_skeleton.rs` into *non*-rustfmt-canonical style — the third
+formatter-noise incident, same class as the one that produced claim 17's
+false stale in run 5. This time the reconcile verdict on the affected
+observation stayed **current** ("observed unit unchanged; container changed
+outside mediated unit") and claim 27 stayed current, because the canonical
+form was unchanged while the raw bytes drifted. Under the old byte-default
+this was exactly the reformat-stales-a-belief failure. The byte drift
+remained *visible* in the reason string — normalization hides nothing, it
+just stops crying wolf. The committed (canonical) bytes were restored and
+`cargo fmt --check` passes.
+
+### What felt good
+
+- Cold start is now routine: two commands, zero recap, objective recovered
+  from `delta`'s `objective_change` alone. Third consecutive clean handoff.
+- The design-claim step (claim 26) earned its keep: writing the design as a
+  claim *before* implementing forced the version-bump deviation into the open
+  as a recorded decision instead of a silent choice.
+- Claim 18's supersede reason wrote itself from the delta evidence — the
+  staleness was honest (doc gained a section) *and* the advice was consumed,
+  and the tool made both visible.
+- The feature dogfooded itself during its own evidence gathering: the
+  post-implementation observes auto-recorded `rustfmt` on the `.rs` files and
+  `none` on the `.md` with no flags passed.
+
+### Friction that remains
+
+- `status` output is still a wall (a 3909-line JSON this run); `delta` is the
+  resume surface but `status` needs its concise mode. Known item, unfixed.
+- The observe→claim ritual is still manual and chatty (nine CLI invocations
+  this run just for bookkeeping). Adapter auto-capture remains the real fix.
+- Long claim statements through a shell CLI remain a footgun (run 6's
+  backtick corruption); a `--statement-file` or stdin mode would remove it.
+- Wording wrinkle: for a *whole-file* normalized observation, the reason
+  "observed unit unchanged; container changed outside mediated unit" is
+  accurate but reads oddly — the unit/container vocabulary predates
+  normalizers. For whole-file it really means "canonical form unchanged; raw
+  bytes differ". A normalizer-aware reason string would read better.
+- The live environment keeps lying transiently: the build was red mid-edit
+  (struct fields before initializers) and the test-runner reported on that
+  superseded state. Durable artifact over live signal, again.
