@@ -412,6 +412,12 @@ checkpoint notion to diff against.
   (`status_suppresses_redundant_reconcile_events`,
   `suppressed_status_still_recomputes_and_emits_changed_verdicts`), the same
   precedent as checkpoint/delta.
+- **Dogfood note (delta window semantics).** `delta_since` diffs the active
+  claim sets, so a claim recorded *and* superseded entirely within one window
+  (a transient belief) appears in neither `claims_recorded` nor
+  `claims_superseded` — the durable log retains it, but the resume view does
+  not surface it. Bounded for now: resumption cares about live beliefs; a
+  cold reader who wants the full story can still replay the log.
 - **Still open after this slice.** Materialization efficiency (replay cost is
   still linear in log length; suppression slows growth but does not shrink
   replay) and writer locking (concurrent statuses still collide as `CorruptLog`)
