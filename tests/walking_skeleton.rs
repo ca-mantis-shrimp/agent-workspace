@@ -699,6 +699,7 @@ fn s5_restart_recovers_objective_working_set_and_open_work() {
 
     let resumed = invoke(&[
         "status",
+        "--full",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -724,6 +725,7 @@ fn s5_restart_recovers_objective_working_set_and_open_work() {
 
     let resumed_again = invoke(&[
         "status",
+        "--full",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -805,6 +807,7 @@ fn s6_clean_transaction_revert_restores_repository_and_freshness() {
     assert_eq!(applied.mutations.len(), 1);
     let changed = invoke(&[
         "status",
+        "--full",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -837,6 +840,7 @@ fn s6_clean_transaction_revert_restores_repository_and_freshness() {
     );
     let restored = invoke(&[
         "status",
+        "--full",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -929,6 +933,7 @@ fn multi_path_revert_conflict_changes_nothing() {
     );
     let status = invoke(&[
         "status",
+        "--full",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -1166,6 +1171,7 @@ fn claim_supersession_distinguishes_retired_beliefs_from_active_drift() {
 
     let status = invoke(&[
         "status",
+        "--full",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -1188,6 +1194,7 @@ fn claim_supersession_distinguishes_retired_beliefs_from_active_drift() {
     assert_eq!(status.superseded_claims, vec![superseded]);
     let resumed = invoke(&[
         "status",
+        "--full",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -1360,6 +1367,7 @@ fn claim_supersession_rejects_unsafe_lifecycle_transitions_and_replay() {
     );
     let corrupt = invoke_failure(&[
         "status",
+        "--full",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -1805,6 +1813,128 @@ fn delta_without_any_checkpoint_fails_clearly() {
     assert!(String::from_utf8_lossy(&failure.stderr).contains("not found"));
 }
 
+/// The default `status` is the brief orientation surface, not the full audit
+/// dump. It must carry the objective, every active claim's belief with its
+/// freshness, and counts — while dropping the heavy per-entity coverage that
+/// only `--full` returns — and it must be dramatically smaller than `--full`
+/// over the same workspace (the whole reason it exists).
+#[test]
+fn default_status_is_the_brief_orientation_surface() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    invoke(&[
+        "bind-objective",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--intent",
+        "make status cheap to consult",
+    ]);
+    let out = invoke(&[
+        "observe",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&out.stdout).unwrap();
+    // A short claim (stays whole in brief)...
+    invoke(&[
+        "claim",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--statement",
+        "lib.rs defines the kernel",
+        "--observation",
+        &observation.id.to_string(),
+    ]);
+    // ...and a long thesis-first claim (truncated to a headline in brief).
+    let long_statement = "Truncation headline check: this deliberately long claim leads \
+        with its thesis and then continues well past the brief headline budget with a \
+        great deal of additional implementation detail that a scan does not need up front, \
+        only on --full.";
+    invoke(&[
+        "claim",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--statement",
+        long_statement,
+        "--observation",
+        &observation.id.to_string(),
+    ]);
+
+    // Default output: brief. Assert on the actual wire JSON an agent consumes
+    // (BriefStatus is a Serialize-only output projection). It carries the
+    // orientation surface...
+    let brief_out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let brief: Value = serde_json::from_slice(&brief_out.stdout).unwrap();
+    assert_eq!(brief["objective"]["intent"], "make status cheap to consult");
+    assert_eq!(brief["claims"].as_array().unwrap().len(), 2);
+    // Short claim: headline is the whole statement, no ellipsis.
+    assert_eq!(brief["claims"][0]["headline"], "lib.rs defines the kernel");
+    assert_eq!(
+        brief["claims"][0]["freshness"], "current",
+        "a just-recorded claim over an unchanged input reads current"
+    );
+    // Long claim: headline is truncated to a scannable thesis with a trailing ….
+    let headline = brief["claims"][1]["headline"].as_str().unwrap();
+    assert!(headline.ends_with('…'), "truncated headline marks the cut");
+    assert!(
+        headline.chars().count() <= 161,
+        "headline stays within the budget (+ ellipsis): {headline:?}"
+    );
+    assert!(
+        headline.starts_with("Truncation headline check:"),
+        "thesis-first claims read cleanly in the headline: {headline:?}"
+    );
+    assert!(
+        (headline.chars().count() as usize) < long_statement.chars().count(),
+        "the headline is shorter than the full statement it stands in for"
+    );
+    assert_eq!(brief["counts"]["active_claims"], 2);
+    assert_eq!(brief["counts"]["observations"], 1);
+    assert_eq!(brief["counts"]["freshness"]["current"], 2);
+    assert_eq!(brief["counts"]["freshness"]["stale"], 0);
+    // The heavy per-claim coverage that only --full returns is absent.
+    assert!(brief["claims"][0].get("inputs").is_none());
+    assert!(brief.get("observations").is_none());
+
+    // ...and the full audit dump deserializes as the heavy surface brief omits,
+    // carrying the untruncated statement the headline stands in for.
+    let full_out = invoke(&[
+        "status",
+        "--full",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+    ]);
+    let full: WorkspaceStatus = serde_json::from_slice(&full_out.stdout).unwrap();
+    assert_eq!(full.observations.len(), 1);
+    assert_eq!(full.claims.len(), 2);
+    assert_eq!(full.claims[1].statement, long_statement);
+
+    // Brief deserializing as WorkspaceStatus would fail (it lacks the heavy
+    // fields), and it is a fraction of the full dump's size — the point of it.
+    assert!(serde_json::from_slice::<WorkspaceStatus>(&brief_out.stdout).is_err());
+    assert!(
+        brief_out.stdout.len() * 3 < full_out.stdout.len(),
+        "brief ({} bytes) must be far smaller than full ({} bytes)",
+        brief_out.stdout.len(),
+        full_out.stdout.len()
+    );
+}
+
 #[test]
 fn status_suppresses_redundant_reconcile_events() {
     let fixture = GitFixture::new();
@@ -1876,7 +2006,14 @@ fn status_suppresses_redundant_reconcile_events() {
     // "supporting input recorded" -> "supporting input unchanged"). Claims and
     // evidence are recorded with the same assessment reconciliation uses, so
     // their reconciles are already no-ops.
-    let out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let out = invoke(&[
+        "status",
+        "--full",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+    ]);
     let first: WorkspaceStatus = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
         first.observations[0].report.reason,
@@ -1885,13 +2022,27 @@ fn status_suppresses_redundant_reconcile_events() {
     assert_eq!(log_len(), setup_len + 1);
 
     // Second status over unchanged inputs: nothing left to persist.
-    let out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let out = invoke(&[
+        "status",
+        "--full",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+    ]);
     let second: WorkspaceStatus = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(second, first);
     assert_eq!(log_len(), setup_len + 1);
 
     // A third status stays silent too: suppression is stable, not one-shot.
-    let out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let out = invoke(&[
+        "status",
+        "--full",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+    ]);
     let third: WorkspaceStatus = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(third, second);
     assert_eq!(log_len(), setup_len + 1);
@@ -1935,10 +2086,24 @@ fn suppressed_status_still_recomputes_and_emits_changed_verdicts() {
     ]);
     let _: Claim = serde_json::from_slice(&out.stdout).unwrap();
     // Silence first: prove the baseline is suppressed.
-    let out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let out = invoke(&[
+        "status",
+        "--full",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+    ]);
     let _: WorkspaceStatus = serde_json::from_slice(&out.stdout).unwrap();
     let suppressed_len = log_len();
-    let out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let out = invoke(&[
+        "status",
+        "--full",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+    ]);
     let _: WorkspaceStatus = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(log_len(), suppressed_len);
 
@@ -1949,7 +2114,14 @@ fn suppressed_status_still_recomputes_and_emits_changed_verdicts() {
         "pub fn foo() -> i32 { 2 }\n",
     )
     .unwrap();
-    let out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let out = invoke(&[
+        "status",
+        "--full",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+    ]);
     let changed: WorkspaceStatus = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
         changed.observations[0].report.freshness_within_scope,
@@ -1976,7 +2148,14 @@ fn suppressed_status_still_recomputes_and_emits_changed_verdicts() {
 
     // The changed verdicts are persisted, so the following status is silent
     // again — and reports the stale verdicts it just recomputed.
-    let out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let out = invoke(&[
+        "status",
+        "--full",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+    ]);
     let resettle: WorkspaceStatus = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(resettle, changed);
     assert_eq!(log_len(), suppressed_len + 2);

@@ -53,7 +53,14 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 )?,
             )?;
         }
-        "status" => print_json(&workspace.resume_status()?)?,
+        "status" => {
+            let status = workspace.resume_status()?;
+            if options.full {
+                print_json(&status)?;
+            } else {
+                print_json(&status.brief())?;
+            }
+        }
         "checkpoint" => {
             let label = options
                 .label
@@ -210,6 +217,7 @@ struct Options {
     label: Option<String>,
     note: Option<String>,
     since: Option<String>,
+    full: bool,
 }
 
 impl Options {
@@ -239,10 +247,18 @@ impl Options {
         let mut label = None;
         let mut note = None;
         let mut since = None;
+        let mut full = false;
         let mut index = 0;
 
         while index < arguments.len() {
             let flag = &arguments[index];
+            // Valueless flags consume no argument; handle them before the
+            // value fetch so a trailing `--full` is not read as "missing value".
+            if flag == "--full" {
+                full = true;
+                index += 1;
+                continue;
+            }
             let value = arguments
                 .get(index + 1)
                 .ok_or_else(|| CliError::Usage(format!("missing value for {flag}")))?;
@@ -358,6 +374,7 @@ impl Options {
             label,
             note,
             since,
+            full,
         })
     }
 }

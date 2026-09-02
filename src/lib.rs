@@ -397,6 +397,128 @@ pub struct WorkspaceStatus {
     pub checkpoints: Vec<CheckpointMarker>,
 }
 
+/// The default `status` output: the orientation surface an agent resumes from,
+/// not the full audit dump (`--full`, [`WorkspaceStatus`]). It carries the
+/// objective in force, every *active* claim as a scannable headline with its
+/// freshness and scope, a freshness histogram, and counts — nothing heavier.
+/// Observations, superseded claims, evidence, transactions, and per-claim
+/// operational coverage collapse to counts you can expand with `--full` or
+/// `reveal`. This is a pure projection over an already-reconciled
+/// [`WorkspaceStatus`]: it moves no verdict computation, it only decides what
+/// to serialize.
+#[derive(Clone, Debug, Serialize)]
+pub struct BriefStatus {
+    pub objective: Option<Objective>,
+    pub claims: Vec<BriefClaim>,
+    pub counts: BriefCounts,
+    pub latest_checkpoint: Option<BriefCheckpoint>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BriefClaim {
+    pub id: u64,
+    pub freshness: FreshnessWithinScope,
+    pub scope: ScopeAssurance,
+    /// The claim's thesis, truncated to a scannable headline (full statement is
+    /// one `--full` away). Claims authored thesis-first read cleanly here; a
+    /// trailing `…` marks that the statement continues.
+    pub headline: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct FreshnessHistogram {
+    pub current: usize,
+    pub stale: usize,
+    pub unknown: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BriefCounts {
+    pub active_claims: usize,
+    pub superseded_claims: usize,
+    pub observations: usize,
+    pub open_transactions: usize,
+    pub checkpoints: usize,
+    pub freshness: FreshnessHistogram,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BriefCheckpoint {
+    pub label: String,
+    pub sequence: u64,
+}
+
+impl WorkspaceStatus {
+    /// Collapse the full audit status into the [`BriefStatus`] orientation
+    /// surface. Freshness is read straight off each claim's already-computed
+    /// report — this method never touches the log or the worktree.
+    pub fn brief(&self) -> BriefStatus {
+        let mut freshness = FreshnessHistogram::default();
+        let claims = self
+            .claims
+            .iter()
+            .map(|claim| {
+                match claim.report.freshness_within_scope {
+                    FreshnessWithinScope::Current => freshness.current += 1,
+                    FreshnessWithinScope::Stale => freshness.stale += 1,
+                    FreshnessWithinScope::Unknown => freshness.unknown += 1,
+                }
+                BriefClaim {
+                    id: claim.id,
+                    freshness: claim.report.freshness_within_scope.clone(),
+                    scope: claim.report.scope_assurance.clone(),
+                    headline: claim_headline(&claim.statement, BRIEF_HEADLINE_MAX_CHARS),
+                }
+            })
+            .collect();
+        BriefStatus {
+            objective: self.objective.clone(),
+            claims,
+            counts: BriefCounts {
+                active_claims: self.claims.len(),
+                superseded_claims: self.superseded_claims.len(),
+                observations: self.observations.len(),
+                open_transactions: self
+                    .transactions
+                    .iter()
+                    .filter(|transaction| transaction.state == TransactionState::Open)
+                    .count(),
+                checkpoints: self.checkpoints.len(),
+                freshness,
+            },
+            latest_checkpoint: self.checkpoints.last().map(|marker| BriefCheckpoint {
+                label: marker.label.clone(),
+                sequence: marker.sequence,
+            }),
+        }
+    }
+}
+
+/// Headline budget for a [`BriefClaim`]: enough to carry a thesis-first claim's
+/// point, short enough that a dozen of them scan at a glance.
+const BRIEF_HEADLINE_MAX_CHARS: usize = 160;
+
+/// Truncate a claim statement to a scannable headline on a word boundary,
+/// marking the cut with a trailing `…`. Statements at or under the budget are
+/// returned whole (no ellipsis). Char-aware, so a multibyte statement never
+/// splits inside a code point.
+fn claim_headline(statement: &str, max_chars: usize) -> String {
+    if statement.chars().count() <= max_chars {
+        return statement.to_owned();
+    }
+    let cutoff = statement
+        .char_indices()
+        .nth(max_chars)
+        .map(|(index, _)| index)
+        .unwrap_or(statement.len());
+    let window = &statement[..cutoff];
+    let head = match window.rfind(char::is_whitespace) {
+        Some(boundary) => &window[..boundary],
+        None => window,
+    };
+    format!("{}…", head.trim_end())
+}
+
 /// The objective in force shifted between the checkpoint and now.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ObjectiveChange {
