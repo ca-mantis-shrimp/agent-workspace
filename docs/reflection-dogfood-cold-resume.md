@@ -526,3 +526,97 @@ fingerprints; auto-capture skips are silent; and orientation tool results are
 not themselves observed. The bound next decision is whether the loop verbs
 (observe, claim, transaction lifecycle) deserve the same projection, or whether
 the interface moves to the Neovim cockpit.
+
+## Tenth run — final MVP dogfood and architecture decision (Pi, 2026-09-02)
+
+This run started from only the cold-handoff projection and the repository's
+normal orientation instructions. `workspace_status` recovered the exact next
+action, two current live claims, zero open findings and transactions, and the
+`cold-handoff-ready` checkpoint before Git history was consulted. The bounded
+`workspace_delta` then reported only the three auto-captured orientation reads.
+Recovery quality is therefore good enough to close the continuity part of the
+MVP: the human's entire instruction was “go ahead.”
+
+### Measured shape of the live workspace
+
+Before this run's mutations, the append-only log was 1.85 MB and 6,669 events.
+It contained 225 observations, 52 claims (50 explicitly superseded), 30
+checkpoints, and 16 focus events. Native adapter capture accounted for 116 reads
+(46 Pi and 70 Claude Code), so ordinary tool use—not narrated `observe` calls—is
+now a major source of provenance. Historical reconciliation dominated the log:
+4,250 observation and 2,023 claim reconciliation events, 94% of all records.
+No-op suppression has stopped unchanged calls from adding more, but does not
+remove the cost of recomputing historical state.
+
+The concise orientation surfaces controlled model-context churn well: status
+showed two active claims with no omitted claims, and delta grew from three to
+five observation ids as reads happened. Progressive disclosure worked. The
+working-set projection exposed a different accumulation failure: with 17 focused
+observations, its 12-location stale-first cap was filled by old stale entries and
+omitted the newly focused current observation 223. The current focus remained at
+the head of the separate trail, so the information was recoverable, but the
+primary location list no longer represented active attention.
+
+### The representative maintenance task found a real blocker
+
+The first live `begin-transaction` failed with `EISDIR`. The worktree fingerprint
+used `git ls-files` and then `fs::read`, which followed the tracked symlink
+`.claude/skills -> ../.agents/skills` into a directory. This repository shape had
+existed throughout development, but fixtures did not contain it and no prior live
+transaction had crossed that path. The fix fingerprints the symlink target bytes
+without following it and handles directory entries explicitly; a regression test
+creates and commits a directory symlink before beginning a transaction.
+
+This is the strongest dogfood result of the final pass: a green walking skeleton
+was not equivalent to a usable live mutation boundary. The persistent findings
+queue captured the exact runtime failure and retained its native payload before
+the fix was made.
+
+### Latency and validation gaps
+
+Five consecutive compact status calls took 6.527, 6.097, 6.138, 6.131, and
+6.129 seconds. A syscall trace explained the scale: one status attempted 281
+`git rev-parse HEAD` invocations and 114 rustfmt processes while reconciling the
+accumulated workspace. The default is bounded in output but not bounded in work.
+That is acceptable for a cold resume and unacceptable for a Neovim statusline,
+sign, or interactive jump path.
+
+Transaction preview and acceptance were useful and consistent, but the known
+modeling seam became concrete again. Evidence is bound to an acceptance claim's
+inputs, not to a content-addressed candidate transaction state; an invocation
+string plus pass/fail can attest the docs check, but the kernel cannot prove that
+the check consumed the exact mutation set. Until acceptance criteria and
+candidate-state evidence are first-class, transaction acceptance remains an
+honest coordination record rather than a hermetic build attestation.
+
+### Architecture decision
+
+Do **not** introduce a database, distributed collaboration, or a generic adapter
+API next. The local append-only log remains inspectable, restart-safe, and small
+enough for audit; the adapters are succeeding precisely because they preserve
+native authority and delegate semantics to the kernel. Collaboration remains
+single-user and local for the next charter.
+
+Do **not** put the current `status` path behind a Neovim statusline yet. First add
+a bounded/incremental orientation path that recomputes every verdict it serves
+(F9 still holds) without reconciling all retired history, and add working-set
+curation/ranking semantics so a current focus cannot be crowded out by stale
+history. A materialized snapshot may accelerate replay, but caching freshness
+verdicts without checking their current inputs is forbidden; measure process
+fan-out before choosing the storage mechanism.
+
+After that hardening slice, proceed to the thin Neovim projection. Start with
+native quickfix for persistent findings and explicit commands for status/delta;
+add signs, statusline data, and semantic jumps only against latency-bounded kernel
+projections. This sequence uses Neovim as a second real client of the shared
+contract rather than hiding kernel costs in editor-local state.
+
+### Product verdict
+
+The MVP has proved its thesis as a continuity substrate: ten runs recovered work
+across cold boundaries, stale claims corrected memory, supersession curated
+handoffs, native reads populated provenance automatically, and this run caught a
+live transaction blocker that fixture-only validation missed. The remaining
+problems are no longer “does durable coordination help?” They are operational:
+bounded computation, attention lifecycle, and candidate-state validation. That
+is sufficient evidence to close dogfood and choose the next architecture.

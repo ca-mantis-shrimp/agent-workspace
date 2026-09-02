@@ -3810,8 +3810,15 @@ fn worktree_fingerprint(repository_root: &Path) -> Result<String, WorkspaceError
         })?);
         material.extend(path.as_os_str().as_encoded_bytes());
         material.push(0);
-        match fs::read(repository_root.join(&path)) {
-            Ok(bytes) => material.extend(bytes),
+        let absolute_path = repository_root.join(&path);
+        match fs::symlink_metadata(&absolute_path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                material.extend(b"<symlink>");
+                let target = fs::read_link(&absolute_path)?;
+                material.extend(target.as_os_str().as_encoded_bytes());
+            }
+            Ok(metadata) if metadata.is_dir() => material.extend(b"<directory>"),
+            Ok(_) => material.extend(fs::read(&absolute_path)?),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 material.extend(b"<missing>")
             }

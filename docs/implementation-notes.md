@@ -912,3 +912,24 @@ named was the *associations*: intent, findings, residual risks, and a preview.
   associations, preview↔accept agreement, and restart persistence; one Pi test
   covers the id passthrough. 44 Rust tests, 7 Pi tests + typecheck, strict fmt
   and clippy.
+
+## 2026-09-02 — Live transaction symlink hardening
+
+The final dogfood pass was the first transaction begun against the live project.
+It failed before opening: `worktree_fingerprint` enumerated the tracked symlink
+`.claude/skills -> ../.agents/skills`, then `fs::read` followed it into a
+directory and returned `EISDIR`.
+
+- Worktree fingerprinting now uses `symlink_metadata`. Symlinks contribute a
+  type marker plus their link-target bytes and are never followed; directory
+  entries contribute an explicit type marker rather than failing. Regular files
+  retain byte-content fingerprinting and missing entries retain the existing
+  marker.
+- A regression fixture commits a symlink to the tracked `src` directory, records
+  an acceptance claim, and proves `begin-transaction` returns an open
+  transaction. The suite now has 45 Rust tests.
+- The same run exposed a separate acceptance limitation rather than hiding it:
+  markdown autoformat changed the final-newline bytes after mediated apply, yet
+  claim/evidence readiness still allowed acceptance because candidate mutation
+  bytes are not re-verified. That work is tracked by the
+  `candidate-state-evidence` action, not folded into this symlink fix.

@@ -6,6 +6,7 @@ use agent_workspace::{
 };
 use serde_json::Value;
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::{Command, Output};
 use tempfile::TempDir;
@@ -3342,6 +3343,67 @@ fn findings_queue_ranks_by_severity_and_disposition_leaves_the_queue() {
         error_finding.disposition,
         FindingDisposition::FalsePositive { .. }
     ));
+}
+
+#[test]
+fn transaction_can_begin_with_a_tracked_symlink_to_a_directory() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap();
+    let ws = workspace.to_str().unwrap();
+
+    symlink("src", fixture.repository.join("linked-src")).unwrap();
+    git(&fixture.repository, &["add", "linked-src"]);
+    git(
+        &fixture.repository,
+        &["commit", "--quiet", "-m", "track directory symlink"],
+    );
+
+    let observation: Observation = serde_json::from_slice(
+        &invoke(&[
+            "observe",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--path",
+            "src/lib.rs",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let claim: Claim = serde_json::from_slice(
+        &invoke(&[
+            "claim",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--statement",
+            "foo returns one",
+            "--observation",
+            &observation.id.to_string(),
+        ])
+        .stdout,
+    )
+    .unwrap();
+
+    let transaction: Transaction = serde_json::from_slice(
+        &invoke(&[
+            "begin-transaction",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--intent",
+            "exercise a clean transaction",
+            "--claim",
+            &claim.id.to_string(),
+        ])
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(transaction.state, TransactionState::Open);
 }
 
 #[test]

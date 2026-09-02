@@ -60,18 +60,22 @@ clearhead query index unscheduled
 ```
 
 The executable contract is recorded in the
-[executable contract](docs/executable-contract.md). The walking-skeleton kernel
-action is complete: scenarios S1–S7 cover observation staleness, scoped claims,
-evidence gating, restart-safe status, clean-base reversible file transactions,
-byte-accounted bounded perception with reveal-on-demand, and explicit claim
-supersession that separates active drift from retired beliefs. Default status is
-a concise orientation surface backed by single-pass log projection; `--full`
-retains the audit view. The Pi and Claude Code adapters now share kernel-owned
-read-capture and bounded orientation semantics and have both been live-dogfooded;
-the adapter phase is complete. The next product slice is the semantic-location
-and bounded-working-set layer, where accumulated observations become an
-intentional navigable working set rather than a provenance-only stream.
-Implementation choices settled by running code are recorded in
+[executable contract](docs/executable-contract.md). The walking skeleton and its
+agent-facing MVP are complete: revision-aware observations and claims, bounded
+working sets, persistent findings, evidence-gated reversible transactions,
+checkpoint/delta recovery, and the Pi and Claude Code projections all share
+kernel-owned semantics and have been exercised on the live repository.
+
+The final dogfood pass found two boundaries that should be fixed before a
+statusline-frequency Neovim projection: compact status takes about six seconds
+on the accumulated workspace because it eagerly reconciles historical state,
+and stale-first working-set ranking can omit the newest current focus. It also
+found and fixed a tracked-directory-symlink crash in transaction startup. The
+next architecture slice is therefore bounded/incremental reconciliation and
+working-set curation; the thin Neovim projection follows on that shared-state
+contract. Measurements and the decision rationale are in the
+[dogfood field report](docs/reflection-dogfood-cold-resume.md). Implementation
+choices settled by running code are recorded in
 [`docs/implementation-notes.md`](docs/implementation-notes.md).
 
 ## Pi extension
