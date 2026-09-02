@@ -1,0 +1,15 @@
+# Pin the edition rustfmt formats against, so a *bare* `rustfmt <file>` matches
+# `cargo fmt`.
+#
+# `cargo fmt` reads the edition from Cargo.toml (2024). A direct `rustfmt <file>`
+# invocation does not see Cargo.toml and defaults to edition 2015, whose macro
+# and expression heuristics differ — e.g. it reflows a multi-line `assert!(...)`
+# into a compressed form. Editor/LSP formatters and pi-lens's format-on-edit
+# pass invoke rustfmt directly, so without this file they rewrite already-clean
+# code into a non-canonical shape, producing spurious `M` diffs between sessions.
+#
+# rustfmt discovers this file from each input file's directory upward, so pinning
+# the edition here converges every rustfmt invocation — cargo fmt, bare rustfmt,
+# LSP, pi-lens — on one canonical form. This is the root-cause fix the pre-commit
+# fmt gate only ever guarded against after the fact.
+edition = "2024"
