@@ -66,9 +66,11 @@ evidence gating, restart-safe status, clean-base reversible file transactions,
 byte-accounted bounded perception with reveal-on-demand, and explicit claim
 supersession that separates active drift from retired beliefs. Default status is
 a concise orientation surface backed by single-pass log projection; `--full`
-retains the audit view. The next ready action is `working-set`, the first
-predecessor on the path to the Pi interface. Implementation choices settled by
-running code are recorded in
+retains the audit view. Dogfood evidence revised the original linear action
+sequence: the active action is now `pi-interface`, beginning with read
+auto-capture so adapter use can shape the broader working-set, findings, and
+transaction layers instead of waiting for them to be designed in isolation.
+Implementation choices settled by running code are recorded in
 [`docs/implementation-notes.md`](docs/implementation-notes.md).
 
 ## Principles
