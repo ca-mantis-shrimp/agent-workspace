@@ -30,6 +30,8 @@ pub enum WorkspaceError {
     InvalidClaim(String),
     EvidenceNotFound(u64),
     InvalidEvidence(String),
+    FindingNotFound(u64),
+    InvalidFinding(String),
     TransactionNotFound(u64),
     InvalidTransaction(String),
     InvalidCheckpoint(String),
@@ -62,6 +64,8 @@ impl fmt::Display for WorkspaceError {
             Self::InvalidClaim(message) => write!(formatter, "invalid claim: {message}"),
             Self::EvidenceNotFound(id) => write!(formatter, "evidence {id} not found"),
             Self::InvalidEvidence(message) => write!(formatter, "invalid evidence: {message}"),
+            Self::FindingNotFound(id) => write!(formatter, "finding {id} not found"),
+            Self::InvalidFinding(message) => write!(formatter, "invalid finding: {message}"),
             Self::TransactionNotFound(id) => write!(formatter, "transaction {id} not found"),
             Self::InvalidTransaction(message) => {
                 write!(formatter, "invalid transaction: {message}")
@@ -289,6 +293,28 @@ pub struct RevealedObservation {
     pub ingested_bytes: usize,
 }
 
+/// How a finding binds to its location and whether the provider's raw payload is
+/// retained. `native_payload` is the provider's own output (e.g. diagnostic
+/// JSON); when present it is retained in the CAS so the original result stays
+/// retrievable (S8). The `selector`/`normalizer` describe the location the
+/// finding is bound to for freshness.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FindingCaptureOptions {
+    pub selector: ObservationSelector,
+    pub normalizer: Normalizer,
+    pub native_payload: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RevealedFinding {
+    pub finding_id: u64,
+    pub provider: String,
+    pub path: PathBuf,
+    pub observed_revision: String,
+    pub native_payload_fingerprint: String,
+    pub content: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaimInputSource {
@@ -397,6 +423,91 @@ pub struct Evidence {
     pub report: FreshnessReport,
 }
 
+/// Severity of a provider-reported finding, ordered most-urgent first so a
+/// bounded queue surfaces errors ahead of hints (derived `Ord`).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingSeverity {
+    Error,
+    Warning,
+    Info,
+    Hint,
+}
+
+/// How a finding has been dispositioned. Orthogonal to freshness — the lesson
+/// carried over from claim supersession: a `stale` finding can still be `open`,
+/// and a `resolved` finding can still be `current`. Every non-open disposition
+/// names its actor and rationale (invariant 8). Filled by sub-slice B; sub-slice
+/// A only ever records `Open`.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum FindingDisposition {
+    #[default]
+    Open,
+    Resolved {
+        actor: String,
+        rationale: String,
+    },
+    Deferred {
+        actor: String,
+        rationale: String,
+    },
+    Suppressed {
+        actor: String,
+        rationale: String,
+    },
+    FalsePositive {
+        actor: String,
+        rationale: String,
+    },
+}
+
+impl FindingDisposition {
+    fn is_open(&self) -> bool {
+        matches!(self, Self::Open)
+    }
+}
+
+/// A provider-reported issue bound to a repository location (a quickfix-like
+/// queue entry). Its freshness reconciles from that single location exactly like
+/// an [`Observation`] — an edit under the finding stales it, so a diagnostic that
+/// may no longer apply never silently counts as a current issue. Provider
+/// identity and the native payload (or its CAS reference) are always retained so
+/// the provider's original result stays retrievable (S8).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Finding {
+    pub id: u64,
+    pub provider: String,
+    pub severity: FindingSeverity,
+    #[serde(default)]
+    pub rule: Option<String>,
+    pub message: String,
+    pub path: PathBuf,
+    #[serde(default)]
+    pub selector: ObservationSelector,
+    #[serde(default)]
+    pub normalizer: Normalizer,
+    pub observed_revision: String,
+    pub observed_input_fingerprint: String,
+    #[serde(default)]
+    pub observed_raw_fingerprint: Option<String>,
+    #[serde(default)]
+    pub observed_container_fingerprint: String,
+    /// CAS reference to the provider's own raw output (e.g. the diagnostic JSON),
+    /// retained so the provider's original result stays retrievable (S8). This is
+    /// the *provider payload*, distinct from the source file at `path`, which is
+    /// only the location this finding is bound to for freshness.
+    #[serde(default)]
+    pub native_payload_reference: Option<String>,
+    /// Digest of that native payload — the CAS key, verified on reveal. `None`
+    /// when the provider supplied no raw payload.
+    #[serde(default)]
+    pub native_payload_fingerprint: Option<String>,
+    #[serde(default)]
+    pub disposition: FindingDisposition,
+    pub report: FreshnessReport,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionState {
@@ -449,6 +560,8 @@ pub struct WorkspaceStatus {
     #[serde(default)]
     pub superseded_claims: Vec<Claim>,
     pub evidence: Vec<Evidence>,
+    #[serde(default)]
+    pub findings: Vec<Finding>,
     pub transactions: Vec<Transaction>,
     #[serde(default)]
     pub checkpoints: Vec<CheckpointMarker>,
@@ -496,6 +609,7 @@ pub struct BriefCounts {
     pub active_claims: usize,
     pub superseded_claims: usize,
     pub observations: usize,
+    pub open_findings: usize,
     pub open_transactions: usize,
     pub checkpoints: usize,
     pub freshness: FreshnessHistogram,
@@ -547,6 +661,11 @@ impl WorkspaceStatus {
                 active_claims: self.claims.len(),
                 superseded_claims: self.superseded_claims.len(),
                 observations: self.observations.len(),
+                open_findings: self
+                    .findings
+                    .iter()
+                    .filter(|finding| finding.disposition.is_open())
+                    .count(),
                 open_transactions: self
                     .transactions
                     .iter()
@@ -942,6 +1061,37 @@ enum Event {
         reason: String,
         reconciliation_fingerprint: String,
     },
+    FindingRecorded {
+        finding_id: u64,
+        provider: String,
+        severity: FindingSeverity,
+        #[serde(default)]
+        rule: Option<String>,
+        message: String,
+        path: PathBuf,
+        #[serde(default)]
+        selector: ObservationSelector,
+        #[serde(default)]
+        normalizer: Normalizer,
+        git_revision: String,
+        input_fingerprint: String,
+        #[serde(default)]
+        raw_fingerprint: Option<String>,
+        container_fingerprint: String,
+        #[serde(default)]
+        native_payload_reference: Option<String>,
+        #[serde(default)]
+        native_payload_fingerprint: Option<String>,
+        freshness: FreshnessWithinScope,
+        reason: String,
+        reconciliation_fingerprint: String,
+    },
+    FindingReconciled {
+        finding_id: u64,
+        freshness: FreshnessWithinScope,
+        reason: String,
+        reconciliation_fingerprint: String,
+    },
     MutationApplied {
         transaction_id: u64,
         mutation: Mutation,
@@ -1071,6 +1221,9 @@ impl Workspace {
         for evidence in projection.evidence.values() {
             pending.extend(self.evidence_reconcile_event(evidence)?);
         }
+        for finding in projection.findings.values() {
+            pending.extend(self.finding_reconcile_event(finding)?);
+        }
 
         // Touch the log only when a verdict actually changed. On the unchanged
         // path (the common one) nothing is appended and the snapshot already is
@@ -1097,6 +1250,7 @@ impl Workspace {
             claims,
             superseded_claims,
             evidence: projection.evidence.into_values().collect(),
+            findings: projection.findings.into_values().collect(),
             transactions: projection.transactions.into_values().collect(),
             checkpoints: projection.checkpoints,
         })
@@ -1111,49 +1265,15 @@ impl Workspace {
         &self,
         observation: &Observation,
     ) -> Result<Option<Event>, WorkspaceError> {
-        let current = read_observation_fingerprints(
+        let (freshness, reason, reconciliation_fingerprint) = location_freshness_verdict(
             &self.repository_root,
             &observation.path,
             &observation.selector,
             observation.normalizer,
             observation.observed_raw_fingerprint.as_deref(),
             &observation.observed_input_fingerprint,
-        );
-        let (current_unit, current_container) = current
-            .as_ref()
-            .map(|(unit, container)| (Some(unit.as_str()), Some(container.as_str())))
-            .unwrap_or((None, None));
-        let reconciliation_fingerprint = observation_reconciliation_fingerprint(
-            &self.repository_root,
-            &observation.path,
-            &observation.selector,
-            current_unit,
-            current_container,
+            &observation.observed_container_fingerprint,
         )?;
-
-        let (freshness, reason) = match &current {
-            Ok((unit, container)) if unit == &observation.observed_input_fingerprint => {
-                let reason = if container == &observation.observed_container_fingerprint {
-                    "supporting input unchanged"
-                } else {
-                    "observed unit unchanged; container changed outside mediated unit"
-                };
-                (FreshnessWithinScope::Current, reason.to_owned())
-            }
-            Ok(_) => (
-                FreshnessWithinScope::Stale,
-                "supporting input changed".to_owned(),
-            ),
-            Err(WorkspaceError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => (
-                FreshnessWithinScope::Stale,
-                "supporting input unavailable".to_owned(),
-            ),
-            Err(_) => (
-                FreshnessWithinScope::Unknown,
-                "supporting input could not be verified".to_owned(),
-            ),
-        };
-
         if verdict_unchanged(
             &observation.report,
             &freshness,
@@ -1164,6 +1284,36 @@ impl Workspace {
         }
         Ok(Some(Event::ObservationReconciled {
             observation_id: observation.id,
+            freshness,
+            reason,
+            reconciliation_fingerprint,
+        }))
+    }
+
+    /// Recompute a finding's freshness from its bound location and return the
+    /// `FindingReconciled` event, or `None` when unchanged. A finding is bound to
+    /// a single location, so it reconciles through the exact same verdict a
+    /// same-location observation would — an edit under the finding stales it.
+    fn finding_reconcile_event(&self, finding: &Finding) -> Result<Option<Event>, WorkspaceError> {
+        let (freshness, reason, reconciliation_fingerprint) = location_freshness_verdict(
+            &self.repository_root,
+            &finding.path,
+            &finding.selector,
+            finding.normalizer,
+            finding.observed_raw_fingerprint.as_deref(),
+            &finding.observed_input_fingerprint,
+            &finding.observed_container_fingerprint,
+        )?;
+        if verdict_unchanged(
+            &finding.report,
+            &freshness,
+            &reason,
+            &reconciliation_fingerprint,
+        ) {
+            return Ok(None);
+        }
+        Ok(Some(Event::FindingReconciled {
+            finding_id: finding.id,
             freshness,
             reason,
             reconciliation_fingerprint,
@@ -1563,6 +1713,171 @@ impl Workspace {
             ingested_bytes: content.len(),
             content,
         })
+    }
+
+    /// Record a provider-reported finding bound to a repository location. The
+    /// file at `path` is read to fingerprint the location for freshness (an edit
+    /// under the finding will later stale it); the provider's own raw output, if
+    /// supplied, is retained in the CAS so the original result stays retrievable
+    /// (S8). The finding enters the queue `Open` and `current`.
+    pub fn record_finding(
+        &self,
+        provider: impl Into<String>,
+        severity: FindingSeverity,
+        rule: Option<String>,
+        message: impl Into<String>,
+        path: impl AsRef<Path>,
+        options: FindingCaptureOptions,
+    ) -> Result<Finding, WorkspaceError> {
+        let message = message.into();
+        if message.trim().is_empty() {
+            return Err(WorkspaceError::InvalidFinding(
+                "finding message must not be empty".to_owned(),
+            ));
+        }
+        let FindingCaptureOptions {
+            selector,
+            normalizer,
+            native_payload,
+        } = options;
+        let path = validate_relative_path(path.as_ref())?;
+        let resolved_path = resolve_repository_file(&self.repository_root, &path)?;
+        let container = fs::read(resolved_path)?;
+        let unit = select_observation_unit(&container, &selector)?;
+        let input_fingerprint = hex_digest(&normalize_unit(unit, normalizer));
+        let raw_fingerprint = (normalizer != Normalizer::None).then(|| hex_digest(unit));
+        let container_fingerprint = hex_digest(&container);
+
+        // Retain the provider's raw output — not the source file — keyed by its
+        // own digest, so provenance survives independently of the location.
+        let (native_payload_reference, native_payload_fingerprint) = match &native_payload {
+            Some(payload) => {
+                let bytes = payload.as_bytes();
+                if bytes.len() > MAX_RETAINED_PAYLOAD_BYTES {
+                    return Err(WorkspaceError::InvalidFinding(format!(
+                        "{}-byte native payload exceeds the {}-byte retention limit",
+                        bytes.len(),
+                        MAX_RETAINED_PAYLOAD_BYTES
+                    )));
+                }
+                let fingerprint = hex_digest(bytes);
+                let reference = self.persist_native_payload(&fingerprint, bytes)?;
+                (Some(reference), Some(fingerprint))
+            }
+            None => (None, None),
+        };
+
+        let git_revision = git_output(&self.repository_root, &["rev-parse", "HEAD"])?;
+        let reconciliation_fingerprint = observation_reconciliation_fingerprint(
+            &self.repository_root,
+            &path,
+            &selector,
+            Some(&input_fingerprint),
+            Some(&container_fingerprint),
+        )?;
+        let finding_id = self.project()?.next_finding_id;
+        self.append(Event::FindingRecorded {
+            finding_id,
+            provider: provider.into(),
+            severity,
+            rule,
+            message,
+            path,
+            selector,
+            normalizer,
+            git_revision,
+            input_fingerprint,
+            raw_fingerprint,
+            container_fingerprint,
+            native_payload_reference,
+            native_payload_fingerprint,
+            freshness: FreshnessWithinScope::Current,
+            reason: "finding recorded".to_owned(),
+            reconciliation_fingerprint,
+        })?;
+        self.project()?
+            .findings
+            .remove(&finding_id)
+            .ok_or(WorkspaceError::FindingNotFound(finding_id))
+    }
+
+    /// Retrieve a finding's retained native payload, verifying it against its
+    /// stored digest (S8). Fails closed on a missing payload or any CAS
+    /// tampering rather than returning unverified bytes.
+    pub fn reveal_finding(&self, finding_id: u64) -> Result<RevealedFinding, WorkspaceError> {
+        let projection = self.project()?;
+        let finding = projection
+            .findings
+            .get(&finding_id)
+            .ok_or(WorkspaceError::FindingNotFound(finding_id))?;
+        let fingerprint = finding
+            .native_payload_fingerprint
+            .as_deref()
+            .ok_or_else(|| {
+                WorkspaceError::InvalidFinding(
+                    "no native payload was retained for this finding".to_owned(),
+                )
+            })?;
+        let reference = finding.native_payload_reference.as_deref().ok_or_else(|| {
+            WorkspaceError::InvalidFinding(
+                "no native payload was retained for this finding".to_owned(),
+            )
+        })?;
+        if !is_sha256_hex(fingerprint) {
+            return Err(WorkspaceError::CorruptLog(format!(
+                "invalid native payload fingerprint for finding {finding_id}"
+            )));
+        }
+        let expected_reference = PathBuf::from("payloads").join(fingerprint);
+        if Path::new(reference) != expected_reference {
+            return Err(WorkspaceError::CorruptLog(format!(
+                "invalid native payload reference for finding {finding_id}"
+            )));
+        }
+        let absolute_payload = self.workspace_root.join(expected_reference);
+        if fs::symlink_metadata(&absolute_payload)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(WorkspaceError::CorruptLog(format!(
+                "native payload is a symlink for finding {finding_id}"
+            )));
+        }
+        let payload = fs::read(absolute_payload)?;
+        if hex_digest(&payload) != fingerprint {
+            return Err(WorkspaceError::CorruptLog(format!(
+                "native payload fingerprint mismatch for finding {finding_id}"
+            )));
+        }
+        let content = String::from_utf8(payload).map_err(|_| {
+            WorkspaceError::InvalidFinding("retained native payload is not valid UTF-8".to_owned())
+        })?;
+        Ok(RevealedFinding {
+            finding_id,
+            provider: finding.provider.clone(),
+            path: finding.path.clone(),
+            observed_revision: finding.observed_revision.clone(),
+            native_payload_fingerprint: fingerprint.to_owned(),
+            content,
+        })
+    }
+
+    pub fn reconcile_finding(&self, finding_id: u64) -> Result<Finding, WorkspaceError> {
+        let projection = self.project()?;
+        let finding = projection
+            .findings
+            .get(&finding_id)
+            .ok_or(WorkspaceError::FindingNotFound(finding_id))?;
+        match self.finding_reconcile_event(finding)? {
+            None => Ok(finding.clone()),
+            Some(event) => {
+                self.append(event)?;
+                self.project()?
+                    .findings
+                    .remove(&finding_id)
+                    .ok_or(WorkspaceError::FindingNotFound(finding_id))
+            }
+        }
     }
 
     pub fn reconcile_observation(
@@ -2191,11 +2506,13 @@ struct Projection {
     observations: BTreeMap<u64, Observation>,
     claims: BTreeMap<u64, Claim>,
     evidence: BTreeMap<u64, Evidence>,
+    findings: BTreeMap<u64, Finding>,
     transactions: BTreeMap<u64, Transaction>,
     checkpoints: Vec<CheckpointMarker>,
     next_observation_id: u64,
     next_claim_id: u64,
     next_evidence_id: u64,
+    next_finding_id: u64,
     next_transaction_id: u64,
     next_sequence: u64,
 }
@@ -2588,6 +2905,86 @@ impl Projection {
                     .operational_coverage
                     .reconciliation_fingerprint = reconciliation_fingerprint;
             }
+            Event::FindingRecorded {
+                finding_id,
+                provider,
+                severity,
+                rule,
+                message,
+                path,
+                selector,
+                normalizer,
+                git_revision,
+                input_fingerprint,
+                raw_fingerprint,
+                container_fingerprint,
+                native_payload_reference,
+                native_payload_fingerprint,
+                freshness,
+                reason,
+                reconciliation_fingerprint,
+            } => {
+                if self.findings.contains_key(&finding_id) {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "duplicate finding {finding_id}"
+                    )));
+                }
+                self.next_finding_id = self.next_finding_id.max(finding_id + 1);
+                self.findings.insert(
+                    finding_id,
+                    Finding {
+                        id: finding_id,
+                        provider,
+                        severity,
+                        rule,
+                        message,
+                        path: path.clone(),
+                        selector: selector.clone(),
+                        normalizer,
+                        observed_revision: git_revision,
+                        observed_input_fingerprint: input_fingerprint,
+                        observed_raw_fingerprint: raw_fingerprint,
+                        observed_container_fingerprint: container_fingerprint,
+                        native_payload_reference,
+                        native_payload_fingerprint,
+                        disposition: FindingDisposition::Open,
+                        report: FreshnessReport {
+                            freshness_within_scope: freshness,
+                            scope_assurance: ScopeAssurance {
+                                source: ScopeSource::Declared,
+                                completeness: if selector == ObservationSelector::WholeFile {
+                                    ScopeCompleteness::AssertedComplete
+                                } else {
+                                    ScopeCompleteness::NotAsserted
+                                },
+                            },
+                            operational_coverage: OperationalCoverage {
+                                mediated_paths: vec![path.clone()],
+                                mediated_units: vec![MediatedUnit { path, selector }],
+                                reconciliation_fingerprint,
+                            },
+                            reason,
+                        },
+                    },
+                );
+            }
+            Event::FindingReconciled {
+                finding_id,
+                freshness,
+                reason,
+                reconciliation_fingerprint,
+            } => {
+                let finding = self
+                    .findings
+                    .get_mut(&finding_id)
+                    .ok_or(WorkspaceError::FindingNotFound(finding_id))?;
+                finding.report.freshness_within_scope = freshness;
+                finding.report.reason = reason;
+                finding
+                    .report
+                    .operational_coverage
+                    .reconciliation_fingerprint = reconciliation_fingerprint;
+            }
             Event::MutationApplied {
                 transaction_id,
                 mutation,
@@ -2796,6 +3193,64 @@ fn select_observation_unit<'a>(
             Ok(&container[*start..*end])
         }
     }
+}
+
+/// Recompute the freshness verdict for a single bound location against the live
+/// worktree, returning `(freshness, reason, reconciliation_fingerprint)`. Shared
+/// verbatim by observation and finding reconciliation — both bind to one
+/// location, so both must decide "did the input under this change" identically;
+/// keeping the decision here is what guarantees they never drift.
+fn location_freshness_verdict(
+    repository_root: &Path,
+    path: &Path,
+    selector: &ObservationSelector,
+    normalizer: Normalizer,
+    observed_raw_fingerprint: Option<&str>,
+    observed_input_fingerprint: &str,
+    observed_container_fingerprint: &str,
+) -> Result<(FreshnessWithinScope, String, String), WorkspaceError> {
+    let current = read_observation_fingerprints(
+        repository_root,
+        path,
+        selector,
+        normalizer,
+        observed_raw_fingerprint,
+        observed_input_fingerprint,
+    );
+    let (current_unit, current_container) = current
+        .as_ref()
+        .map(|(unit, container)| (Some(unit.as_str()), Some(container.as_str())))
+        .unwrap_or((None, None));
+    let reconciliation_fingerprint = observation_reconciliation_fingerprint(
+        repository_root,
+        path,
+        selector,
+        current_unit,
+        current_container,
+    )?;
+    let (freshness, reason) = match &current {
+        Ok((unit, container)) if unit == observed_input_fingerprint => {
+            let reason = if container == observed_container_fingerprint {
+                "supporting input unchanged"
+            } else {
+                "observed unit unchanged; container changed outside mediated unit"
+            };
+            (FreshnessWithinScope::Current, reason.to_owned())
+        }
+        Ok(_) => (
+            FreshnessWithinScope::Stale,
+            "supporting input changed".to_owned(),
+        ),
+        Err(WorkspaceError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => (
+            FreshnessWithinScope::Stale,
+            "supporting input unavailable".to_owned(),
+        ),
+        Err(_) => (
+            FreshnessWithinScope::Unknown,
+            "supporting input could not be verified".to_owned(),
+        ),
+    };
+    Ok((freshness, reason, reconciliation_fingerprint))
 }
 
 fn read_observation_fingerprints(

@@ -1,8 +1,8 @@
 use agent_workspace::{
-    Claim, ClaimInputSource, ClaimLifecycle, DeltaStatus, Evidence, FreshnessWithinScope,
-    Normalizer, Objective, Observation, ObservationCapture, ObservationSelector,
-    RevealedObservation, ScopeCompleteness, ScopeSource, Transaction, TransactionState, Workspace,
-    WorkspaceStatus,
+    Claim, ClaimInputSource, ClaimLifecycle, DeltaStatus, Evidence, Finding, FindingDisposition,
+    FindingSeverity, FreshnessWithinScope, Normalizer, Objective, Observation, ObservationCapture,
+    ObservationSelector, RevealedFinding, RevealedObservation, ScopeCompleteness, ScopeSource,
+    Transaction, TransactionState, Workspace, WorkspaceStatus,
 };
 use serde_json::Value;
 use std::fs;
@@ -3085,6 +3085,134 @@ fn working_set_view_hard_bounds_each_section_with_explicit_omissions() {
     assert_eq!(view["uncited_omitted"].as_u64().unwrap(), 1);
     assert_eq!(view["trail"].as_array().unwrap().len(), 16);
     assert_eq!(view["trail_omitted"].as_u64().unwrap(), 1);
+}
+
+#[test]
+fn finding_retains_provider_provenance_and_reveals_native_payload() {
+    // S8: a normalized finding keeps its provider identity and native payload
+    // (or CAS reference) retrievable.
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap();
+    let ws = workspace.to_str().unwrap();
+    let payload = r#"{"rule":"needless_return","level":"warning","spans":[{"line":1}]}"#;
+
+    let recorded = invoke_with_stdin(
+        &[
+            "record-finding",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--provider",
+            "clippy",
+            "--severity",
+            "warning",
+            "--rule",
+            "needless_return",
+            "--message",
+            "unneeded return statement",
+            "--path",
+            "src/lib.rs",
+        ],
+        payload,
+    );
+    let finding: Finding = serde_json::from_slice(&recorded.stdout).unwrap();
+    assert_eq!(finding.provider, "clippy");
+    assert_eq!(finding.severity, FindingSeverity::Warning);
+    assert_eq!(finding.rule.as_deref(), Some("needless_return"));
+    assert_eq!(finding.message, "unneeded return statement");
+    assert_eq!(finding.path.to_str().unwrap(), "src/lib.rs");
+    assert_eq!(
+        finding.report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+    assert!(matches!(finding.disposition, FindingDisposition::Open));
+    assert!(finding.native_payload_fingerprint.is_some());
+    assert!(!finding.observed_revision.is_empty());
+
+    // Native payload is retrievable and byte-exact, with provider identity intact.
+    let revealed = invoke(&[
+        "reveal-finding",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--id",
+        &finding.id.to_string(),
+    ]);
+    let revealed: RevealedFinding = serde_json::from_slice(&revealed.stdout).unwrap();
+    assert_eq!(revealed.provider, "clippy");
+    assert_eq!(revealed.content, payload);
+}
+
+#[test]
+fn finding_stales_when_its_bound_location_changes() {
+    // The evidence-invalidation analog: a diagnostic that may no longer apply
+    // after an edit must not keep counting as a current issue.
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap();
+    let ws = workspace.to_str().unwrap();
+
+    // No native payload supplied (empty stdin) — a finding without retained
+    // provenance is still a first-class queue entry.
+    invoke_with_stdin(
+        &[
+            "record-finding",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--provider",
+            "rustc",
+            "--severity",
+            "error",
+            "--message",
+            "mismatched types",
+            "--path",
+            "src/lib.rs",
+        ],
+        "",
+    );
+
+    let before: WorkspaceStatus = serde_json::from_slice(
+        &invoke(&["status", "--full", "--repository", repo, "--workspace", ws]).stdout,
+    )
+    .unwrap();
+    assert_eq!(before.findings.len(), 1);
+    assert_eq!(
+        before.findings[0].report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 { 2 }\n",
+    )
+    .unwrap();
+
+    let after: WorkspaceStatus = serde_json::from_slice(
+        &invoke(&["status", "--full", "--repository", repo, "--workspace", ws]).stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        after.findings[0].report.freshness_within_scope,
+        FreshnessWithinScope::Stale
+    );
+
+    // A finding with no retained payload fails closed on reveal rather than
+    // returning unverified bytes.
+    let revealed = invoke_failure(&[
+        "reveal-finding",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--id",
+        "0",
+    ]);
+    assert!(String::from_utf8_lossy(&revealed.stderr).contains("no native payload was retained"));
 }
 
 fn claim_ids(claims: &[Claim]) -> Vec<u64> {

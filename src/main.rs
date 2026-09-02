@@ -1,6 +1,7 @@
 use agent_workspace::{
-    ClaimScopeStrategy, EvidenceOutcome, Normalizer, ObservationCaptureOptions,
-    ObservationSelector, ReadCaptureOutcome, ReadCaptureRequest, Workspace, WorkspaceError,
+    ClaimScopeStrategy, EvidenceOutcome, FindingCaptureOptions, FindingSeverity, Normalizer,
+    ObservationCaptureOptions, ObservationSelector, ReadCaptureOutcome, ReadCaptureRequest,
+    Workspace, WorkspaceError,
 };
 use serde::Serialize;
 use std::env;
@@ -144,6 +145,45 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 .ok_or_else(|| CliError::Usage("reveal requires --observation".to_owned()))?;
             print_json(&workspace.reveal_observation(observation_id)?)?;
         }
+        "record-finding" => {
+            let severity = options
+                .severity
+                .ok_or_else(|| CliError::Usage("record-finding requires --severity".to_owned()))?;
+            let message = options
+                .message
+                .ok_or_else(|| CliError::Usage("record-finding requires --message".to_owned()))?;
+            let path = options
+                .path
+                .ok_or_else(|| CliError::Usage("record-finding requires --path".to_owned()))?;
+            let provider = options.provider.unwrap_or_else(|| "imported".to_owned());
+            // The provider's raw output arrives on stdin, like observe-read's
+            // model-visible text: it is arbitrary and belongs nowhere on argv. An
+            // empty stream means the provider supplied no retained payload.
+            let mut native_payload = String::new();
+            std::io::stdin().read_to_string(&mut native_payload)?;
+            let native_payload = (!native_payload.is_empty()).then_some(native_payload);
+            let normalizer = options
+                .normalizer
+                .unwrap_or_else(|| Normalizer::detect_for_path(&path));
+            print_json(&workspace.record_finding(
+                provider,
+                severity,
+                options.rule,
+                message,
+                path,
+                FindingCaptureOptions {
+                    selector: options.selector.unwrap_or_default(),
+                    normalizer,
+                    native_payload,
+                },
+            )?)?;
+        }
+        "reveal-finding" => {
+            let finding_id = options
+                .id
+                .ok_or_else(|| CliError::Usage("reveal-finding requires --id".to_owned()))?;
+            print_json(&workspace.reveal_finding(finding_id)?)?;
+        }
         "reconcile" => {
             let id = options
                 .id
@@ -267,6 +307,9 @@ struct Options {
     intent: Option<String>,
     external_reference: Option<String>,
     reason: Option<String>,
+    severity: Option<FindingSeverity>,
+    message: Option<String>,
+    rule: Option<String>,
     contents: Option<String>,
     selector: Option<ObservationSelector>,
     /// `None` is the `auto` default: resolve per path at dispatch.
@@ -304,6 +347,9 @@ impl Options {
         let mut intent = None;
         let mut external_reference = None;
         let mut reason = None;
+        let mut severity = None;
+        let mut message = None;
+        let mut rule = None;
         let mut contents = None;
         let mut selector = None;
         let mut normalizer = None;
@@ -372,6 +418,19 @@ impl Options {
                 "--intent" => intent = Some(value.clone()),
                 "--reference" => external_reference = Some(value.clone()),
                 "--reason" => reason = Some(value.clone()),
+                "--message" => message = Some(value.clone()),
+                "--rule" => rule = Some(value.clone()),
+                "--severity" => {
+                    severity = Some(match value.as_str() {
+                        "error" => FindingSeverity::Error,
+                        "warning" => FindingSeverity::Warning,
+                        "info" => FindingSeverity::Info,
+                        "hint" => FindingSeverity::Hint,
+                        _ => {
+                            return Err(CliError::Usage(format!("invalid severity: {value}")));
+                        }
+                    })
+                }
                 "--label" => label = Some(value.clone()),
                 "--note" => note = Some(value.clone()),
                 "--since" => since = Some(value.clone()),
@@ -466,6 +525,9 @@ impl Options {
             intent,
             external_reference,
             reason,
+            severity,
+            message,
+            rule,
             contents,
             selector,
             normalizer,

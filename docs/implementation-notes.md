@@ -812,3 +812,39 @@ restart-safe attention model, projected through a new `working-set` command.
   view is inherently bounded, so there is no brief/full split to expose. 5 Pi
   tests plus typecheck pass. This closes all seven acceptance criteria; the
   `working-set` action is complete.
+
+## 2026-09-02 — Findings, sub-slice A (record + provenance + freshness)
+
+First slice of the findings/validation-evidence action: a persistent,
+quickfix-like queue of provider-reported issues. Evidence already existed; this
+adds the Finding concept.
+
+- **Disposition is orthogonal to freshness — a correction to the design doc.**
+  `initial-design.md` folds `stale` into the finding lifecycle enum alongside
+  `open/resolved/suppressed`. That is the exact conflation claim supersession
+  already un-made: input-drift (`stale`, from reconcile) is not a decision-state.
+  So `Finding` carries both a `FreshnessReport` (current/stale/unknown) and a
+  separate `FindingDisposition` (open + resolved/deferred/suppressed/false-positive,
+  each with actor + rationale). Sub-slice A only ever records `Open`; the
+  transitions land in sub-slice B.
+- **A finding's freshness is single-location, identical to an observation's.** A
+  finding binds to one location, so "did the input under this change" must be
+  decided exactly as a same-location observation decides it. Rather than
+  duplicate the verdict, the observation reconcile body was extracted into a
+  shared free fn `location_freshness_verdict`; `observation_reconcile_event` and
+  the new `finding_reconcile_event` both call it, so they can never drift. The
+  existing observation suite guards the extraction as behavior-preserving.
+- **Native payload is the provider's output, not the source file (S8).** A
+  finding's native payload is the provider's own raw result (e.g. diagnostic
+  JSON), supplied by the caller on stdin like `observe-read`'s text — distinct
+  from the source file at `path`, which is only the freshness binding. It is
+  retained in the CAS keyed by its own digest (`native_payload_fingerprint`,
+  separate from the file's container fingerprint), and `reveal-finding` verifies
+  bytes against that digest, failing closed on a missing payload or tampering.
+- **Surface.** `record-finding` (severity/rule/message/location + optional stdin
+  payload) and `reveal-finding`; findings ride the single-pass reconcile in
+  `resume_status`, appear in `status --full`, and `status` gains an
+  `open_findings` count. Covered by two acceptance tests (S8 provenance
+  round-trip; edit → stale + fail-closed reveal). 42 Rust tests, strict fmt and
+  clippy. Deferred to B/C: disposition transitions, and the bounded queue
+  projection + `workspace_findings` Pi tool.
