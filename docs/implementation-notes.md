@@ -640,3 +640,42 @@ fingerprinting with no flag to remember.
   provider `pi.read`, byte range `18:216`, 198 source bytes, 250 finalized
   model-visible bytes (including pagination), current freshness, and no retained
   payload.
+
+## 2026-09-01 — Pi orientation tools (second interface slice)
+
+The first Pi slice made ordinary *reads* populate the workspace; this slice made
+*orientation* itself available without leaving the agent surface. The extension
+now registers two custom tools and the dogfood question — "can a fresh agent
+orient without shelling to the CLI?" — was answered by the tool used to pose it.
+
+Design decisions:
+
+- **Projection, not reimplementation.** `workspace_status` and `workspace_delta`
+  exec the kernel binary and return its JSON verbatim (`resume_status().brief()`
+  and `delta_since()`). Every semantic decision stays in the kernel: freshness,
+  scope assurance, checkpoint selection. The tools add argument mapping only
+  (`full`, `since`) and must drift in lockstep with the CLI rather than
+  inventing a second status vocabulary.
+- **Throwing is the error channel.** Pi custom tools return `AgentToolResult`,
+  which has no `isError` field — a failed kernel invocation throws and surfaces
+  as a tool error. Expected environment conditions are not errors: a directory
+  outside a Git checkout returns plain text telling the agent no runtime exists,
+  so it can adapt instead of treating orientation as broken.
+- **The prime directive is encoded in tool metadata, not just the skill.**
+  `promptGuidelines` on `workspace_status` states that a claim reported stale
+  outranks the agent's remembered belief. A fresh agent that never loads the
+  skill still receives the rule in its system prompt whenever the tool is
+  active — the adoption problem from the first reflection, attacked at the
+  prompt layer.
+- **Bidirectional dogfood arrived on its own.** During this session's cold
+  start, the auto-capture slice recorded the agent's reads of `SKILL.md`,
+  `index.ts`, and `main.rs` (observations 87–89) before any manual `observe`.
+  The workspace now watches its own development sessions.
+
+Proof. Eight TypeScript tests (three new): status projection arguments brief by
+default and `--full` on request; delta passes `--since` through and omits it by
+default; graceful no-runtime text plus throwing on kernel failure. Strict
+typecheck, 33 Rust tests, fmt, clippy pass. A fresh `pi -p` session oriented via
+the tools alone — objective, one current claim, latest checkpoint — with zero
+CLI shelling. Commit `e6c8ef0`; claim 38 records the slice, claim 39 supersedes
+the run-8 handoff umbrella (claim 37) now that its next objective was consumed.

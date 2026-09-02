@@ -471,3 +471,58 @@ One process wart also repeated: the harness formatter again rewrote unrelated
 Rust assertions non-canonically after an edit. The tracked fmt gate caught it;
 `cargo fmt` restored the canonical form immediately before commit. The separate
 environment action remains justified.
+
+## Ninth run — the workspace oriented its own developer (Pi, 2026-09-01)
+
+The cold-start workflow ran as designed, and the interesting part happened
+before any deliberate work: the read auto-capture slice from run 8 recorded my
+reads of the skill file and the extension sources (observations 87–89) while I
+was still orienting. No manual `observe`, no ceremony — ordinary orientation
+populated the workspace. The adoption-tax thesis now holds in both directions:
+the tool no longer depends on the agent remembering it, because it is watching.
+
+The slice itself was deliberately boring by design: two custom tools,
+`workspace_status` and `workspace_delta`, that exec the kernel binary and return
+its JSON verbatim. Everything semantic stays in the kernel; the extension maps
+arguments and nothing else. The one genuinely new judgment call was error
+policy: Pi custom tools have no `isError` field, so throwing is the only error
+channel, and I had to decide which conditions deserve to be errors. Expected
+environment conditions (a directory outside any Git checkout) return plain
+text; only a failed kernel invocation throws. An agent running these tools in a
+random repository gets a usable answer, not a stack trace.
+
+Two things I would flag for the next agent:
+
+1. **The dogfood test and the tool under test are now the same mechanism.** The
+   acceptance question for this slice — "can a fresh agent orient without
+   shelling to the CLI?" — was answered by launching a fresh `pi -p` session
+   that used only the tools. It reported the objective, claim freshness, and
+   latest checkpoint correctly and confirmed it needed no CLI. But note what
+   that test cannot see: it verifies that the *answers* flow, not that the
+   agent *trusts* them under pressure. The cold-start failure mode from the
+   first reflection (walking past `status` to reconstruct by hand) is now
+   harder but not impossible — the tools appear in the tool list, but an agent
+   mid-task may still never call them. The next real signal will be a session
+   that *ignores* the tools and whether anything catches that.
+2. **Claim supersession fired for the right reason this time.** Shipping the
+   slice staled the run-8 handoff umbrella (claim 37) — its "next objective"
+   was consumed and its supporting actions-file input changed. That is exactly
+   the "genuinely outdated, not drift-stale" case the skill describes, and the
+   supersession with reason 39 left an inspectable trail. The workspace
+   managed its own handoff correctness without human correction, which run 8
+   needed a human to force.
+
+Also observed: the harness edit-time formatter struck again, this time on the
+TypeScript sources (the same chained-one-liner collapse seen in runs 5–7). The
+`git diff -w --stat` comparison confirmed it was whitespace-only and the
+working tree was restored from the committed form. Claims 38/39 stayed `current`
+through it — the rustfmt-normalized-fingerprint lesson generalizes, but note it
+is doing its job: without normalization the same drift would have staled the
+claims while meaning nothing.
+
+Residuals carried forward unchanged: later-loaded context middleware can alter
+the read projection; outside-range concurrent edits can affect container
+fingerprints; auto-capture skips are silent; and orientation tool results are
+not themselves observed. The bound next decision is whether the loop verbs
+(observe, claim, transaction lifecycle) deserve the same projection, or whether
+the interface moves to the Neovim cockpit.
