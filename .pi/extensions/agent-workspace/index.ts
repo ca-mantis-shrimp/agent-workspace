@@ -1,5 +1,6 @@
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { readFile, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
@@ -161,5 +162,95 @@ export default function (pi: ExtensionAPI) {
 				// read into a failed tool result. A mismatch/race records nothing.
 			}
 		}
+	});
+
+	// Orientation tools: thin projections over the kernel's brief status and
+	// checkpoint-delta surfaces. They add no semantics — the binary owns every
+	// decision — so a fresh agent can orient without shelling to the CLI.
+	// Expected environment conditions (no Git checkout, no kernel binary) come
+	// back as plain text so the agent can adapt; only a genuinely failed kernel
+	// invocation throws and surfaces as a tool error.
+	async function runKernel(
+		cwd: string,
+		command: string[],
+		signal?: AbortSignal,
+	): Promise<{ content: [{ type: "text"; text: string }]; details: { runtime: string } }> {
+		const runtime = await runtimeFor(cwd, signal);
+		if (!runtime) {
+			return {
+				content: [{
+					type: "text",
+					text:
+						"No agent-workspace runtime here: this directory is not inside a Git repository checkout.",
+				}],
+				details: { runtime: "absent" },
+			};
+		}
+		let result;
+		try {
+			result = await pi.exec(
+				runtime.binary,
+				[...command, "--repository", runtime.root, "--workspace", runtime.workspace],
+				{ signal, timeout: 10_000 },
+			);
+		} catch (error) {
+			throw new Error(
+				`agent-workspace kernel binary not runnable at ${runtime.binary}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+		if (result.code !== 0) {
+			throw new Error(
+				`agent-workspace ${command[0]} failed (${result.code}): ${result.stderr || result.stdout || "no output"}`,
+			);
+		}
+		return {
+			content: [{ type: "text", text: result.stdout }],
+			details: { runtime: "active" },
+		};
+	}
+
+	pi.registerTool({
+		name: "workspace_status",
+		label: "Workspace Status",
+		description:
+			"Orient in the persistent agent workspace: the bound objective, active claims with freshness (current/stale/unknown), open transactions, and the latest checkpoint. Brief projection by default; `full` returns the complete status record.",
+		promptSnippet: "Workspace orientation: objective, claim freshness, checkpoints.",
+		promptGuidelines: [
+			"Call workspace_status when resuming work or before acting on a workspace claim: a claim it reports as stale outranks your remembered belief about that claim.",
+		],
+		parameters: Type.Object({
+			full: Type.Optional(
+				Type.Boolean({
+					description:
+						"Return the full status projection instead of the brief one (default false).",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			const command = params.full ? ["status", "--full"] : ["status"];
+			return runKernel(ctx.cwd, command, signal);
+		},
+	});
+
+	pi.registerTool({
+		name: "workspace_delta",
+		label: "Workspace Delta",
+		description:
+			"What changed in the agent workspace since the last checkpoint: objective shifts, claims recorded/superseded/staled, new observations and transactions. The concise resume surface to consult right after workspace_status.",
+		promptSnippet: "Workspace resume surface: changes since the last checkpoint.",
+		promptGuidelines: [
+			"Call workspace_delta right after workspace_status when resuming: it shows only what changed since the checkpoint, instead of the full projection.",
+		],
+		parameters: Type.Object({
+			since: Type.Optional(
+				Type.String({
+					description: "Diff against this checkpoint label instead of the latest checkpoint.",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			const command = params.since ? ["delta", "--since", params.since] : ["delta"];
+			return runKernel(ctx.cwd, command, signal);
+		},
 	});
 }
