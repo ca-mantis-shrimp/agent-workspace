@@ -1,7 +1,8 @@
 use agent_workspace::{
     Claim, ClaimInputSource, ClaimLifecycle, DeltaStatus, Evidence, FreshnessWithinScope,
-    Objective, Observation, ObservationCapture, ObservationSelector, RevealedObservation,
-    ScopeCompleteness, ScopeSource, Transaction, TransactionState, WorkspaceStatus,
+    Normalizer, Objective, Observation, ObservationCapture, ObservationSelector,
+    RevealedObservation, ScopeCompleteness, ScopeSource, Transaction, TransactionState,
+    WorkspaceStatus,
 };
 use serde_json::Value;
 use std::fs;
@@ -2078,10 +2079,11 @@ fn concurrent_writers_serialize_without_corrupting_the_log() {
     invoke(&["status", "--repository", &repo, "--workspace", &ws]);
 }
 
-/// Normalized fingerprinting: an observation captured with `--normalize rustfmt`
-/// fingerprints the formatter-canonical form, so a pure reformat (same meaning,
-/// different bytes) stays `current` while a real semantic edit still stales.
-/// The default (byte) path is unchanged — a reformat stales it, as any edit does.
+/// Normalized fingerprinting: a `.rs` observation captured with `--normalize
+/// rustfmt` fingerprints the formatter-canonical form, so a pure reformat
+/// (same meaning, different bytes) stays `current` while a real semantic edit
+/// still stales. The explicit `--normalize none` escape hatch keeps byte-exact
+/// behavior — a reformat stales it, as any edit does.
 #[test]
 fn rustfmt_normalized_observation_ignores_reformat_but_catches_semantics() {
     let fixture =
@@ -2106,6 +2108,7 @@ fn rustfmt_normalized_observation_ignores_reformat_but_catches_semantics() {
         .stdout,
     )
     .unwrap();
+    // Byte-exact observation via the escape hatch, for contrast.
     let byte: Observation = serde_json::from_slice(
         &invoke(&[
             "observe",
@@ -2115,6 +2118,8 @@ fn rustfmt_normalized_observation_ignores_reformat_but_catches_semantics() {
             &ws,
             "--path",
             "src/task.rs",
+            "--normalize",
+            "none",
         ])
         .stdout,
     )
@@ -2167,6 +2172,210 @@ fn rustfmt_normalized_observation_ignores_reformat_but_catches_semantics() {
         reconcile(&normalized_id),
         FreshnessWithinScope::Stale,
         "a semantic edit must still stale a normalized observation"
+    );
+}
+
+/// The `auto` default: `observe` with no `--normalize` flag resolves the
+/// normalizer from the path extension — rustfmt for recognized Rust source,
+/// raw bytes for unrecognized types — and persists the *resolved* scheme on
+/// the record, so reconcile semantics never depend on resolution order.
+#[test]
+fn auto_normalizer_detects_rustfmt_for_rust_and_none_otherwise() {
+    let fixture = GitFixture::with_files(&[
+        ("src/task.rs", "pub fn f() -> i32 { 1 }\n"),
+        ("docs/notes.md", "# notes\n"),
+    ]);
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    let observe = |path: &str| -> Observation {
+        serde_json::from_slice(
+            &invoke(&[
+                "observe",
+                "--repository",
+                &repo,
+                "--workspace",
+                &ws,
+                "--path",
+                path,
+            ])
+            .stdout,
+        )
+        .unwrap()
+    };
+
+    let rust = observe("src/task.rs");
+    assert_eq!(rust.normalizer, Normalizer::Rustfmt);
+    assert!(
+        rust.observed_raw_fingerprint.is_some(),
+        "a normalized record must carry the raw fingerprint for the reconcile fast path"
+    );
+
+    let markdown = observe("docs/notes.md");
+    assert_eq!(markdown.normalizer, Normalizer::None);
+    assert_eq!(
+        markdown.observed_raw_fingerprint, None,
+        "a byte-mode record needs no separate raw fingerprint"
+    );
+}
+
+/// Reconcile fast path: while the raw bytes are unchanged, reconcile must not
+/// need the formatter at all. Proven black-box by reconciling under a PATH
+/// that has git (which the CLI still needs) but no rustfmt: without the fast
+/// path the missing formatter would fall back to raw bytes and false-stale
+/// this deliberately non-canonical file.
+#[test]
+fn reconcile_fast_path_skips_formatter_when_bytes_unchanged() {
+    let fixture = GitFixture::with_task_source("pub fn f() -> i32 { let x = 1; x }\n");
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    let observed: Observation = serde_json::from_slice(
+        &invoke(&[
+            "observe",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--path",
+            "src/task.rs",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(observed.normalizer, Normalizer::Rustfmt);
+
+    // Build a PATH containing git but not rustfmt.
+    let bin_dir = fixture.root.path().join("bin");
+    fs::create_dir(&bin_dir).unwrap();
+    let git_path = std::env::var_os("PATH")
+        .and_then(|paths| {
+            std::env::split_paths(&paths).find_map(|dir| {
+                let candidate = dir.join("git");
+                candidate.is_file().then_some(candidate)
+            })
+        })
+        .expect("git must be on PATH for this test");
+    std::os::unix::fs::symlink(git_path, bin_dir.join("git")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agent-workspace"))
+        .args([
+            "reconcile",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--id",
+            &observed.id.to_string(),
+        ])
+        .env("PATH", &bin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "reconcile failed without rustfmt on PATH: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let reconciled: Observation = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        reconciled.report.freshness_within_scope,
+        FreshnessWithinScope::Current,
+        "unchanged raw bytes must stay current without invoking the formatter"
+    );
+}
+
+/// Claim dependencies auto-detect the normalizer kernel-side: a dependency on
+/// Rust source fingerprints the canonical form, so reformatting the dependency
+/// leaves the claim current while a semantic edit stales it.
+#[test]
+fn claim_dependency_auto_detects_normalizer() {
+    let fixture = GitFixture::with_files(&[
+        ("src/lib.rs", "pub fn foo() -> i32 { 1 }\n"),
+        ("src/task.rs", "pub fn f() -> i32 { let x = 1; x }\n"),
+    ]);
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    let observed: Observation = serde_json::from_slice(
+        &invoke(&[
+            "observe",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--path",
+            "src/lib.rs",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let claim: Claim = serde_json::from_slice(
+        &invoke(&[
+            "claim",
+            "--repository",
+            &repo,
+            "--workspace",
+            &ws,
+            "--statement",
+            "dependency normalization test",
+            "--observation",
+            &observed.id.to_string(),
+            "--dependency",
+            "src/task.rs",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let dependency = claim
+        .inputs
+        .iter()
+        .find(|input| input.path == Path::new("src/task.rs"))
+        .expect("the declared dependency must be a claim input");
+    assert_eq!(dependency.normalizer, Normalizer::Rustfmt);
+    assert!(dependency.recorded_raw_fingerprint.is_some());
+
+    let reconcile_claim = || -> FreshnessWithinScope {
+        let claim: Claim = serde_json::from_slice(
+            &invoke(&[
+                "reconcile-claim",
+                "--repository",
+                &repo,
+                "--workspace",
+                &ws,
+                "--id",
+                &claim.id.to_string(),
+            ])
+            .stdout,
+        )
+        .unwrap();
+        claim.report.freshness_within_scope
+    };
+
+    // A pure reformat of the dependency leaves the claim current.
+    fs::write(
+        fixture.repository.join("src/task.rs"),
+        "pub fn f() -> i32 {\n    let x = 1;\n    x\n}\n",
+    )
+    .unwrap();
+    assert_eq!(
+        reconcile_claim(),
+        FreshnessWithinScope::Current,
+        "a reformatted dependency must not stale the claim under auto-detection"
+    );
+
+    // A semantic edit of the dependency stales the claim.
+    fs::write(
+        fixture.repository.join("src/task.rs"),
+        "pub fn f() -> i32 {\n    let x = 2;\n    x\n}\n",
+    )
+    .unwrap();
+    assert_eq!(
+        reconcile_claim(),
+        FreshnessWithinScope::Stale,
+        "a semantic dependency edit must still stale the claim"
     );
 }
 

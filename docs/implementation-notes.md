@@ -501,3 +501,54 @@ checkpoint notion to diff against.
   than today's byte baseline, and pinning rustfmt (`rust-toolchain.toml`) would
   close it. (3) The normalizer is not folded into the reconciliation-fingerprint
   material (the unit fingerprint already encodes the normalized content).
+
+## 2026-09-01 — Auto-normalize default (semantic freshness, second slice)
+
+Inverts the normalizer default per the run-6 forward guidance: the adoption gap
+is now closed — a plain `observe` of recognized source gets canonical
+fingerprinting with no flag to remember.
+
+- **`auto` is the default; records persist the *resolved* scheme.**
+  `--normalize` accepts `auto` (default), `none`, `rustfmt`. `auto` resolves
+  at capture time via `Normalizer::detect_for_path` (extension-based: `.rs` →
+  `Rustfmt`, else `None`) and the concrete normalizer is what lands on the
+  record — reconcile never re-resolves, so a future extension to the detection
+  table cannot change an existing record's meaning. `none` is the explicit
+  raw-byte escape hatch.
+- **Dependencies auto-detect kernel-side.** `record_claim_with_scope` routes
+  declared and conservative-sibling dependencies through
+  `fingerprint_dependency` (detect + fingerprint) instead of hardcoded
+  byte-mode. The escape hatch for a byte-exact dependency: capture it as a
+  supporting observation with `--normalize none` and cite the observation.
+- **Raw-byte fast path.** `Observation` and `ClaimInput` carry an optional
+  raw-unit fingerprint (recorded only when the normalizer makes it distinct
+  from the input fingerprint). `read_observation_fingerprints` hashes the raw
+  unit first and skips the formatter subprocess entirely when bytes match —
+  a deterministic normalizer maps identical bytes to an identical canonical
+  form, so the unchanged case (the overwhelmingly common one in `status`)
+  pays one read + one SHA-256, no subprocess. Records without the field
+  (all pre-slice records, all `None` records) simply never fast-path.
+- **No fingerprint-scheme version bump — deliberately.** Run-6 suggested a
+  bump for the one-time migration; it is unnecessary because records are
+  self-describing (each carries its own normalizer and optional raw
+  fingerprint) and the default change affects only *new* records. Old logs
+  replay byte-identically through `#[serde(default)]`, and old claims keep
+  their byte semantics forever. A global bump would have invalidated honest
+  byte-mode history for no gain.
+- **Proof.** Three new tests: `auto_normalizer_detects_rustfmt_for_rust_and
+  _none_otherwise` (resolution + persisted scheme + raw-fingerprint presence),
+  `reconcile_fast_path_skips_formatter_when_bytes_unchanged` (reconcile under
+  a PATH without rustfmt stays `current` on a non-canonical file — without the
+  fast path the fallback-to-raw would false-stale it), and
+  `claim_dependency_auto_detects_normalizer` (reformatted dependency stays
+  `current`, semantic edit stales). The pre-existing rustfmt test's
+  byte-contrast arm now passes `--normalize none` explicitly — the one honest
+  test edit the inversion required. 29 tests green, fmt/clippy clean.
+- **Residuals.** (1) Detection is extension-only — a `.rs` extension on
+  non-Rust content gets rustfmt attempted and falls back to raw bytes, honest
+  degradation. (2) Byte-range units on recognized types pay the subprocess on
+  every *changed-container* reconcile even when the range itself is unchanged,
+  because the raw fingerprint covers the unit only — acceptable; range
+  observations are rare. (3) `assess_claim_inputs` still re-reads every input
+  on every status (materialization efficiency remains the open kernel item;
+  the fast path removes the subprocess tax, not the I/O tax).

@@ -66,11 +66,16 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 .path
                 .ok_or_else(|| CliError::Usage("observe requires --path".to_owned()))?;
             let provider = options.provider.unwrap_or_else(|| "filesystem".to_owned());
+            // `auto` (the default) resolves to a concrete normalizer here, at
+            // capture time; the record persists the resolved scheme.
+            let normalizer = options
+                .normalizer
+                .unwrap_or_else(|| Normalizer::detect_for_path(&path));
             print_json(&workspace.capture_file_observation(
                 path,
                 provider,
                 options.selector.unwrap_or_default(),
-                options.normalizer,
+                normalizer,
                 options.retain_payload,
             )?)?;
         }
@@ -199,7 +204,8 @@ struct Options {
     reason: Option<String>,
     contents: Option<String>,
     selector: Option<ObservationSelector>,
-    normalizer: Normalizer,
+    /// `None` is the `auto` default: resolve per path at dispatch.
+    normalizer: Option<Normalizer>,
     retain_payload: bool,
     label: Option<String>,
     note: Option<String>,
@@ -228,7 +234,7 @@ impl Options {
         let mut reason = None;
         let mut contents = None;
         let mut selector = None;
-        let mut normalizer = Normalizer::None;
+        let mut normalizer = None;
         let mut retain_payload = false;
         let mut label = None;
         let mut note = None;
@@ -277,8 +283,9 @@ impl Options {
                 "--range" => selector = Some(parse_byte_range(value)?),
                 "--normalize" => {
                     normalizer = match value.as_str() {
-                        "none" => Normalizer::None,
-                        "rustfmt" => Normalizer::Rustfmt,
+                        "auto" => None,
+                        "none" => Some(Normalizer::None),
+                        "rustfmt" => Some(Normalizer::Rustfmt),
                         _ => {
                             return Err(CliError::Usage(format!("invalid normalizer: {value}")));
                         }

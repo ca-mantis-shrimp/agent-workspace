@@ -151,13 +151,18 @@ pub enum ObservationSelector {
     },
 }
 
-/// How an observed unit's bytes are canonicalized before fingerprinting. The
-/// default (`None`) fingerprints raw bytes — any change, cosmetic or not, is a
+/// How an observed unit's bytes are canonicalized before fingerprinting.
+/// `None`) fingerprints raw bytes — any change, cosmetic or not, is a
 /// change. A formatter normalizer fingerprints the *canonical* form instead, so
 /// a pure reformat (same meaning, different bytes) is not seen as a change while
 /// a real edit still is. Because the normalizer rides beside the selector on
 /// both observations and claim inputs, record-time and reconcile-time
-/// fingerprints are computed the same way and stay comparable.
+/// fingerprints are computed the same way and stay comparable. The serde
+/// default stays `None` so records written before normalizers existed (or via
+/// the `--normalize none` escape hatch) keep their byte-exact meaning; fresh
+/// captures resolve the CLI's `auto` default through
+/// [`Normalizer::detect_for_path`] and persist the *concrete* normalizer, so
+/// reconcile always applies the scheme the record was written with.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Normalizer {
@@ -167,6 +172,26 @@ pub enum Normalizer {
     /// rustfmt is absent or the unit does not parse (e.g. a mid-edit file, or a
     /// byte-range fragment that is not a standalone item).
     Rustfmt,
+}
+
+impl Normalizer {
+    /// The normalizer a fresh capture uses for `path` when the caller did not
+    /// pick one explicitly (the CLI's `auto` default, and the kernel's default
+    /// for claim dependencies). Recognized source types get their canonical
+    /// formatter; everything else fingerprints raw bytes. Recognition is by
+    /// extension only — cheap, deterministic, and honest about not detecting
+    /// anything deeper.
+    pub fn detect_for_path(path: &Path) -> Self {
+        match path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("rs") => Self::Rustfmt,
+            _ => Self::None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -180,6 +205,15 @@ pub struct Observation {
     #[serde(default)]
     pub normalizer: Normalizer,
     pub observed_input_fingerprint: String,
+    /// Fingerprint of the unit's *raw* bytes, recorded whenever the normalizer
+    /// makes it differ in meaning from `observed_input_fingerprint`. Reconcile
+    /// compares raw bytes first and skips the formatter subprocess when they
+    /// match — a deterministic normalizer maps identical bytes to an identical
+    /// canonical form. Absent on old records (and on `None` records, where the
+    /// input fingerprint already is the raw one); absence simply never
+    /// fast-paths.
+    #[serde(default)]
+    pub observed_raw_fingerprint: Option<String>,
     #[serde(default)]
     pub observed_container_fingerprint: String,
     #[serde(default)]
@@ -223,6 +257,10 @@ pub struct ClaimInput {
     #[serde(default)]
     pub normalizer: Normalizer,
     pub recorded_input_fingerprint: String,
+    /// Raw-unit fingerprint at record time; enables the same reconcile fast
+    /// path as `Observation::observed_raw_fingerprint`.
+    #[serde(default)]
+    pub recorded_raw_fingerprint: Option<String>,
     pub source: ClaimInputSource,
 }
 
@@ -410,6 +448,8 @@ enum Event {
         #[serde(default)]
         normalizer: Normalizer,
         input_fingerprint: String,
+        #[serde(default)]
+        raw_fingerprint: Option<String>,
         #[serde(default)]
         container_fingerprint: Option<String>,
         #[serde(default)]
@@ -749,6 +789,10 @@ impl Workspace {
             WorkspaceError::InvalidObservation("selected source is not valid UTF-8".to_owned())
         })?;
         let input_fingerprint = hex_digest(&normalize_unit(unit, normalizer));
+        // Record the raw unit fingerprint whenever the normalizer makes it
+        // distinct in meaning from the input fingerprint, so reconcile can
+        // skip the formatter subprocess while the bytes are unchanged.
+        let raw_fingerprint = (normalizer != Normalizer::None).then(|| hex_digest(unit));
         let container_fingerprint = hex_digest(&container);
         let native_payload_reference = if retain_native_payload {
             if container.len() > MAX_RETAINED_PAYLOAD_BYTES {
@@ -782,6 +826,7 @@ impl Workspace {
             selector,
             normalizer,
             input_fingerprint,
+            raw_fingerprint,
             container_fingerprint: Some(container_fingerprint),
             native_payload_reference,
             ingested_bytes,
@@ -872,6 +917,8 @@ impl Workspace {
             &observation.path,
             &observation.selector,
             observation.normalizer,
+            observation.observed_raw_fingerprint.as_deref(),
+            &observation.observed_input_fingerprint,
         );
         let (current_unit, current_container) = current
             .as_ref()
@@ -985,34 +1032,39 @@ impl Workspace {
                     selector: observation.selector.clone(),
                     normalizer: observation.normalizer,
                     recorded_input_fingerprint: observation.observed_input_fingerprint.clone(),
+                    recorded_raw_fingerprint: observation.observed_raw_fingerprint.clone(),
                     source: ClaimInputSource::SupportingObservation,
                 },
             );
         }
         for dependency in declared_dependencies {
             let path = validate_relative_path(dependency)?;
-            let input_fingerprint = fingerprint_repository_file(&self.repository_root, &path)?;
+            let (normalizer, input_fingerprint, raw_fingerprint) =
+                fingerprint_dependency(&self.repository_root, &path)?;
             inputs
                 .entry((path.clone(), ObservationSelector::WholeFile))
                 .or_insert(ClaimInput {
                     path,
                     selector: ObservationSelector::WholeFile,
-                    normalizer: Normalizer::None,
+                    normalizer,
                     recorded_input_fingerprint: input_fingerprint,
+                    recorded_raw_fingerprint: raw_fingerprint,
                     source: ClaimInputSource::DeclaredDependency,
                 });
         }
         if scope_strategy == ClaimScopeStrategy::ConservativeSiblingFiles {
             for path in conservative_sibling_dependencies(&self.repository_root, &supporting_paths)?
             {
-                let input_fingerprint = fingerprint_repository_file(&self.repository_root, &path)?;
+                let (normalizer, input_fingerprint, raw_fingerprint) =
+                    fingerprint_dependency(&self.repository_root, &path)?;
                 inputs
                     .entry((path.clone(), ObservationSelector::WholeFile))
                     .or_insert(ClaimInput {
                         path,
                         selector: ObservationSelector::WholeFile,
-                        normalizer: Normalizer::None,
+                        normalizer,
                         recorded_input_fingerprint: input_fingerprint,
+                        recorded_raw_fingerprint: raw_fingerprint,
                         source: ClaimInputSource::ConservativeDependency,
                     });
             }
@@ -1610,6 +1662,7 @@ impl Projection {
                 selector,
                 normalizer,
                 input_fingerprint,
+                raw_fingerprint,
                 container_fingerprint,
                 native_payload_reference,
                 ingested_bytes,
@@ -1630,6 +1683,7 @@ impl Projection {
                         observed_revision: git_revision,
                         selector: selector.clone(),
                         normalizer,
+                        observed_raw_fingerprint: raw_fingerprint,
                         observed_container_fingerprint: container_fingerprint
                             .unwrap_or_else(|| input_fingerprint.clone()),
                         observed_input_fingerprint: input_fingerprint,
@@ -2066,6 +2120,8 @@ fn assess_claim_inputs(repository_root: &Path, inputs: &[ClaimInput]) -> ClaimAs
             &input.path,
             &input.selector,
             input.normalizer,
+            input.recorded_raw_fingerprint.as_deref(),
+            &input.recorded_input_fingerprint,
         )
         .map(|(unit, _)| unit);
         match &current {
@@ -2107,11 +2163,19 @@ fn resolve_repository_file(
     Ok(resolved)
 }
 
-fn fingerprint_repository_file(
+/// Fingerprint a whole-file claim dependency, auto-detecting the canonical
+/// normalizer from the path (the kernel-side half of the `auto` default). The
+/// raw fingerprint is returned only when the normalizer makes it distinct in
+/// meaning from the input fingerprint, for the reconcile fast path.
+fn fingerprint_dependency(
     repository_root: &Path,
     relative_path: &Path,
-) -> Result<String, WorkspaceError> {
-    fingerprint_file(&resolve_repository_file(repository_root, relative_path)?)
+) -> Result<(Normalizer, String, Option<String>), WorkspaceError> {
+    let bytes = fs::read(resolve_repository_file(repository_root, relative_path)?)?;
+    let normalizer = Normalizer::detect_for_path(relative_path);
+    let input_fingerprint = hex_digest(&normalize_unit(&bytes, normalizer));
+    let raw_fingerprint = (normalizer != Normalizer::None).then(|| hex_digest(&bytes));
+    Ok((normalizer, input_fingerprint, raw_fingerprint))
 }
 
 fn select_observation_unit<'a>(
@@ -2145,13 +2209,21 @@ fn read_observation_fingerprints(
     path: &Path,
     selector: &ObservationSelector,
     normalizer: Normalizer,
+    recorded_raw_fingerprint: Option<&str>,
+    recorded_input_fingerprint: &str,
 ) -> Result<(String, String), WorkspaceError> {
     let container = fs::read(resolve_repository_file(repository_root, path)?)?;
     let unit = select_observation_unit(&container, selector)?;
-    Ok((
-        hex_digest(&normalize_unit(unit, normalizer)),
-        hex_digest(&container),
-    ))
+    // Fast path: unchanged raw bytes imply an unchanged canonical form (the
+    // normalizer is deterministic), so the recorded input fingerprint still
+    // stands and no formatter subprocess is needed. Records without a raw
+    // fingerprint — everything written before this existed, and every `None`
+    // record — simply never fast-path.
+    let unit_fingerprint = match recorded_raw_fingerprint {
+        Some(raw) if raw == hex_digest(unit) => recorded_input_fingerprint.to_owned(),
+        _ => hex_digest(&normalize_unit(unit, normalizer)),
+    };
+    Ok((unit_fingerprint, hex_digest(&container)))
 }
 
 /// Canonicalize an observed unit before fingerprinting. `None` returns the bytes
