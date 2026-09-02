@@ -2136,8 +2136,17 @@ fn single_pass_status_reads_the_event_log_a_constant_number_of_times() {
             &observation.id.to_string(),
         ]);
     }
-    // Settle so the measured status is a pure no-op (nothing left to append).
-    invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    // Settle with the exhaustive audit path so the measured status is a pure
+    // no-op (nothing left to append). The default bounded status intentionally
+    // reconciles only the claims it serves.
+    invoke(&[
+        "status",
+        "--full",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+    ]);
 
     // Drive resume_status in-process over the settled, unchanged workspace and
     // read the diagnostic counter. Single-pass reads the log exactly once
@@ -3102,6 +3111,303 @@ fn working_set_view_hard_bounds_each_section_with_explicit_omissions() {
     assert_eq!(view["uncited_omitted"].as_u64().unwrap(), 1);
     assert_eq!(view["trail"].as_array().unwrap().len(), 16);
     assert_eq!(view["trail_omitted"].as_u64().unwrap(), 1);
+}
+
+#[test]
+fn brief_status_recomputes_active_claims_without_retired_history() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap();
+    let ws = workspace.to_str().unwrap();
+
+    let helper_observation: Observation = serde_json::from_slice(
+        &invoke(&[
+            "observe",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--path",
+            "src/helper.rs",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let lib_observation: Observation = serde_json::from_slice(
+        &invoke(&[
+            "observe",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--path",
+            "src/lib.rs",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let active: Claim = serde_json::from_slice(
+        &invoke(&[
+            "claim",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--statement",
+            "helper returns one",
+            "--observation",
+            &helper_observation.id.to_string(),
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let retire: Claim = serde_json::from_slice(
+        &invoke(&[
+            "claim",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--statement",
+            "foo returns one",
+            "--observation",
+            &lib_observation.id.to_string(),
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let successor: Claim = serde_json::from_slice(
+        &invoke(&[
+            "claim",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--statement",
+            "foo returns one after review",
+            "--observation",
+            &lib_observation.id.to_string(),
+        ])
+        .stdout,
+    )
+    .unwrap();
+    invoke(&[
+        "supersede-claim",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--id",
+        &retire.id.to_string(),
+        "--claim",
+        &successor.id.to_string(),
+        "--reason",
+        "consumed by review",
+    ]);
+    let log_before: usize = fs::read_to_string(workspace.join("events.jsonl"))
+        .unwrap()
+        .lines()
+        .count();
+
+    // Edit only the ACTIVE claim's input. The superseded claim's input is
+    // untouched, so if the bounded path reconciled retired history it would be
+    // visible as a no-op-differing event; if it skipped the active claim, the
+    // staleness below would never appear.
+    fs::write(
+        fixture.repository.join("src/helper.rs"),
+        "pub fn helper() -> i32 { 2 }\n",
+    )
+    .unwrap();
+
+    let status = invoke(&["status", "--repository", repo, "--workspace", ws]);
+    let brief: Value = serde_json::from_slice(&status.stdout).unwrap();
+    let claims = brief["claims"].as_array().unwrap();
+    let freshness_of = |id: u64| {
+        claims
+            .iter()
+            .find(|claim| claim["id"].as_u64() == Some(id))
+            .map(|claim| claim["freshness"].clone())
+            .unwrap_or_else(|| serde_json::json!("absent"))
+    };
+    // F9 on the bounded path: the active claim's staleness was recomputed.
+    assert_eq!(freshness_of(active.id), "stale");
+    assert_eq!(freshness_of(successor.id), "current");
+    // Retired history is not part of the served surface.
+    assert_eq!(freshness_of(retire.id), "absent");
+    assert_eq!(brief["counts"]["freshness"]["stale"], 1);
+    assert_eq!(brief["counts"]["freshness"]["current"], 1);
+
+    // Exactly one claim reconcile event was appended: for the active claim.
+    // The superseded claim was never reconciled by the bounded status.
+    let records: Vec<Value> = fs::read_to_string(workspace.join("events.jsonl"))
+        .unwrap()
+        .lines()
+        .skip(log_before)
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let reconciled: Vec<u64> = records
+        .iter()
+        .filter(|record| record["event"]["type"] == "claim_reconciled")
+        .map(|record| record["event"]["claim_id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(reconciled, vec![active.id]);
+}
+
+#[test]
+fn working_set_reserves_newest_current_focus_under_a_stale_cap() {
+    let files: Vec<(String, String)> = (0..14)
+        .map(|i| (format!("src/g{i:02}.rs"), format!("pub fn g{i}() {{}}\n")))
+        .collect();
+    let file_refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, body)| (path.as_str(), body.as_str()))
+        .collect();
+    let fixture = GitFixture::with_files(&file_refs);
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap();
+    let ws = workspace.to_str().unwrap();
+
+    let observe = |path: &str| -> Observation {
+        serde_json::from_slice(
+            &invoke(&[
+                "observe",
+                "--repository",
+                repo,
+                "--workspace",
+                ws,
+                "--path",
+                path,
+            ])
+            .stdout,
+        )
+        .unwrap()
+    };
+    let focus = |id: u64| {
+        invoke(&[
+            "focus",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--observation",
+            &id.to_string(),
+            "--reason",
+            "stale-cap fixture",
+        ]);
+    };
+
+    let mut ids: Vec<u64> = (0..13)
+        .map(|i| observe(&format!("src/g{i:02}.rs")).id)
+        .collect();
+    for &id in &ids {
+        focus(id);
+    }
+    // Stale all 13 focused locations out of band.
+    for i in 0..13 {
+        let path = fixture.repository.join(format!("src/g{i:02}.rs"));
+        fs::write(&path, format!("pub fn g{i}() {{ 1 }}\n")).unwrap();
+    }
+    // Focus one fresh, still-current location — the newest attention.
+    let fresh = observe("src/g13.rs");
+    focus(fresh.id);
+    ids.push(fresh.id);
+
+    let view: Value = serde_json::from_slice(
+        &invoke(&["working-set", "--repository", repo, "--workspace", ws]).stdout,
+    )
+    .unwrap();
+    let locations = view["locations"].as_array().unwrap();
+    assert_eq!(locations.len(), 12);
+    // Two stale entries fall past the cap.
+    assert_eq!(view["locations_omitted"].as_u64().unwrap(), 2);
+    // The newest current focus survived the cap despite ranking last.
+    assert!(
+        locations
+            .iter()
+            .any(|location| location["observation_id"].as_u64() == Some(fresh.id))
+    );
+    let fresh_row = locations
+        .iter()
+        .find(|location| location["observation_id"].as_u64() == Some(fresh.id))
+        .unwrap();
+    assert_eq!(fresh_row["freshness"], "current");
+}
+
+#[test]
+fn bounded_working_set_omits_unverified_uncited_candidates() {
+    let files: Vec<(String, String)> = (0..26)
+        .map(|i| (format!("src/h{i:02}.rs"), format!("pub fn h{i}() {{}}\n")))
+        .collect();
+    let file_refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, body)| (path.as_str(), body.as_str()))
+        .collect();
+    let fixture = GitFixture::with_files(&file_refs);
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap();
+    let ws = workspace.to_str().unwrap();
+
+    let ids: Vec<u64> = (0..26)
+        .map(|i| {
+            serde_json::from_slice::<Observation>(
+                &invoke(&[
+                    "observe",
+                    "--repository",
+                    repo,
+                    "--workspace",
+                    ws,
+                    "--path",
+                    &format!("src/h{i:02}.rs"),
+                ])
+                .stdout,
+            )
+            .unwrap()
+            .id
+        })
+        .collect();
+
+    let working_set = || -> Value {
+        serde_json::from_slice(
+            &invoke(&["working-set", "--repository", repo, "--workspace", ws]).stdout,
+        )
+        .unwrap()
+    };
+
+    // 26 uncited current observations: the 12 newest are served, the rest are
+    // outside the bounded candidate window and counted as omitted.
+    let view = working_set();
+    let uncited = view["uncited"].as_array().unwrap();
+    assert_eq!(uncited.len(), 12);
+    assert_eq!(view["uncited_omitted"].as_u64().unwrap(), 14);
+    let served_ids: Vec<u64> = uncited
+        .iter()
+        .map(|entry| entry["observation_id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(
+        served_ids,
+        ids[14..26].iter().rev().copied().collect::<Vec<_>>()
+    );
+
+    // Stale the newest candidate. It becomes a known non-candidate inside the
+    // window: excluded from serving but no longer counted as omitted.
+    fs::write(
+        fixture.repository.join("src/h25.rs"),
+        "pub fn h25() { 1 }\n",
+    )
+    .unwrap();
+    let view = working_set();
+    let uncited = view["uncited"].as_array().unwrap();
+    assert_eq!(uncited.len(), 12);
+    assert_eq!(view["uncited_omitted"].as_u64().unwrap(), 13);
+    let served_ids: Vec<u64> = uncited
+        .iter()
+        .map(|entry| entry["observation_id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(
+        served_ids,
+        ids[13..25].iter().rev().copied().collect::<Vec<_>>()
+    );
+    assert!(!served_ids.contains(&ids[25]));
 }
 
 #[test]

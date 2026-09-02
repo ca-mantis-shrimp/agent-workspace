@@ -57,16 +57,14 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
             )?;
         }
         "status" => {
-            let status = workspace.resume_status()?;
             if options.full {
-                print_selected_json(&status, options.compact)?;
+                print_selected_json(&workspace.resume_status()?, options.compact)?;
             } else {
-                print_selected_json(&status.brief(), options.compact)?;
+                print_selected_json(&workspace.resume_brief_status()?, options.compact)?;
             }
         }
         "working-set" => {
-            let status = workspace.resume_status()?;
-            print_selected_json(&status.working_set_view(), options.compact)?;
+            print_selected_json(&workspace.resume_working_set_view()?, options.compact)?;
         }
         "checkpoint" => {
             let label = options
@@ -75,11 +73,16 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
             print_json(&workspace.checkpoint(label, options.note)?)?;
         }
         "delta" => {
-            let delta = workspace.delta_since(options.since.as_deref())?;
             if options.full {
-                print_selected_json(&delta, options.compact)?;
+                print_selected_json(
+                    &workspace.delta_since(options.since.as_deref())?,
+                    options.compact,
+                )?;
             } else {
-                print_selected_json(&delta.brief(), options.compact)?;
+                print_selected_json(
+                    &workspace.delta_brief_since(options.since.as_deref())?,
+                    options.compact,
+                )?;
             }
         }
         "observe" => {
@@ -207,8 +210,7 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
             print_json(&workspace.dispose_finding(finding_id, disposition)?)?;
         }
         "findings" => {
-            let status = workspace.resume_status()?;
-            print_selected_json(&status.findings_view(), options.compact)?;
+            print_selected_json(&workspace.resume_findings_view()?, options.compact)?;
         }
         "reconcile" => {
             let id = options
@@ -274,8 +276,7 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 CliError::Usage("preview-transaction requires --transaction".to_owned())
             })?;
             let preview = workspace
-                .resume_status()?
-                .transaction_preview(transaction_id)
+                .resume_transaction_preview(transaction_id)?
                 .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
             print_selected_json(&preview, options.compact)?;
         }

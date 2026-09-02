@@ -933,3 +933,47 @@ directory and returned `EISDIR`.
   claim/evidence readiness still allowed acceptance because candidate mutation
   bytes are not re-verified. That work is tracked by the
   `candidate-state-evidence` action, not folded into this symlink fix.
+
+## 2026-09-02 — Bounded orientation and working-set curation
+
+Closes the `orientation-hardening` action. The dogfood measurements (6.1–6.5 s
+compact status; a syscall trace with 281 `git rev-parse` and 114 rustfmt
+attempts) showed the default surfaces were bounded in *output* but not in
+*work*: they reconciled every observation, claim, evidence, and finding —
+including 53 superseded claims and hundreds of retired observations — to serve
+projections that only present active state.
+
+- **Selective reconciliation by served surface.** `resume_brief_status`
+  reconciles only active claims; `delta_brief_since` only active claims (lifecycle
+  transitions and ids are replay facts, so superseded-claim deltas need no
+  freshness verdict); `resume_findings_view` only open findings;
+  `resume_transaction_preview` exactly the claims, evidence, and findings one
+  preview exposes; `resume_working_set_view` focused observations plus a bounded
+  recent uncited-candidate window (24 newest ids). The exhaustive paths
+  (`resume_status`, `delta_since`) are unchanged and remain the audit defaults
+  behind `--full` and `checkpoint`.
+- **F9 is preserved by construction.** Every verdict a bounded surface emits is
+  recomputed from current inputs before serialization; nothing outside that set
+  is emitted at all. The new test proves both directions in one fixture: an edit
+  under an active claim surfaces as `stale` through the bounded path, while the
+  event log shows exactly one `claim_reconciled` — the retired claim beside it
+  was never touched. `uncited_omitted` in bounded mode counts outside-window
+  observations as omitted because their stored verdicts are inherited and
+  cannot be served without reconciling them; inside-window stale observations
+  are known non-candidates and are excluded without inflating the count.
+- **Working-set curation.** When stale history fills the 12-location cap, the
+  last slot is reserved for the newest current focus, so active attention can
+  no longer be crowded out by invalidated entries (the omitted stale entries
+  stay counted in `locations_omitted`). Uncited candidates are now served
+  newest-first, matching the window they come from.
+- **Measured on the live workspace** (6,669+ events, 198 observations, 53
+  claims): status 6.1–6.5 s → 0.29–0.69 s; delta 6.8 s → 0.33 s; working-set
+  → 0.56 s. The exhaustive audit path now costs 11.6 s and is strictly
+  opt-in (`--full`). The remaining cost is one full log replay per invocation
+  plus bounded reconciliation; snapshot/tail-replay materialization is the
+  next lever if interactive budgets tighten further.
+- **Coverage.** 48 Rust tests (three new: bounded-status F9 + retired-history
+  skip with event-log proof, current-focus reservation under a stale cap,
+  unverified-candidate omission), strict fmt/clippy, 7 Pi tests + typecheck.
+  The single-pass log-reads test now settles through `status --full`, since
+  the default bounded status intentionally no longer settles retired state.

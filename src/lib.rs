@@ -753,6 +753,13 @@ impl WorkspaceStatus {
     /// observation's stored freshness and coordinates and touches neither the
     /// log nor the worktree, exactly like [`WorkspaceStatus::brief`].
     pub fn working_set_view(&self) -> WorkingSetView {
+        self.working_set_view_with_uncited_candidates(None)
+    }
+
+    fn working_set_view_with_uncited_candidates(
+        &self,
+        uncited_candidate_ids: Option<&BTreeSet<u64>>,
+    ) -> WorkingSetView {
         let observations: BTreeMap<u64, &Observation> =
             self.observations.iter().map(|o| (o.id, o)).collect();
 
@@ -782,24 +789,61 @@ impl WorkspaceStatus {
             )
         });
         let locations_omitted = located.len().saturating_sub(WORKING_SET_LOCATION_LIMIT);
-        located.truncate(WORKING_SET_LOCATION_LIMIT);
+        if located.len() > WORKING_SET_LOCATION_LIMIT {
+            // Stale attention remains first, but it must not crowd the active
+            // location out of the bounded view. Reserve the final slot for the
+            // newest current focus when stale history fills the cap.
+            let newest_current = located
+                .iter()
+                .filter(|location| location.freshness == FreshnessWithinScope::Current)
+                .max_by_key(|location| location.focus_sequence)
+                .cloned();
+            located.truncate(WORKING_SET_LOCATION_LIMIT);
+            if let Some(newest_current) = newest_current
+                && !located
+                    .iter()
+                    .any(|location| location.observation_id == newest_current.observation_id)
+            {
+                located[WORKING_SET_LOCATION_LIMIT - 1] = newest_current;
+            }
+        }
 
         // Uncited candidates: current observations no active claim supports and
-        // that are not already focused. Stable by id so the surface is
-        // deterministic across runs.
+        // that are not already focused. Bounded orientation may supply a recent
+        // candidate window; full audit projections consider every observation.
         let cited: BTreeSet<u64> = self
             .claims
             .iter()
             .flat_map(|claim| claim.supporting_observation_ids.iter().copied())
             .collect();
         let focused: BTreeSet<u64> = self.working_set.iter().map(|e| e.observation_id).collect();
-        let mut uncited: Vec<UncitedObservation> = self
-            .observations
+        let is_uncited = |observation: &&Observation| {
+            !cited.contains(&observation.id) && !focused.contains(&observation.id)
+        };
+        let uncited_candidate_count = self.observations.iter().filter(is_uncited).count();
+        // Split candidates into the served window and everything outside it.
+        // Outside-window observations are not reconciled in bounded orientation,
+        // so their stored verdict is inherited and cannot be served (F9): they
+        // count as omitted candidates. Inside-window stale observations are
+        // known non-candidates and are excluded without counting as omitted.
+        let (window_candidates, outside_window_count): (Vec<&Observation>, usize) =
+            match uncited_candidate_ids {
+                Some(candidates) => {
+                    let in_window: Vec<&Observation> = self
+                        .observations
+                        .iter()
+                        .filter(is_uncited)
+                        .filter(|observation| candidates.contains(&observation.id))
+                        .collect();
+                    let outside = uncited_candidate_count - in_window.len();
+                    (in_window, outside)
+                }
+                None => (self.observations.iter().filter(is_uncited).collect(), 0),
+            };
+        let mut uncited: Vec<UncitedObservation> = window_candidates
             .iter()
             .filter(|observation| {
                 observation.report.freshness_within_scope == FreshnessWithinScope::Current
-                    && !cited.contains(&observation.id)
-                    && !focused.contains(&observation.id)
             })
             .map(|observation| UncitedObservation {
                 observation_id: observation.id,
@@ -807,8 +851,16 @@ impl WorkspaceStatus {
                 selector: observation.selector.clone(),
             })
             .collect();
-        let uncited_omitted = uncited.len().saturating_sub(WORKING_SET_UNCITED_LIMIT);
+        uncited.sort_by_key(|observation| Reverse(observation.observation_id));
         uncited.truncate(WORKING_SET_UNCITED_LIMIT);
+        let served = uncited.len();
+        let current_candidates = window_candidates
+            .iter()
+            .filter(|observation| {
+                observation.report.freshness_within_scope == FreshnessWithinScope::Current
+            })
+            .count();
+        let uncited_omitted = outside_window_count + current_candidates.saturating_sub(served);
 
         // Trail: most recent focus first, bounded to the recent window.
         let trail_omitted = self
@@ -848,6 +900,7 @@ fn freshness_rank(freshness: &FreshnessWithinScope) -> u8 {
 /// explicit omission count so truncation is always visible.
 const WORKING_SET_LOCATION_LIMIT: usize = 12;
 const WORKING_SET_UNCITED_LIMIT: usize = 12;
+const WORKING_SET_UNCITED_CANDIDATE_LIMIT: usize = 24;
 const WORKING_SET_TRAIL_LIMIT: usize = 16;
 
 /// One open finding as a scannable queue row: enough to triage (severity, rule,
@@ -1441,14 +1494,8 @@ impl Workspace {
     }
 
     pub fn resume_status(&self) -> Result<WorkspaceStatus, WorkspaceError> {
-        // Single-pass reconciliation: project the log ONCE, then recompute every
-        // entity's verdict against that snapshot plus the live worktree. Each
-        // entity reconciles from its own stored fields and its own file alone —
-        // never from another entity's reconcile event — so one projection backs
-        // all verdicts. This replaces the former O(entities × log-length) replay
-        // (a `project()` inside every per-entity reconcile) with a single read.
-        // F9 is intact: verdicts are still recomputed here, every time; only the
-        // *write* is suppressed when a verdict is unchanged.
+        // The full audit path deliberately reconciles every entity. Bounded
+        // orientation methods below reconcile only the verdicts they serve.
         let projection = self.project()?;
         let mut pending = Vec::new();
         for observation in projection.observations.values() {
@@ -1463,25 +1510,128 @@ impl Workspace {
         for finding in projection.findings.values() {
             pending.extend(self.finding_reconcile_event(finding)?);
         }
+        let projection = self.apply_reconciliations(projection, pending)?;
+        Ok(Self::status_from_projection(projection))
+    }
 
-        // Touch the log only when a verdict actually changed. On the unchanged
-        // path (the common one) nothing is appended and the snapshot already is
-        // the state a re-projection would return, so we reuse it — zero extra
-        // reads. When verdicts changed, re-project once to fold them in.
-        let projection = if pending.is_empty() {
-            projection
-        } else {
-            for event in pending {
-                self.append(event)?;
+    /// Reconcile only active claims because those are the only freshness
+    /// verdicts the bounded status serves. Counts and lifecycle state are pure
+    /// replay facts. Full audit status remains exhaustive via [`resume_status`].
+    pub fn resume_brief_status(&self) -> Result<BriefStatus, WorkspaceError> {
+        let projection = self.project()?;
+        let mut pending = Vec::new();
+        for claim in projection
+            .claims
+            .values()
+            .filter(|claim| claim.lifecycle.is_active())
+        {
+            pending.extend(self.claim_reconcile_event(claim)?);
+        }
+        let projection = self.apply_reconciliations(projection, pending)?;
+        Ok(Self::status_from_projection(projection).brief())
+    }
+
+    /// Reconcile focused observations plus a bounded recent uncited-candidate
+    /// window. The resulting view never serves an inherited freshness verdict:
+    /// observations outside that bounded window are counted as omitted.
+    pub fn resume_working_set_view(&self) -> Result<WorkingSetView, WorkspaceError> {
+        let projection = self.project()?;
+        let focused: BTreeSet<u64> = projection.working_set.keys().copied().collect();
+        let cited: BTreeSet<u64> = projection
+            .claims
+            .values()
+            .filter(|claim| claim.lifecycle.is_active())
+            .flat_map(|claim| claim.supporting_observation_ids.iter().copied())
+            .collect();
+        let uncited_candidates: BTreeSet<u64> = projection
+            .observations
+            .keys()
+            .rev()
+            .filter(|id| !focused.contains(id) && !cited.contains(id))
+            .take(WORKING_SET_UNCITED_CANDIDATE_LIMIT)
+            .copied()
+            .collect();
+        let reconcile_ids: BTreeSet<u64> = focused.union(&uncited_candidates).copied().collect();
+        let mut pending = Vec::new();
+        for observation_id in reconcile_ids {
+            if let Some(observation) = projection.observations.get(&observation_id) {
+                pending.extend(self.observation_reconcile_event(observation)?);
             }
-            self.project()?
-        };
+        }
+        let projection = self.apply_reconciliations(projection, pending)?;
+        Ok(Self::status_from_projection(projection)
+            .working_set_view_with_uncited_candidates(Some(&uncited_candidates)))
+    }
 
+    /// Reconcile only open findings: disposed findings are audit history and do
+    /// not appear in the quickfix-like queue.
+    pub fn resume_findings_view(&self) -> Result<FindingsView, WorkspaceError> {
+        let projection = self.project()?;
+        let mut pending = Vec::new();
+        for finding in projection
+            .findings
+            .values()
+            .filter(|finding| finding.disposition.is_open())
+        {
+            pending.extend(self.finding_reconcile_event(finding)?);
+        }
+        let projection = self.apply_reconciliations(projection, pending)?;
+        Ok(Self::status_from_projection(projection).findings_view())
+    }
+
+    /// Reconcile exactly the claims, evidence, and associated findings exposed
+    /// by one transaction preview.
+    pub fn resume_transaction_preview(
+        &self,
+        transaction_id: u64,
+    ) -> Result<Option<TransactionPreview>, WorkspaceError> {
+        let projection = self.project()?;
+        let Some(transaction) = projection.transactions.get(&transaction_id) else {
+            return Ok(None);
+        };
+        let claim_ids = transaction.acceptance_claim_ids.clone();
+        let evidence_ids = transaction.evidence_ids.clone();
+        let finding_ids = transaction.finding_ids.clone();
+        let mut pending = Vec::new();
+        for claim_id in claim_ids {
+            if let Some(claim) = projection.claims.get(&claim_id) {
+                pending.extend(self.claim_reconcile_event(claim)?);
+            }
+        }
+        for evidence_id in evidence_ids {
+            if let Some(evidence) = projection.evidence.get(&evidence_id) {
+                pending.extend(self.evidence_reconcile_event(evidence)?);
+            }
+        }
+        for finding_id in finding_ids {
+            if let Some(finding) = projection.findings.get(&finding_id) {
+                pending.extend(self.finding_reconcile_event(finding)?);
+            }
+        }
+        let projection = self.apply_reconciliations(projection, pending)?;
+        Ok(Self::status_from_projection(projection).transaction_preview(transaction_id))
+    }
+
+    fn apply_reconciliations(
+        &self,
+        projection: Projection,
+        pending: Vec<Event>,
+    ) -> Result<Projection, WorkspaceError> {
+        if pending.is_empty() {
+            return Ok(projection);
+        }
+        for event in pending {
+            self.append(event)?;
+        }
+        self.project()
+    }
+
+    fn status_from_projection(projection: Projection) -> WorkspaceStatus {
         let (claims, superseded_claims) = projection
             .claims
             .into_values()
             .partition(|claim| claim.lifecycle.is_active());
-        Ok(WorkspaceStatus {
+        WorkspaceStatus {
             objective: projection.objective,
             working_set: projection.working_set.into_values().collect(),
             navigation_trail: projection.navigation_trail,
@@ -1492,7 +1642,7 @@ impl Workspace {
             findings: projection.findings.into_values().collect(),
             transactions: projection.transactions.into_values().collect(),
             checkpoints: projection.checkpoints,
-        })
+        }
     }
 
     /// Recompute an observation's freshness verdict from the live worktree and
@@ -1654,6 +1804,120 @@ impl Workspace {
     /// Project what changed since a checkpoint. With `label`, diffs against that
     /// checkpoint; without one, diffs against the most recent checkpoint — the
     /// ergonomic cold-resume default of "what changed since I last drew a line."
+    /// Bounded resume delta. Only active claims have freshness in this surface,
+    /// so only those claims are reconciled; IDs, lifecycle transitions, and
+    /// counts are derived directly from replayed events.
+    pub fn delta_brief_since(
+        &self,
+        label: Option<&str>,
+    ) -> Result<BriefDeltaStatus, WorkspaceError> {
+        let current = self.project()?;
+        let mut pending = Vec::new();
+        for claim in current
+            .claims
+            .values()
+            .filter(|claim| claim.lifecycle.is_active())
+        {
+            pending.extend(self.claim_reconcile_event(claim)?);
+        }
+        let current = self.apply_reconciliations(current, pending)?;
+        let checkpoint = match label {
+            Some(label) => current
+                .checkpoints
+                .iter()
+                .find(|marker| marker.label == label)
+                .cloned()
+                .ok_or_else(|| WorkspaceError::CheckpointNotFound(label.to_owned()))?,
+            None => current
+                .checkpoints
+                .last()
+                .cloned()
+                .ok_or_else(|| WorkspaceError::CheckpointNotFound("<latest>".to_owned()))?,
+        };
+        let baseline = self.project_upto(Some(checkpoint.sequence))?;
+
+        let objective_change =
+            (baseline.objective != current.objective).then(|| BriefObjectiveChange {
+                before: baseline
+                    .objective
+                    .as_ref()
+                    .map(|objective| claim_headline(&objective.intent, BRIEF_OBJECTIVE_MAX_CHARS)),
+                after: current
+                    .objective
+                    .as_ref()
+                    .map(|objective| claim_headline(&objective.intent, BRIEF_OBJECTIVE_MAX_CHARS)),
+            });
+        let active_claims = current
+            .claims
+            .values()
+            .filter(|claim| claim.lifecycle.is_active());
+        let claims_recorded = BriefIdSet::from_ids(
+            active_claims
+                .clone()
+                .filter(|claim| !baseline.claims.contains_key(&claim.id))
+                .map(|claim| claim.id),
+        );
+        let claims_staled = BriefIdSet::from_ids(
+            active_claims
+                .filter(|claim| {
+                    baseline.claims.get(&claim.id).is_some_and(|before| {
+                        before.lifecycle.is_active()
+                            && before.report.freshness_within_scope == FreshnessWithinScope::Current
+                            && claim.report.freshness_within_scope == FreshnessWithinScope::Stale
+                    })
+                })
+                .map(|claim| claim.id),
+        );
+        let claims_superseded = BriefIdSet::from_ids(
+            current
+                .claims
+                .values()
+                .filter(|claim| !claim.lifecycle.is_active())
+                .filter(|claim| {
+                    baseline
+                        .claims
+                        .get(&claim.id)
+                        .is_some_and(|before| before.lifecycle.is_active())
+                })
+                .map(|claim| claim.id),
+        );
+        let observations_recorded = BriefIdSet::from_ids(
+            current
+                .observations
+                .keys()
+                .filter(|id| !baseline.observations.contains_key(id))
+                .copied(),
+        );
+        let mut transactions_opened = Vec::new();
+        let mut transactions_closed = Vec::new();
+        for transaction in current.transactions.values() {
+            match baseline.transactions.get(&transaction.id) {
+                None => transactions_opened.push(transaction.id),
+                Some(before)
+                    if before.state == TransactionState::Open
+                        && transaction.state != TransactionState::Open =>
+                {
+                    transactions_closed.push(transaction.id);
+                }
+                Some(_) => {}
+            }
+        }
+
+        Ok(BriefDeltaStatus {
+            checkpoint: BriefCheckpoint {
+                label: checkpoint.label,
+                sequence: checkpoint.sequence,
+            },
+            objective_change,
+            claims_recorded,
+            claims_superseded,
+            claims_staled,
+            observations_recorded,
+            transactions_opened: BriefIdSet::from_ids(transactions_opened),
+            transactions_closed: BriefIdSet::from_ids(transactions_closed),
+        })
+    }
+
     pub fn delta_since(&self, label: Option<&str>) -> Result<DeltaStatus, WorkspaceError> {
         let checkpoints = self.project()?.checkpoints;
         let checkpoint = match label {
