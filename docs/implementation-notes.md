@@ -176,8 +176,9 @@ revised when later scenarios expose a better boundary.
 - The acceptance fixture invokes every operation as a separate process, then
   resumes twice and receives equal status projections. This proves recovery from
   durable records rather than in-memory state or chat history.
-- Reconciliation currently appends events on every status request, even when
-  verdicts do not change. Compaction, no-op event suppression, and materialized
+- Reconciliation appends a reconcile event only when the recomputed verdict
+  differs from the last persisted one (no-op suppression, 2026-09-01); verdicts
+  are always recomputed on every status request. Compaction and materialized
   checkpoints remain kernel work; the append-only log is still authoritative.
 - This is restart coherence, not yet a useful orientation experience. Manual
   dogfooding should begin once checkpointing and the S6 transaction boundary can
@@ -373,5 +374,45 @@ checkpoint notion to diff against.
 - **Still open after this slice.** A checkpoint records the objective but there is
   no explicit "objective completed" disposition distinct from "replaced"; the
   delta reports objective *change* structurally, not intent. Focus/working-set
-  retirement and semantic (formatting-only) drift classification remain separate,
-  as does no-op event suppression.
+  retirement and semantic (formatting-only) drift classification remain separate;
+  no-op event suppression landed later the same day (see below).
+
+## 2026-09-01 — No-op reconcile event suppression
+
+- **`status` no longer re-emits unchanged verdicts.** Each of the three
+  reconcile seams (`reconcile_observation`, `reconcile_claim`,
+  `reconcile_evidence`) computes its `(freshness, reason,
+  reconciliation_fingerprint)` verdict exactly as before, then compares it to
+  the verdict already persisted in the item's report. An event is appended only
+  when any of the three differ; otherwise the stored item is returned as-is.
+  All other report fields (scope assurance, mediated paths/units) are set only
+  by record events and never touched by `*Reconciled` events, so an unchanged
+  verdict proves the stored item equals what re-projection would return —
+  the no-op path skips a redundant re-projection as well.
+- **The F9 guard is preserved by construction.** Suppression conditions only the
+  *persistence* of a verdict, never its computation: every status still reads
+  current inputs and recomputes every freshness. The test
+  `suppressed_status_still_recomputes_and_emits_changed_verdicts` proves an
+  out-of-band edit after a fully suppressed status is still detected, persisted,
+  and reported stale.
+- **One-time normalization per observation.** `ObservationRecorded` seeds the
+  report reason "supporting input recorded"; the first reconcile after recording
+  changes it to "supporting input unchanged" (or the drift verdict) and appends
+  once. Claims and evidence are recorded through the same `assess_claim_inputs`
+  reconciliation uses, so their first reconcile can already be a no-op. This
+  keeps "recorded, never reconciled" distinguishable from "reconciled" in the
+  durable record at the cost of exactly one event per observation, once.
+- **Measured on the live dogfood workspace:** after landing, one status over
+  genuinely changed inputs appended the 24 verdict changes my edits caused; the
+  next status appended zero (previously every status re-emitted every verdict —
+  the log had reached ~970 events, most of them redundant reconciliations).
+- **No contract scenario was added.** Suppression is an efficiency property
+  that leaves every F1–F9 scenario's observable semantics unchanged; it is
+  proven by walking-skeleton tests
+  (`status_suppresses_redundant_reconcile_events`,
+  `suppressed_status_still_recomputes_and_emits_changed_verdicts`), the same
+  precedent as checkpoint/delta.
+- **Still open after this slice.** Materialization efficiency (replay cost is
+  still linear in log length; suppression slows growth but does not shrink
+  replay) and writer locking (concurrent statuses still collide as `CorruptLog`)
+  remain the kernel action's open items.

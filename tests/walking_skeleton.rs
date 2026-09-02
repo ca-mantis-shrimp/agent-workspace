@@ -1804,6 +1804,183 @@ fn delta_without_any_checkpoint_fails_clearly() {
     assert!(String::from_utf8_lossy(&failure.stderr).contains("not found"));
 }
 
+#[test]
+fn status_suppresses_redundant_reconcile_events() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+    let log_path = workspace.join("events.jsonl");
+    let log_len = || {
+        fs::read_to_string(&log_path)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count()
+    };
+
+    let out = invoke(&[
+        "observe",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&out.stdout).unwrap();
+    let out = invoke(&[
+        "claim",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--statement",
+        "foo returns one",
+        "--observation",
+        &observation.id.to_string(),
+    ]);
+    let claim: Claim = serde_json::from_slice(&out.stdout).unwrap();
+    let out = invoke(&[
+        "begin-transaction",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--claim",
+        &claim.id.to_string(),
+    ]);
+    let transaction: Transaction = serde_json::from_slice(&out.stdout).unwrap();
+    let out = invoke(&[
+        "evidence",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--transaction",
+        &transaction.id.to_string(),
+        "--claim",
+        &claim.id.to_string(),
+        "--check",
+        "fixture-check",
+        "--invocation",
+        "fixture check",
+        "--result",
+        "passed",
+    ]);
+    let _: Evidence = serde_json::from_slice(&out.stdout).unwrap();
+    let setup_len = log_len();
+
+    // First status: only the observation normalizes (record-time reason
+    // "supporting input recorded" -> "supporting input unchanged"). Claims and
+    // evidence are recorded with the same assessment reconciliation uses, so
+    // their reconciles are already no-ops.
+    let out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let first: WorkspaceStatus = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        first.observations[0].report.reason,
+        "supporting input unchanged"
+    );
+    assert_eq!(log_len(), setup_len + 1);
+
+    // Second status over unchanged inputs: nothing left to persist.
+    let out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let second: WorkspaceStatus = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(second, first);
+    assert_eq!(log_len(), setup_len + 1);
+
+    // A third status stays silent too: suppression is stable, not one-shot.
+    let out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let third: WorkspaceStatus = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(third, second);
+    assert_eq!(log_len(), setup_len + 1);
+}
+
+#[test]
+fn suppressed_status_still_recomputes_and_emits_changed_verdicts() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+    let log_path = workspace.join("events.jsonl");
+    let log_len = || {
+        fs::read_to_string(&log_path)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count()
+    };
+
+    let out = invoke(&[
+        "observe",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&out.stdout).unwrap();
+    let out = invoke(&[
+        "claim",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--statement",
+        "foo returns one",
+        "--observation",
+        &observation.id.to_string(),
+    ]);
+    let _: Claim = serde_json::from_slice(&out.stdout).unwrap();
+    // Silence first: prove the baseline is suppressed.
+    let out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let _: WorkspaceStatus = serde_json::from_slice(&out.stdout).unwrap();
+    let suppressed_len = log_len();
+    let out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let _: WorkspaceStatus = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(log_len(), suppressed_len);
+
+    // Suppression must not degrade into replay (F9): an out-of-band edit is
+    // still detected and persisted on the next status.
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 { 2 }\n",
+    )
+    .unwrap();
+    let out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let changed: WorkspaceStatus = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        changed.observations[0].report.freshness_within_scope,
+        FreshnessWithinScope::Stale
+    );
+    assert_eq!(
+        changed.claims[0].report.freshness_within_scope,
+        FreshnessWithinScope::Stale
+    );
+    assert_eq!(log_len(), suppressed_len + 2);
+    let records: Vec<Value> = fs::read_to_string(&log_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        records[records.len() - 1]["event"]["type"],
+        "claim_reconciled"
+    );
+    assert_eq!(
+        records[records.len() - 2]["event"]["type"],
+        "observation_reconciled"
+    );
+
+    // The changed verdicts are persisted, so the following status is silent
+    // again — and reports the stale verdicts it just recomputed.
+    let out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let resettle: WorkspaceStatus = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(resettle, changed);
+    assert_eq!(log_len(), suppressed_len + 2);
+}
+
 fn claim_ids(claims: &[Claim]) -> Vec<u64> {
     claims.iter().map(|claim| claim.id).collect()
 }

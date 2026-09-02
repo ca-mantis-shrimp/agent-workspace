@@ -873,6 +873,21 @@ impl Workspace {
             ),
         };
 
+        // No-op suppression: the verdict above was recomputed from current
+        // inputs (F9 guard); persisting it again is required only when it
+        // differs from the last persisted verdict. On the unchanged path the
+        // stored observation is already exactly what re-projection would
+        // return — every other report field is static between reconciles —
+        // so it can be returned without re-projecting the log.
+        if verdict_unchanged(
+            &observation.report,
+            &freshness,
+            &reason,
+            &reconciliation_fingerprint,
+        ) {
+            return Ok(observation.clone());
+        }
+
         self.append(Event::ObservationReconciled {
             observation_id,
             freshness,
@@ -998,6 +1013,16 @@ impl Workspace {
             assess_claim_inputs(&self.repository_root, &claim.inputs);
         let reconciliation_fingerprint =
             scoped_reconciliation_fingerprint(&self.repository_root, &fingerprint_inputs)?;
+        // No-op suppression, as in `reconcile_observation`: the verdict is
+        // always recomputed; only an unchanged verdict is not re-emitted.
+        if verdict_unchanged(
+            &claim.report,
+            &freshness,
+            &reason,
+            &reconciliation_fingerprint,
+        ) {
+            return Ok(claim.clone());
+        }
         self.append(Event::ClaimReconciled {
             claim_id,
             freshness,
@@ -1172,15 +1197,24 @@ impl Workspace {
             .ok_or(WorkspaceError::EvidenceNotFound(evidence_id))?;
         let (freshness, reason, fingerprint_inputs) =
             assess_claim_inputs(&self.repository_root, &evidence.inputs);
+        let reconciliation_fingerprint =
+            scoped_reconciliation_fingerprint(&self.repository_root, &fingerprint_inputs)?;
+        // No-op suppression, as in `reconcile_observation`.
+        if verdict_unchanged(
+            &evidence.report,
+            &freshness,
+            &reason,
+            &reconciliation_fingerprint,
+        ) {
+            return Ok(evidence.clone());
+        }
         self.append(Event::EvidenceReconciled {
             evidence_id,
             freshness,
             reason,
-            reconciliation_fingerprint: scoped_reconciliation_fingerprint(
-                &self.repository_root,
-                &fingerprint_inputs,
-            )?,
+            reconciliation_fingerprint,
         })?;
+
         self.project()?
             .evidence
             .remove(&evidence_id)
@@ -1942,6 +1976,24 @@ fn conservative_sibling_dependencies(
         }
     }
     Ok(dependencies.into_iter().collect())
+}
+
+/// A reconciliation is a no-op when the recomputed verdict is identical to the
+/// last persisted one. Suppression is the only sanctioned status optimization
+/// (see the F9 guard): the verdict is always recomputed from current inputs;
+/// only the redundant re-emission of an unchanged verdict is skipped. All other
+/// report fields are static between reconciles — they are set by record events
+/// and never touched by `*Reconciled` events — so an unchanged verdict means
+/// the stored item already equals what re-projection would return.
+fn verdict_unchanged(
+    report: &FreshnessReport,
+    freshness: &FreshnessWithinScope,
+    reason: &str,
+    reconciliation_fingerprint: &str,
+) -> bool {
+    report.freshness_within_scope == *freshness
+        && report.reason == reason
+        && report.operational_coverage.reconciliation_fingerprint == reconciliation_fingerprint
 }
 
 fn assess_claim_inputs(repository_root: &Path, inputs: &[ClaimInput]) -> ClaimAssessment {
