@@ -23,6 +23,12 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
     let options = Options::parse(rest)?;
     let workspace = Workspace::open(&options.repository, &options.workspace)?;
 
+    // Serialize every invocation against this workspace. Held until `run`
+    // returns, this exclusive lock wraps each command's full read-modify-write,
+    // so two concurrent processes can never interleave appends into a corrupt
+    // log or collide on an entity id.
+    let _lock = workspace.lock_exclusive()?;
+
     match command.as_str() {
         "bind-objective" => {
             print_json(&workspace.bind_objective(

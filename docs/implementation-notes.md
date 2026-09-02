@@ -422,3 +422,39 @@ checkpoint notion to diff against.
   still linear in log length; suppression slows growth but does not shrink
   replay) and writer locking (concurrent statuses still collide as `CorruptLog`)
   remain the kernel action's open items.
+
+## 2026-09-01 — Writer locking
+
+- **The race, precisely.** Every mutating command is a read-modify-write with
+  nothing held across it: it calls `project()` to compute a new entity id (e.g.
+  `next_observation_id`) and then `append()`, which independently re-reads
+  `next_sequence` before writing. Two concurrent CLI processes could therefore
+  write the *same* sequence (→ `CorruptLog` on replay, at the projection's
+  sequence check) or the *same* entity id (→ silent overwrite, no error at all).
+  This closes the writer-locking item left open by the no-op-suppression slice.
+- **Lock at the outermost boundary, not per method.** `resume_status` is itself
+  a writer — it reconciles, appending `*Reconciled` events — and calls other
+  mutating methods (`reconcile_*`), as do `supersede_claim` and
+  `accept_transaction`. Locking inside each method would self-deadlock (advisory
+  `flock` on a second fd in the same process blocks). So the lock is acquired
+  exactly once, in `main.rs::run()` right after `Workspace::open`, and held for
+  the whole command. `append()` stays lock-free.
+- **`std` file locking, no new dependency.** `Workspace::lock_exclusive` opens
+  `.agent-workspace/events.lock` (gitignored) and takes a blocking exclusive
+  advisory lock via `File::lock` (stable since Rust 1.89). The returned
+  `WorkspaceLock` guard releases on drop or process exit — a crashed holder
+  frees the lock, so there is no stale-lock hazard. Blocking means concurrent
+  invocations *serialize*; swapping to `File::try_lock` would instead *fail
+  loud* with a lock error, a one-line change if that policy is ever preferred.
+- **Test with teeth.** `concurrent_writers_serialize_without_corrupting_the_log`
+  fires 16 `observe` processes at one workspace simultaneously, then asserts the
+  log's sequences are exactly `0..=N` (contiguous, unique — catching a sequence
+  collision) and every observation id is distinct (catching a silent overwrite),
+  and that `status` replays without `CorruptLog`. Verified to fail without the
+  lock (6/6 runs, including `expected sequence 4, found 3`).
+- **Residuals.** The lock lives at the CLI boundary, so a library embedder that
+  drives `Workspace` methods directly must hold `lock_exclusive` around its own
+  mutation sequence. Pure-read commands (`delta`, `reveal`) also take the
+  exclusive lock, so all invocations fully serialize — simpler than a shared/
+  exclusive split and it also rules out torn reads, at the cost of some read
+  concurrency that does not matter for a local CLI.

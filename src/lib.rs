@@ -10,6 +10,7 @@ use std::process::Command;
 const EVENT_SCHEMA_VERSION: u32 = 2;
 const MINIMUM_EVENT_SCHEMA_VERSION: u32 = 1;
 const EVENT_LOG_NAME: &str = "events.jsonl";
+const LOCK_FILE_NAME: &str = "events.lock";
 const MAX_RETAINED_PAYLOAD_BYTES: usize = 1024 * 1024;
 type FingerprintInput = (PathBuf, ObservationSelector, Option<String>);
 type ClaimAssessment = (FreshnessWithinScope, String, Vec<FingerprintInput>);
@@ -474,6 +475,13 @@ enum Event {
 pub struct Workspace {
     repository_root: PathBuf,
     workspace_root: PathBuf,
+}
+
+/// RAII guard for the workspace's exclusive inter-process write lock. The lock
+/// is held for as long as this value lives and released the moment it is
+/// dropped (or the owning process exits). See [`Workspace::lock_exclusive`].
+pub struct WorkspaceLock {
+    _file: File,
 }
 
 impl Workspace {
@@ -1436,6 +1444,24 @@ impl Workspace {
 
     pub fn event_log_path(&self) -> PathBuf {
         self.workspace_root.join(EVENT_LOG_NAME)
+    }
+
+    /// Acquire the exclusive advisory lock that serializes all operations on
+    /// this workspace, blocking until it is available. Hold the returned guard
+    /// for the full duration of a command's read-modify-write: every mutating
+    /// op reads a projection to compute the next entity id and sequence, then
+    /// appends, and nothing may interleave between those steps or two processes
+    /// would collide on a sequence (corrupt log) or an entity id (silent
+    /// overwrite). The lock releases when the guard is dropped or the process
+    /// exits. Callers driving the library directly (rather than via the CLI)
+    /// must hold this around any sequence of mutations.
+    pub fn lock_exclusive(&self) -> Result<WorkspaceLock, WorkspaceError> {
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(self.workspace_root.join(LOCK_FILE_NAME))?;
+        file.lock()?;
+        Ok(WorkspaceLock { _file: file })
     }
 
     fn append(&self, event: Event) -> Result<(), WorkspaceError> {

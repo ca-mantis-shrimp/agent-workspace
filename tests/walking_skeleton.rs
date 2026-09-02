@@ -1981,6 +1981,103 @@ fn suppressed_status_still_recomputes_and_emits_changed_verdicts() {
     assert_eq!(log_len(), suppressed_len + 2);
 }
 
+/// Writer locking: many CLI processes hitting one workspace at once must
+/// serialize, never interleave appends into a corrupt log. Without the
+/// boundary lock this races two ways — a duplicate sequence (CorruptLog on
+/// replay) or a duplicate entity id (silent overwrite) — and both are caught
+/// below: the sequences must be exactly 0..=N contiguous and unique, and every
+/// observe must land a distinct observation id.
+#[test]
+fn concurrent_writers_serialize_without_corrupting_the_log() {
+    const WRITERS: usize = 16;
+
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    // One sequential event establishes the workspace (sequence 0).
+    invoke(&[
+        "bind-objective",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--intent",
+        "concurrency probe",
+    ]);
+
+    // Fire WRITERS observe commands at the same workspace simultaneously.
+    let outputs: Vec<Output> = (0..WRITERS)
+        .map(|_| {
+            let repo = repo.clone();
+            let ws = ws.clone();
+            std::thread::spawn(move || {
+                Command::new(env!("CARGO_BIN_EXE_agent-workspace"))
+                    .args([
+                        "observe",
+                        "--repository",
+                        &repo,
+                        "--workspace",
+                        &ws,
+                        "--path",
+                        "src/lib.rs",
+                    ])
+                    .output()
+                    .unwrap()
+            })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect();
+    for output in &outputs {
+        assert!(
+            output.status.success(),
+            "a concurrent observe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    // Sequences must be exactly {0, 1, .., WRITERS}: contiguous, no collisions.
+    let log = fs::read_to_string(workspace.join("events.jsonl")).unwrap();
+    let mut sequences: Vec<u64> = log
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap()["sequence"]
+                .as_u64()
+                .unwrap()
+        })
+        .collect();
+    let total = 1 + WRITERS as u64;
+    assert_eq!(sequences.len(), total as usize, "unexpected event count");
+    sequences.sort_unstable();
+    assert_eq!(
+        sequences,
+        (0..total).collect::<Vec<u64>>(),
+        "sequences must be contiguous and unique — a collision means a lost append"
+    );
+
+    // Every observe must land a distinct observation id (no silent overwrite).
+    let observation_ids: std::collections::BTreeSet<u64> = log
+        .lines()
+        .filter_map(|line| {
+            let record: Value = serde_json::from_str(line).unwrap();
+            let event = &record["event"];
+            (event["type"] == "observation_recorded")
+                .then(|| event["observation_id"].as_u64().unwrap())
+        })
+        .collect();
+    assert_eq!(
+        observation_ids.len(),
+        WRITERS,
+        "each concurrent observe must receive a distinct observation id"
+    );
+
+    // And the whole log still replays cleanly (no CorruptLog).
+    invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+}
+
 fn claim_ids(claims: &[Claim]) -> Vec<u64> {
     claims.iter().map(|claim| claim.id).collect()
 }
