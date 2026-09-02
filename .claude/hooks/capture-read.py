@@ -37,6 +37,8 @@ import re
 import subprocess
 import sys
 
+from workspace_runtime import runtime_for
+
 
 def main() -> None:
     event = json.load(sys.stdin)
@@ -169,25 +171,6 @@ _LINE_NUMBER = re.compile(r"^\s*\d+\t")
 
 def strip_line_number_chrome(text: str) -> str:
     return "\n".join(_LINE_NUMBER.sub("", line) for line in text.split("\n"))
-
-
-def runtime_for(cwd: str):
-    try:
-        top = subprocess.run(
-            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except Exception:
-        return None
-    if top.returncode != 0:
-        return None
-    root = top.stdout.strip()
-    binary = os.path.join(root, "target", "debug", "agent-workspace")
-    if not os.path.exists(binary):
-        return None
-    return root, binary, os.path.join(root, ".agent-workspace")
 
 
 def repository_relative(root: str, absolute_path: str):
