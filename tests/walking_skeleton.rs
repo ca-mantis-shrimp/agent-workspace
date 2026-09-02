@@ -2834,6 +2834,187 @@ fn append_raw_event(workspace: &Path, event: Value) {
     fs::write(event_log, contents).unwrap();
 }
 
+fn invoke_with_stdin(arguments: &[&str], stdin: &str) -> Output {
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agent-workspace"))
+        .args(arguments)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "command failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+/// `observe-read` on a whole-file read records a whole-file observation whose
+/// model-visible byte count equals the file's, without the adapter computing a
+/// byte range or fingerprint itself.
+#[test]
+fn observe_read_whole_file_records_whole_file_scope() {
+    let fixture = GitFixture::with_files(&[("src/notes.txt", "alpha\nβeta\n")]);
+    let workspace = fixture.root.path().join("workspace-state");
+    let visible = "alpha\nβeta\n";
+
+    let output = invoke_with_stdin(
+        &[
+            "observe-read",
+            "--repository",
+            fixture.repository.to_str().unwrap(),
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--path",
+            "src/notes.txt",
+            "--provider",
+            "claude-code.read",
+        ],
+        visible,
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["outcome"], "captured");
+    assert_eq!(value["selector"]["kind"], "whole_file");
+    assert_eq!(value["model_visible_bytes"], visible.len() as u64);
+    assert_eq!(value["content"], visible);
+}
+
+/// A bounded read (one-indexed lines) maps to the exact UTF-8 byte range, and
+/// the recorded content is the selected lines only. The adapter forwards the
+/// raw selected text — chrome already stripped — and the kernel matches it
+/// exactly; no harness presentation format lives in the kernel.
+#[test]
+fn observe_read_bounded_maps_lines_to_utf8_byte_range() {
+    let fixture = GitFixture::with_files(&[("src/example.txt", "zero\nαlpha\nbeta\ntail\n")]);
+    let workspace = fixture.root.path().join("workspace-state");
+    let selected = "αlpha\nbeta";
+
+    let output = invoke_with_stdin(
+        &[
+            "observe-read",
+            "--repository",
+            fixture.repository.to_str().unwrap(),
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--path",
+            "src/example.txt",
+            "--offset",
+            "2",
+            "--limit",
+            "2",
+        ],
+        selected,
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["outcome"], "captured");
+    assert_eq!(value["selector"]["kind"], "byte_range");
+    assert_eq!(value["selector"]["start"], "zero\n".len() as u64);
+    assert_eq!(value["selector"]["end"], "zero\nαlpha\nbeta".len() as u64);
+    assert_eq!(value["model_visible_bytes"], selected.len() as u64);
+    assert_eq!(value["content"], selected);
+}
+
+/// The kernel is harness-agnostic: it does not tolerate any harness's chrome.
+/// Un-stripped pagination-notice trailer that an earlier draft accepted now
+/// fails closed — stripping presentation is the adapter's job, not the kernel's.
+#[test]
+fn observe_read_rejects_unstripped_harness_chrome() {
+    let fixture = GitFixture::with_files(&[("src/example.txt", "zero\nαlpha\nbeta\ntail\n")]);
+    let workspace = fixture.root.path().join("workspace-state");
+    let with_chrome = "αlpha\nbeta\n\n[1 more lines in file. Use offset=4 to continue.]";
+
+    let output = invoke_with_stdin(
+        &[
+            "observe-read",
+            "--repository",
+            fixture.repository.to_str().unwrap(),
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--path",
+            "src/example.txt",
+            "--offset",
+            "2",
+            "--limit",
+            "2",
+        ],
+        with_chrome,
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["outcome"], "skipped");
+    assert_eq!(
+        value["reason"],
+        "model-visible read result does not match the current file selection"
+    );
+}
+
+/// The capture fails closed on every unsafe condition, surfacing an explicit
+/// skip reason instead of silently doing nothing: drift, truncation, a
+/// non-positive offset, and a sensitive path.
+#[test]
+fn observe_read_fails_closed_with_explicit_skip_reasons() {
+    let fixture =
+        GitFixture::with_files(&[("src/data.txt", "before\n"), ("src/.env", "SECRET=1\n")]);
+    let workspace = fixture.root.path().join("workspace-state");
+    let base = |extra: &[&str]| -> Vec<String> {
+        let mut arguments = vec![
+            "observe-read".to_owned(),
+            "--repository".to_owned(),
+            fixture.repository.to_str().unwrap().to_owned(),
+            "--workspace".to_owned(),
+            workspace.to_str().unwrap().to_owned(),
+        ];
+        arguments.extend(extra.iter().map(|&value| value.to_owned()));
+        arguments
+    };
+    let skip_reason = |arguments: &[String], stdin: &str| -> String {
+        let borrowed: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        let output = invoke_with_stdin(&borrowed, stdin);
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["outcome"], "skipped");
+        value["reason"].as_str().unwrap().to_owned()
+    };
+
+    assert_eq!(
+        skip_reason(&base(&["--path", "src/data.txt"]), "after\n"),
+        "model-visible read result does not match the current file selection"
+    );
+    assert_eq!(
+        skip_reason(
+            &base(&["--path", "src/data.txt", "--truncated"]),
+            "before\n"
+        ),
+        "native read result was byte/line truncated"
+    );
+    assert_eq!(
+        skip_reason(
+            &base(&["--path", "src/data.txt", "--offset", "0"]),
+            "before\n"
+        ),
+        "read offset is not a positive integer"
+    );
+    assert_eq!(
+        skip_reason(&base(&["--path", "src/.env"]), "SECRET=1\n"),
+        "path matches a sensitive-file pattern"
+    );
+
+    // A fail-closed capture records nothing: no observation event is appended.
+    let log = fs::read_to_string(workspace.join("events.jsonl")).unwrap_or_default();
+    assert!(
+        !log.contains("observation_recorded"),
+        "skipped reads must not append observation events: {log}"
+    );
+}
+
 fn invoke_failure(arguments: &[&str]) -> Output {
     let output = Command::new(env!("CARGO_BIN_EXE_agent-workspace"))
         .args(arguments)

@@ -244,6 +244,36 @@ pub struct ObservationCaptureOptions {
     pub expected_raw_fingerprint: Option<String>,
 }
 
+/// The read-tool-native inputs an adapter forwards for auto-capture. Adapters
+/// speak *lines* (the shape a coding agent's `read` tool exposes) and hold the
+/// exact text the harness put in front of the model; the kernel owns the
+/// translation into a byte-range observation. Keeping these raw means every
+/// adapter is a thin transport and the planning semantics live in one place.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadCaptureRequest {
+    /// One-indexed first line the native read returned. `None` reads from the top.
+    pub offset: Option<usize>,
+    /// Line count the native read returned. `None` runs through end of file.
+    pub limit: Option<usize>,
+    /// The raw selected text the model saw — the adapter must strip its harness's
+    /// chrome (line-number prefixes, pagination/truncation notices) first. The
+    /// kernel matches this exactly against the file and knows no presentation
+    /// format of its own.
+    pub model_visible_text: String,
+    /// Whether the harness reported the native read result as truncated.
+    pub truncated: bool,
+}
+
+/// The outcome of a read auto-capture. `Skipped` is deliberately a first-class
+/// value, not a silent no-op: an adapter can surface *why* a read was not
+/// captured (drift, truncation, sensitive path, binary file) instead of the
+/// capture vanishing without trace.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReadCaptureOutcome {
+    Captured(ObservationCapture),
+    Skipped { reason: String },
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RevealedObservation {
     pub observation_id: u64,
@@ -1150,6 +1180,64 @@ impl Workspace {
             observation,
             content,
         })
+    }
+
+    /// Plan and record an observation from a coding agent's `read` tool result.
+    ///
+    /// This is the kernel-owned counterpart to what adapters used to compute in
+    /// their own language: it maps the read's one-indexed line window onto a
+    /// UTF-8 byte range, verifies the model-visible text still matches the file
+    /// (fail-closed on drift), rejects truncated, binary, and sensitive reads,
+    /// and then delegates to [`capture_file_observation`] so fingerprinting and
+    /// persistence happen exactly once. Adapters forward raw read inputs and
+    /// stay thin transports; every capture decision lives here.
+    pub fn capture_read_observation(
+        &self,
+        path: impl AsRef<Path>,
+        provider: impl Into<String>,
+        request: ReadCaptureRequest,
+    ) -> Result<ReadCaptureOutcome, WorkspaceError> {
+        let path = validate_relative_path(path.as_ref())?;
+
+        if request.truncated {
+            return Ok(skip("native read result was byte/line truncated"));
+        }
+        if matches!(request.offset, Some(0)) {
+            return Ok(skip("read offset is not a positive integer"));
+        }
+        if matches!(request.limit, Some(0)) {
+            return Ok(skip("read limit is not a positive integer"));
+        }
+        if is_sensitive_repository_path(&path) {
+            return Ok(skip("path matches a sensitive-file pattern"));
+        }
+
+        let resolved_path = resolve_repository_file(&self.repository_root, &path)?;
+        let container = fs::read(resolved_path)?;
+        let file_text = match std::str::from_utf8(&container) {
+            Ok(text) => text,
+            Err(_) => return Ok(skip("file is not valid UTF-8")),
+        };
+
+        let plan = match plan_read_selection(
+            file_text,
+            request.offset,
+            request.limit,
+            &request.model_visible_text,
+        ) {
+            Ok(plan) => plan,
+            Err(reason) => return Ok(skip(reason)),
+        };
+
+        let options = ObservationCaptureOptions {
+            selector: plan.selector,
+            normalizer: Normalizer::detect_for_path(&path),
+            retain_native_payload: false,
+            model_visible_bytes: Some(request.model_visible_text.len()),
+            expected_raw_fingerprint: Some(plan.expected_raw_fingerprint),
+        };
+        let capture = self.capture_file_observation(path, provider, options)?;
+        Ok(ReadCaptureOutcome::Captured(capture))
     }
 
     pub fn reveal_observation(
@@ -2631,6 +2719,110 @@ fn git_bytes(repository_root: &Path, arguments: &[&str]) -> Result<Vec<u8>, Work
         ));
     }
     Ok(output.stdout)
+}
+
+/// A read-capture byte-window plan: the byte selector the observation records
+/// and the raw fingerprint of the selected unit, used to fail closed if the
+/// file drifts between the harness read and the kernel's own read.
+struct ReadSelectionPlan {
+    selector: ObservationSelector,
+    expected_raw_fingerprint: String,
+}
+
+/// Concise `ReadCaptureOutcome::Skipped` constructor for the capture guards.
+fn skip(reason: impl Into<String>) -> ReadCaptureOutcome {
+    ReadCaptureOutcome::Skipped {
+        reason: reason.into(),
+    }
+}
+
+/// Map a `read` tool's one-indexed line window onto a UTF-8 byte range and
+/// verify the model actually saw it. `file_text` is the current file; `offset`
+/// and `limit` are the read's line window (`None` = whole file); `visible` is
+/// the raw selected text the model saw. Returns the byte selector plus the
+/// selected unit's fingerprint, or a fail-closed skip reason.
+///
+/// The match is exact and the kernel is harness-agnostic by design: `visible`
+/// must be *only* the selected lines, with any harness chrome (line-number
+/// prefixes, pagination or truncation notices) already stripped by the adapter.
+/// The kernel knows no harness's presentation format; each adapter decodes its
+/// own back to raw text before forwarding.
+fn plan_read_selection(
+    file_text: &str,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    visible: &str,
+) -> Result<ReadSelectionPlan, &'static str> {
+    let lines: Vec<&str> = file_text.split('\n').collect();
+    let start_line = offset.unwrap_or(1) - 1;
+    if start_line >= lines.len() {
+        return Err("read starts beyond the current file");
+    }
+    let end_line = match limit {
+        Some(limit) => (start_line + limit).min(lines.len()),
+        None => lines.len(),
+    };
+    let selected = lines[start_line..end_line].join("\n");
+
+    // Fail closed unless the model saw exactly the current selected bytes. Any
+    // difference means the file drifted under the read (or the adapter forwarded
+    // un-stripped chrome, which is the adapter's bug to fix, not the kernel's).
+    if visible != selected {
+        return Err("model-visible read result does not match the current file selection");
+    }
+
+    // The prefix is every line before the window plus its terminating newline;
+    // its byte length is where the selected unit begins in the container.
+    let start = if start_line == 0 {
+        0
+    } else {
+        lines[..start_line].join("\n").len() + 1
+    };
+    let end = start + selected.len();
+    let whole_file = offset.is_none() && limit.is_none() && start == 0 && end == file_text.len();
+    let selector = if whole_file {
+        ObservationSelector::WholeFile
+    } else {
+        ObservationSelector::ByteRange { start, end }
+    };
+    Ok(ReadSelectionPlan {
+        selector,
+        expected_raw_fingerprint: hex_digest(selected.as_bytes()),
+    })
+}
+
+/// Whether a repository-relative path names a file auto-capture must never
+/// ingest — dotfiles and directories that conventionally hold secrets, and
+/// key/certificate extensions. Matching is per path component so a match is a
+/// whole segment (`secrets/…`, `credentials.json`), never a substring.
+fn is_sensitive_repository_path(path: &Path) -> bool {
+    const SENSITIVE_DIRECTORIES: [&str; 3] = [".ssh", ".aws", ".gnupg"];
+    const SENSITIVE_NAMES: [&str; 4] = ["secret", "secrets", "credential", "credentials"];
+    const SENSITIVE_EXTENSIONS: [&str; 4] = ["pem", "key", "p12", "pfx"];
+
+    let components: Vec<String> = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .map(|component| component.to_ascii_lowercase())
+        .collect();
+    for (index, component) in components.iter().enumerate() {
+        let is_directory = index + 1 < components.len();
+        if component == ".env" || component.starts_with(".env.") {
+            return true;
+        }
+        if is_directory && SENSITIVE_DIRECTORIES.contains(&component.as_str()) {
+            return true;
+        }
+        for name in SENSITIVE_NAMES {
+            if component == name || component.starts_with(&format!("{name}.")) {
+                return true;
+            }
+        }
+    }
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .is_some_and(|extension| SENSITIVE_EXTENSIONS.contains(&extension.as_str()))
 }
 
 fn is_sha256_hex(value: &str) -> bool {

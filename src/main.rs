@@ -1,9 +1,10 @@
 use agent_workspace::{
     ClaimScopeStrategy, EvidenceOutcome, Normalizer, ObservationCaptureOptions,
-    ObservationSelector, Workspace, WorkspaceError,
+    ObservationSelector, ReadCaptureOutcome, ReadCaptureRequest, Workspace, WorkspaceError,
 };
 use serde::Serialize;
 use std::env;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -90,6 +91,38 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                     expected_raw_fingerprint: options.expected_raw_fingerprint,
                 },
             )?)?;
+        }
+        "observe-read" => {
+            let path = options
+                .path
+                .ok_or_else(|| CliError::Usage("observe-read requires --path".to_owned()))?;
+            let provider = options.provider.unwrap_or_else(|| "read".to_owned());
+            // The model-visible text arrives on stdin: it is arbitrary multi-line
+            // content and belongs nowhere on a command line.
+            let mut model_visible_text = String::new();
+            std::io::stdin().read_to_string(&mut model_visible_text)?;
+            let outcome = workspace.capture_read_observation(
+                path,
+                provider,
+                ReadCaptureRequest {
+                    offset: options.offset,
+                    limit: options.limit,
+                    model_visible_text,
+                    truncated: options.truncated,
+                },
+            )?;
+            match outcome {
+                ReadCaptureOutcome::Captured(capture) => {
+                    let mut value = serde_json::to_value(&capture)?;
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert("outcome".to_owned(), serde_json::json!("captured"));
+                    }
+                    print_json(&value)?;
+                }
+                ReadCaptureOutcome::Skipped { reason } => {
+                    print_json(&serde_json::json!({ "outcome": "skipped", "reason": reason }))?;
+                }
+            }
         }
         "reveal" => {
             let observation_id = options
@@ -225,6 +258,9 @@ struct Options {
     note: Option<String>,
     since: Option<String>,
     full: bool,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    truncated: bool,
 }
 
 impl Options {
@@ -257,6 +293,9 @@ impl Options {
         let mut note = None;
         let mut since = None;
         let mut full = false;
+        let mut offset = None;
+        let mut limit = None;
+        let mut truncated = false;
         let mut index = 0;
 
         while index < arguments.len() {
@@ -265,6 +304,11 @@ impl Options {
             // value fetch so a trailing `--full` is not read as "missing value".
             if flag == "--full" {
                 full = true;
+                index += 1;
+                continue;
+            }
+            if flag == "--truncated" {
+                truncated = true;
                 index += 1;
                 continue;
             }
@@ -327,6 +371,19 @@ impl Options {
                     })?)
                 }
                 "--expected-raw-fingerprint" => expected_raw_fingerprint = Some(value.clone()),
+                "--offset" => {
+                    offset =
+                        Some(value.parse().map_err(|_| {
+                            CliError::Usage(format!("invalid read offset: {value}"))
+                        })?)
+                }
+                "--limit" => {
+                    limit = Some(
+                        value
+                            .parse()
+                            .map_err(|_| CliError::Usage(format!("invalid read limit: {value}")))?,
+                    )
+                }
                 "--result" => {
                     outcome = Some(match value.as_str() {
                         "passed" => EvidenceOutcome::Passed,
@@ -392,6 +449,9 @@ impl Options {
             note,
             since,
             full,
+            offset,
+            limit,
+            truncated,
         })
     }
 }
@@ -401,6 +461,7 @@ enum CliError {
     Usage(String),
     Workspace(WorkspaceError),
     Json(serde_json::Error),
+    Io(std::io::Error),
 }
 
 impl std::fmt::Display for CliError {
@@ -409,7 +470,14 @@ impl std::fmt::Display for CliError {
             Self::Usage(message) => write!(formatter, "{message}"),
             Self::Workspace(error) => error.fmt(formatter),
             Self::Json(error) => error.fmt(formatter),
+            Self::Io(error) => error.fmt(formatter),
         }
+    }
+}
+
+impl From<std::io::Error> for CliError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
     }
 }
 
