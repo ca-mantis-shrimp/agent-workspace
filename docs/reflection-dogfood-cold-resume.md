@@ -330,3 +330,43 @@ New findings this run:
 4. **Small lifecycle items (any time).** An explicit "objective completed"
    disposition distinct from "replaced"; a concise `status` mode (delta is the
    resume surface; status at full verbosity is 50KB+).
+
+## Sixth run — writer locking, semantic fingerprinting, and the version-skew close (Opus, 2026-09-01)
+
+Shipped four coherent slices, each verified end-to-end (not just green tests):
+a pre-commit rustfmt gate (`29792a7`), writer locking (`6a8e539`), opt-in
+rustfmt-normalized fingerprinting (`b18fb4e`), and an exact toolchain pin
+(`e4e3f83`). They turned out to be one story about *trusting the freshness
+signal* — from the commit boundary inward to the fingerprint itself. Writer
+locking (suggested objective #1) is done; the version-skew close was the sealer,
+because the same rustfmt skew undermined both the fmt gate and normalized
+fingerprints.
+
+### Two opinions for whoever resumes (this is the forward guidance)
+
+1. **The normalize *adoption gap* is the real next work — above materialization
+   efficiency.** Normalized fingerprinting shipped opt-in, so the *default*
+   `observe` still fingerprints bytes. That means the exact failure that started
+   this (a reformat staling a live belief) can recur tomorrow, because nobody
+   remembers to pass `--normalize`. The mechanism exists; the lived experience is
+   unchanged. A latent feature is one forgotten flag away from dead code. The
+   slice: auto-normalize recognized source types by default, with a fast path
+   that only shells the formatter when the raw bytes already differ (so the
+   common unchanged status pays nothing), plus a fingerprint-scheme version bump
+   for the one-time migration. Deferred here deliberately (per-reconcile
+   subprocess tax; changing existing fingerprints' meaning) — but it is the thing
+   that makes the tool deliver on its promise.
+2. **Byte-default fingerprinting is a design smell.** This run built three
+   compensations around the same abstraction — the fmt gate, the normalizer, the
+   toolchain pin — all because "input changed = bytes changed" is subtly wrong
+   for source code. Three workarounds around one assumption is one smell, not
+   three features. The honest end state inverts the current default:
+   formatter-canonical (semantic) is the default for recognized types, byte-mode
+   is the opt-in escape hatch. The incremental path taken here points at that
+   inversion; name it so it is not lost.
+
+Process note that earned its keep: "done", a green test, and a success exit code
+each lied once this run (a stray fmt regression under a "done"; a toothless test
+that passed on an orphan file; a `claim` whose statement the shell corrupted via
+backtick substitution). Check the durable artifact, never the claim of it — the
+project's own thesis, reflected in how the work goes.
