@@ -27,8 +27,10 @@ function readParameters(input: unknown): ReadParameters | undefined {
 	if (!input || typeof input !== "object") return undefined;
 	const value = input as { path?: unknown; offset?: unknown; limit?: unknown };
 	if (typeof value.path !== "string") return undefined;
-	if (value.offset !== undefined && typeof value.offset !== "number") return undefined;
-	if (value.limit !== undefined && typeof value.limit !== "number") return undefined;
+	if (value.offset !== undefined && typeof value.offset !== "number")
+		return undefined;
+	if (value.limit !== undefined && typeof value.limit !== "number")
+		return undefined;
 	return { path: value.path, offset: value.offset, limit: value.limit };
 }
 
@@ -57,10 +59,14 @@ export default function (pi: ExtensionAPI) {
 		signal?: AbortSignal,
 	): Promise<RepositoryRuntime | undefined> {
 		if (runtimes.has(cwd)) return runtimes.get(cwd) ?? undefined;
-		const git = await pi.exec("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
-			signal,
-			timeout: 5_000,
-		});
+		const git = await pi.exec(
+			"git",
+			["-C", cwd, "rev-parse", "--show-toplevel"],
+			{
+				signal,
+				timeout: 5_000,
+			},
+		);
 		if (git.code !== 0) {
 			runtimes.set(cwd, null);
 			return undefined;
@@ -88,7 +94,11 @@ export default function (pi: ExtensionAPI) {
 
 		const requested = resolve(cwd, parameters.path.replace(/^@/, ""));
 		const canonical = await realpath(requested);
-		const repositoryPath = repositoryRelativePath(runtime.root, runtime.root, canonical);
+		const repositoryPath = repositoryRelativePath(
+			runtime.root,
+			runtime.root,
+			canonical,
+		);
 		if (
 			!repositoryPath ||
 			repositoryPath.startsWith(".agent-workspace/") ||
@@ -124,10 +134,16 @@ export default function (pi: ExtensionAPI) {
 			decision.plan.expectedRawFingerprint,
 		];
 		if (decision.plan.byteRange) {
-			args.push("--range", `${decision.plan.byteRange.start}:${decision.plan.byteRange.end}`);
+			args.push(
+				"--range",
+				`${decision.plan.byteRange.start}:${decision.plan.byteRange.end}`,
+			);
 		}
 
-		const captured = await pi.exec(runtime.binary, args, { signal, timeout: 10_000 });
+		const captured = await pi.exec(runtime.binary, args, {
+			signal,
+			timeout: 10_000,
+		});
 		if (captured.code !== 0) return;
 	}
 
@@ -149,9 +165,9 @@ export default function (pi: ExtensionAPI) {
 		for (const [toolCallId, parameters] of [...pendingReads]) {
 			const message = event.messages.find(
 				(candidate): candidate is ToolResultMessage =>
-				candidate.role === "toolResult" &&
-				candidate.toolCallId === toolCallId &&
-				candidate.toolName === "read",
+					candidate.role === "toolResult" &&
+					candidate.toolCallId === toolCallId &&
+					candidate.toolName === "read",
 			);
 			if (!message) continue;
 			pendingReads.delete(toolCallId);
@@ -174,15 +190,20 @@ export default function (pi: ExtensionAPI) {
 		cwd: string,
 		command: string[],
 		signal?: AbortSignal,
-	): Promise<{ content: [{ type: "text"; text: string }]; details: { runtime: string } }> {
+	): Promise<{
+		content: [{ type: "text"; text: string }];
+		details: { runtime: string };
+	}> {
 		const runtime = await runtimeFor(cwd, signal);
 		if (!runtime) {
 			return {
-				content: [{
-					type: "text",
-					text:
-						"No agent-workspace runtime here: this directory is not inside a Git repository checkout.",
-				}],
+				content: [
+					{
+						type: "text",
+						text:
+							"No agent-workspace runtime here: this directory is not inside a Git repository checkout.",
+					},
+				],
 				details: { runtime: "absent" },
 			};
 		}
@@ -190,7 +211,13 @@ export default function (pi: ExtensionAPI) {
 		try {
 			result = await pi.exec(
 				runtime.binary,
-				[...command, "--repository", runtime.root, "--workspace", runtime.workspace],
+				[
+					...command,
+					"--repository",
+					runtime.root,
+					"--workspace",
+					runtime.workspace,
+				],
 				{ signal, timeout: 10_000 },
 			);
 		} catch (error) {
@@ -214,7 +241,8 @@ export default function (pi: ExtensionAPI) {
 		label: "Workspace Status",
 		description:
 			"Orient in the persistent agent workspace: the bound objective, active claims with freshness (current/stale/unknown), open transactions, and the latest checkpoint. Brief projection by default; `full` returns the complete status record.",
-		promptSnippet: "Workspace orientation: objective, claim freshness, checkpoints.",
+		promptSnippet:
+			"Workspace orientation: objective, claim freshness, checkpoints.",
 		promptGuidelines: [
 			"Call workspace_status when resuming work or before acting on a workspace claim: a claim it reports as stale outranks your remembered belief about that claim.",
 		],
@@ -244,12 +272,15 @@ export default function (pi: ExtensionAPI) {
 		parameters: Type.Object({
 			since: Type.Optional(
 				Type.String({
-					description: "Diff against this checkpoint label instead of the latest checkpoint.",
+					description:
+						"Diff against this checkpoint label instead of the latest checkpoint.",
 				}),
 			),
 		}),
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			const command = params.since ? ["delta", "--since", params.since] : ["delta"];
+			const command = params.since
+				? ["delta", "--since", params.since]
+				: ["delta"];
 			return runKernel(ctx.cwd, command, signal);
 		},
 	});
