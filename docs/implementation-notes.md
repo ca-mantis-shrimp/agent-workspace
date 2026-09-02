@@ -848,3 +848,33 @@ adds the Finding concept.
   round-trip; edit → stale + fail-closed reveal). 42 Rust tests, strict fmt and
   clippy. Deferred to B/C: disposition transitions, and the bounded queue
   projection + `workspace_findings` Pi tool.
+
+## 2026-09-02 — Findings, sub-slices B + C (disposition + bounded queue + Pi)
+
+Completes the findings action.
+
+- **Disposition transitions (B).** `dispose-finding --disposition
+  resolved|deferred|suppressed|false-positive --actor --rationale` records a
+  `FindingDispositionChanged` event; the kernel refuses an empty actor or
+  rationale (invariant 8) and refuses disposing back to `Open` (a reopen verb, if
+  wanted, is a separate future transition). The `FindingDisposition` value itself
+  carries actor+rationale, so the event is just `{finding_id, disposition}`.
+  Disposition is applied in the projection and survives restart. It never touches
+  freshness — a disposed finding keeps reconciling — which is the whole point of
+  keeping the two axes separate.
+- **Bounded quickfix queue (C).** `findings` projects `FindingsView`: open
+  findings ranked most-severe-first (a cap must never hide an error under a hint;
+  `FindingSeverity` derives `Ord` for exactly this), then stable by id, hard-capped
+  at 12 with an explicit `open_omitted`, plus a freshness histogram over the open
+  set and a `disposed` count for the audit tail. Freshness rides each row rather
+  than the ranking, so a severe issue is never demoted because an edit landed
+  near it. No native payload retained — `reveal-finding` is the escape hatch.
+  Pure projection over the reconciled status, like `working_set_view`/`brief`.
+- **Pi (C).** A parameterless `workspace_findings` tool shells `findings
+  --compact` through the shared `runKernel`, mirroring the other orientation
+  tools.
+- **Coverage.** One Rust test drives severity ranking, disposition-with-actor/rationale,
+  queue removal on disposition, invariant-8 refusal, and restart persistence; one
+  Pi test asserts the tool wiring. 43 Rust tests, 6 Pi tests + typecheck, strict
+  fmt and clippy. All findings action criteria — normalized queue, native payloads,
+  provenance, revision, dispositions, and edit-driven invalidation — are met.

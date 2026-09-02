@@ -1,7 +1,7 @@
 use agent_workspace::{
-    ClaimScopeStrategy, EvidenceOutcome, FindingCaptureOptions, FindingSeverity, Normalizer,
-    ObservationCaptureOptions, ObservationSelector, ReadCaptureOutcome, ReadCaptureRequest,
-    Workspace, WorkspaceError,
+    ClaimScopeStrategy, EvidenceOutcome, FindingCaptureOptions, FindingDisposition,
+    FindingSeverity, Normalizer, ObservationCaptureOptions, ObservationSelector,
+    ReadCaptureOutcome, ReadCaptureRequest, Workspace, WorkspaceError,
 };
 use serde::Serialize;
 use std::env;
@@ -184,6 +184,32 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 .ok_or_else(|| CliError::Usage("reveal-finding requires --id".to_owned()))?;
             print_json(&workspace.reveal_finding(finding_id)?)?;
         }
+        "dispose-finding" => {
+            let finding_id = options
+                .id
+                .ok_or_else(|| CliError::Usage("dispose-finding requires --id".to_owned()))?;
+            let actor = options
+                .actor
+                .ok_or_else(|| CliError::Usage("dispose-finding requires --actor".to_owned()))?;
+            let rationale = options.rationale.ok_or_else(|| {
+                CliError::Usage("dispose-finding requires --rationale".to_owned())
+            })?;
+            let kind = options.disposition.ok_or_else(|| {
+                CliError::Usage("dispose-finding requires --disposition".to_owned())
+            })?;
+            let disposition = match kind.as_str() {
+                "resolved" => FindingDisposition::Resolved { actor, rationale },
+                "deferred" => FindingDisposition::Deferred { actor, rationale },
+                "suppressed" => FindingDisposition::Suppressed { actor, rationale },
+                "false-positive" => FindingDisposition::FalsePositive { actor, rationale },
+                _ => return Err(CliError::Usage(format!("invalid disposition: {kind}"))),
+            };
+            print_json(&workspace.dispose_finding(finding_id, disposition)?)?;
+        }
+        "findings" => {
+            let status = workspace.resume_status()?;
+            print_selected_json(&status.findings_view(), options.compact)?;
+        }
         "reconcile" => {
             let id = options
                 .id
@@ -310,6 +336,9 @@ struct Options {
     severity: Option<FindingSeverity>,
     message: Option<String>,
     rule: Option<String>,
+    disposition: Option<String>,
+    actor: Option<String>,
+    rationale: Option<String>,
     contents: Option<String>,
     selector: Option<ObservationSelector>,
     /// `None` is the `auto` default: resolve per path at dispatch.
@@ -350,6 +379,9 @@ impl Options {
         let mut severity = None;
         let mut message = None;
         let mut rule = None;
+        let mut disposition = None;
+        let mut actor = None;
+        let mut rationale = None;
         let mut contents = None;
         let mut selector = None;
         let mut normalizer = None;
@@ -420,6 +452,9 @@ impl Options {
                 "--reason" => reason = Some(value.clone()),
                 "--message" => message = Some(value.clone()),
                 "--rule" => rule = Some(value.clone()),
+                "--disposition" => disposition = Some(value.clone()),
+                "--actor" => actor = Some(value.clone()),
+                "--rationale" => rationale = Some(value.clone()),
                 "--severity" => {
                     severity = Some(match value.as_str() {
                         "error" => FindingSeverity::Error,
@@ -528,6 +563,9 @@ impl Options {
             severity,
             message,
             rule,
+            disposition,
+            actor,
+            rationale,
             contents,
             selector,
             normalizer,

@@ -838,6 +838,83 @@ const WORKING_SET_LOCATION_LIMIT: usize = 12;
 const WORKING_SET_UNCITED_LIMIT: usize = 12;
 const WORKING_SET_TRAIL_LIMIT: usize = 16;
 
+/// One open finding as a scannable queue row: enough to triage (severity, rule,
+/// a headline, where, and whether it is still current) without the native
+/// payload, which stays one `reveal-finding` away.
+#[derive(Clone, Debug, Serialize)]
+pub struct FindingQueueEntry {
+    pub id: u64,
+    pub provider: String,
+    pub severity: FindingSeverity,
+    #[serde(default)]
+    pub rule: Option<String>,
+    pub headline: String,
+    pub path: PathBuf,
+    pub selector: ObservationSelector,
+    pub freshness: FreshnessWithinScope,
+}
+
+/// The bounded quickfix-like queue: open findings ranked most-severe first and
+/// hard-capped with an explicit omission count, a freshness histogram over the
+/// open set, and the count of dispositioned findings that have left the queue
+/// but remain in the audit record. Retains no native payload.
+#[derive(Clone, Debug, Serialize)]
+pub struct FindingsView {
+    pub open: Vec<FindingQueueEntry>,
+    pub open_omitted: usize,
+    pub disposed: usize,
+    pub freshness: FreshnessHistogram,
+}
+
+impl WorkspaceStatus {
+    /// Project the reconciled status into the bounded findings queue. Pure over
+    /// an already-reconciled [`WorkspaceStatus`] — reads each finding's stored
+    /// severity, disposition, and freshness; touches neither log nor worktree.
+    pub fn findings_view(&self) -> FindingsView {
+        let mut open: Vec<&Finding> = self
+            .findings
+            .iter()
+            .filter(|finding| finding.disposition.is_open())
+            .collect();
+        let disposed = self.findings.len() - open.len();
+        let mut freshness = FreshnessHistogram::default();
+        for finding in &open {
+            match finding.report.freshness_within_scope {
+                FreshnessWithinScope::Current => freshness.current += 1,
+                FreshnessWithinScope::Stale => freshness.stale += 1,
+                FreshnessWithinScope::Unknown => freshness.unknown += 1,
+            }
+        }
+        // Most-severe first (a cap must never hide an error under a hint), then
+        // stable by id. Freshness rides each row rather than the ranking, so a
+        // severe issue is never demoted merely because an edit landed near it.
+        open.sort_by_key(|finding| (finding.severity, finding.id));
+        let open_omitted = open.len().saturating_sub(FINDING_QUEUE_LIMIT);
+        let entries = open
+            .into_iter()
+            .take(FINDING_QUEUE_LIMIT)
+            .map(|finding| FindingQueueEntry {
+                id: finding.id,
+                provider: finding.provider.clone(),
+                severity: finding.severity,
+                rule: finding.rule.clone(),
+                headline: claim_headline(&finding.message, BRIEF_HEADLINE_MAX_CHARS),
+                path: finding.path.clone(),
+                selector: finding.selector.clone(),
+                freshness: finding.report.freshness_within_scope.clone(),
+            })
+            .collect();
+        FindingsView {
+            open: entries,
+            open_omitted,
+            disposed,
+            freshness,
+        }
+    }
+}
+
+const FINDING_QUEUE_LIMIT: usize = 12;
+
 /// Hard cardinality and per-headline bounds for model-entry orientation. Stale
 /// claims rank first so a cap never preferentially hides invalidated beliefs.
 const BRIEF_CLAIM_LIMIT: usize = 8;
@@ -1091,6 +1168,10 @@ enum Event {
         freshness: FreshnessWithinScope,
         reason: String,
         reconciliation_fingerprint: String,
+    },
+    FindingDispositionChanged {
+        finding_id: u64,
+        disposition: FindingDisposition,
     },
     MutationApplied {
         transaction_id: u64,
@@ -1878,6 +1959,44 @@ impl Workspace {
                     .ok_or(WorkspaceError::FindingNotFound(finding_id))
             }
         }
+    }
+
+    /// Disposition a finding — resolve, defer, suppress, or mark it a false
+    /// positive. Every disposition names its actor and rationale (invariant 8),
+    /// and is orthogonal to freshness: disposing a finding never touches whether
+    /// its bound input is still current, and a stale finding can still be open.
+    pub fn dispose_finding(
+        &self,
+        finding_id: u64,
+        disposition: FindingDisposition,
+    ) -> Result<Finding, WorkspaceError> {
+        let (actor, rationale) = match &disposition {
+            FindingDisposition::Open => {
+                return Err(WorkspaceError::InvalidFinding(
+                    "dispose-finding cannot set a finding back to open".to_owned(),
+                ));
+            }
+            FindingDisposition::Resolved { actor, rationale }
+            | FindingDisposition::Deferred { actor, rationale }
+            | FindingDisposition::Suppressed { actor, rationale }
+            | FindingDisposition::FalsePositive { actor, rationale } => (actor, rationale),
+        };
+        if actor.trim().is_empty() || rationale.trim().is_empty() {
+            return Err(WorkspaceError::InvalidFinding(
+                "finding disposition requires a non-empty actor and rationale".to_owned(),
+            ));
+        }
+        if !self.project()?.findings.contains_key(&finding_id) {
+            return Err(WorkspaceError::FindingNotFound(finding_id));
+        }
+        self.append(Event::FindingDispositionChanged {
+            finding_id,
+            disposition,
+        })?;
+        self.project()?
+            .findings
+            .remove(&finding_id)
+            .ok_or(WorkspaceError::FindingNotFound(finding_id))
     }
 
     pub fn reconcile_observation(
@@ -2984,6 +3103,15 @@ impl Projection {
                     .report
                     .operational_coverage
                     .reconciliation_fingerprint = reconciliation_fingerprint;
+            }
+            Event::FindingDispositionChanged {
+                finding_id,
+                disposition,
+            } => {
+                self.findings
+                    .get_mut(&finding_id)
+                    .ok_or(WorkspaceError::FindingNotFound(finding_id))?
+                    .disposition = disposition;
             }
             Event::MutationApplied {
                 transaction_id,

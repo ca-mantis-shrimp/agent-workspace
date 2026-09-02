@@ -356,4 +356,20 @@ export default function (pi: ExtensionAPI) {
 			return runKernel(ctx.cwd, ["working-set", "--compact"], signal);
 		},
 	});
+
+	pi.registerTool({
+		name: "workspace_findings",
+		label: "Workspace Findings",
+		description:
+			"The persistent quickfix-like queue: open provider-reported findings ranked most-severe first (provider, severity, rule, message, location, freshness), kernel-bounded with an explicit omission count, plus a freshness histogram and the disposed count. The native payload of any finding is one reveal-finding away.",
+		promptSnippet:
+			"Outstanding findings queue: open issues by severity, with freshness.",
+		promptGuidelines: [
+			"Call workspace_findings to triage outstanding issues: a finding it reports as stale had an edit land under it and may no longer apply, so re-verify before acting on it.",
+		],
+		parameters: Type.Object({}),
+		async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
+			return runKernel(ctx.cwd, ["findings", "--compact"], signal);
+		},
+	});
 }

@@ -254,6 +254,32 @@ test("workspace_working_set projects the bounded attention model via the kernel"
 	assert.equal(result.content[0].text, "executed:working-set");
 });
 
+test("workspace_findings projects the bounded quickfix queue via the kernel", async () => {
+	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
+	await installKernelPlaceholder(root);
+	const calls: string[][] = [];
+	const exec: FakeExec = (command, args) => {
+		if (command !== "git") calls.push(args);
+		return repositoryRootStub(root)(command, args);
+	};
+	const tools = registerWithFakePi(exec);
+	const findings = tools.get("workspace_findings");
+	assert.ok(findings, "workspace_findings must be registered");
+
+	const result = await findings.execute("call-1", {}, undefined, undefined, {
+		cwd: root,
+	});
+	assert.deepEqual(calls[0], [
+		"findings",
+		"--compact",
+		"--repository",
+		root,
+		"--workspace",
+		join(root, ".agent-workspace"),
+	]);
+	assert.equal(result.content[0].text, "executed:findings");
+});
+
 test("orientation tools degrade to plain text outside a repository and throw on kernel failure", async () => {
 	const outside = await mkdtemp(join(tmpdir(), "agent-workspace-outside-"));
 	const tools = registerWithFakePi(async (_command, _args) => ({

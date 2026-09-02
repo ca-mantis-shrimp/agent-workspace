@@ -3215,6 +3215,119 @@ fn finding_stales_when_its_bound_location_changes() {
     assert!(String::from_utf8_lossy(&revealed.stderr).contains("no native payload was retained"));
 }
 
+#[test]
+fn findings_queue_ranks_by_severity_and_disposition_leaves_the_queue() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap();
+    let ws = workspace.to_str().unwrap();
+
+    let record = |severity: &str, message: &str| {
+        invoke_with_stdin(
+            &[
+                "record-finding",
+                "--repository",
+                repo,
+                "--workspace",
+                ws,
+                "--provider",
+                "rustc",
+                "--severity",
+                severity,
+                "--message",
+                message,
+                "--path",
+                "src/lib.rs",
+            ],
+            "",
+        );
+    };
+    // Record out of severity order to prove the queue ranks, not insertion-order.
+    record("info", "consider documenting foo"); // id 0
+    record("error", "mismatched types"); // id 1
+    record("warning", "unused import"); // id 2
+
+    let queue: Value = serde_json::from_slice(
+        &invoke(&["findings", "--repository", repo, "--workspace", ws]).stdout,
+    )
+    .unwrap();
+    let open = queue["open"].as_array().unwrap();
+    assert_eq!(open.len(), 3);
+    assert_eq!(open[0]["severity"], "error");
+    assert_eq!(open[1]["severity"], "warning");
+    assert_eq!(open[2]["severity"], "info");
+    assert_eq!(queue["open_omitted"].as_u64().unwrap(), 0);
+    assert_eq!(queue["disposed"].as_u64().unwrap(), 0);
+
+    // Disposition names its actor and rationale (invariant 8) and removes the
+    // finding from the open queue while keeping it in the audit record.
+    let disposed = invoke(&[
+        "dispose-finding",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--id",
+        "1",
+        "--disposition",
+        "false-positive",
+        "--actor",
+        "darrion",
+        "--rationale",
+        "the borrow checker is satisfied after the sibling change",
+    ]);
+    let disposed: Finding = serde_json::from_slice(&disposed.stdout).unwrap();
+    match disposed.disposition {
+        FindingDisposition::FalsePositive { actor, rationale } => {
+            assert_eq!(actor, "darrion");
+            assert!(rationale.contains("borrow checker"));
+        }
+        other => panic!("expected false-positive disposition, got {other:?}"),
+    }
+
+    let after: Value = serde_json::from_slice(
+        &invoke(&["findings", "--repository", repo, "--workspace", ws]).stdout,
+    )
+    .unwrap();
+    assert_eq!(after["open"].as_array().unwrap().len(), 2);
+    assert_eq!(after["disposed"].as_u64().unwrap(), 1);
+    // The error left the queue; warning now leads.
+    assert_eq!(after["open"][0]["severity"], "warning");
+
+    // Invariant 8 is enforced: a disposition with no actor/rationale is refused.
+    let refused = invoke_failure(&[
+        "dispose-finding",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--id",
+        "0",
+        "--disposition",
+        "resolved",
+        "--actor",
+        "   ",
+        "--rationale",
+        "",
+    ]);
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("non-empty actor and rationale"));
+
+    // Disposition survives restart: a cold status projection still shows it.
+    let resumed: WorkspaceStatus = serde_json::from_slice(
+        &invoke(&["status", "--full", "--repository", repo, "--workspace", ws]).stdout,
+    )
+    .unwrap();
+    let error_finding = resumed
+        .findings
+        .iter()
+        .find(|finding| finding.id == 1)
+        .unwrap();
+    assert!(matches!(
+        error_finding.disposition,
+        FindingDisposition::FalsePositive { .. }
+    ));
+}
+
 fn claim_ids(claims: &[Claim]) -> Vec<u64> {
     claims.iter().map(|claim| claim.id).collect()
 }
