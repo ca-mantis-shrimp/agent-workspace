@@ -1,0 +1,17 @@
+#!/bin/sh
+# Reject commits whose Rust code is not rustfmt-clean.
+#
+# Why: recurring "formatter noise" incidents where an edit lands unformatted
+# (often from rustfmt version skew between sessions/agents). Byte-level noise
+# then stales downstream workspace claims for no semantic reason. Catch it at
+# the commit boundary instead of by hand each session.
+#
+# Scope note: this checks the whole working tree, not just the staged index.
+# For this agent-driven repo commits are typically whole-tree, so "tree must be
+# clean" is the behavior we want. If you ever need to commit with unrelated
+# unformatted changes in flight, run `cargo fmt` first or `git commit --no-verify`.
+if ! cargo fmt --check >/dev/null 2>&1; then
+	echo "pre-commit: rustfmt check failed — run 'cargo fmt' and re-stage." >&2
+	cargo fmt --check 2>&1 | sed 's/^/  /' >&2
+	exit 1
+fi
