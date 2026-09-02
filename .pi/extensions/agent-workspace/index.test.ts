@@ -228,6 +228,32 @@ test("workspace_delta passes the checkpoint selector through to the kernel", asy
 	assert.ok(!calls[2].includes("--compact"));
 });
 
+test("workspace_working_set projects the bounded attention model via the kernel", async () => {
+	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
+	await installKernelPlaceholder(root);
+	const calls: string[][] = [];
+	const exec: FakeExec = (command, args) => {
+		if (command !== "git") calls.push(args);
+		return repositoryRootStub(root)(command, args);
+	};
+	const tools = registerWithFakePi(exec);
+	const workingSet = tools.get("workspace_working_set");
+	assert.ok(workingSet, "workspace_working_set must be registered");
+
+	const result = await workingSet.execute("call-1", {}, undefined, undefined, {
+		cwd: root,
+	});
+	assert.deepEqual(calls[0], [
+		"working-set",
+		"--compact",
+		"--repository",
+		root,
+		"--workspace",
+		join(root, ".agent-workspace"),
+	]);
+	assert.equal(result.content[0].text, "executed:working-set");
+});
+
 test("orientation tools degrade to plain text outside a repository and throw on kernel failure", async () => {
 	const outside = await mkdtemp(join(tmpdir(), "agent-workspace-outside-"));
 	const tools = registerWithFakePi(async (_command, _args) => ({

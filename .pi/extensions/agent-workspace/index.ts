@@ -340,4 +340,20 @@ export default function (pi: ExtensionAPI) {
 			return runKernel(ctx.cwd, command, signal);
 		},
 	});
+
+	pi.registerTool({
+		name: "workspace_working_set",
+		label: "Workspace Working Set",
+		description:
+			"The bounded attention model: ranked semantic locations you have focused (path, selector, revision, freshness, why), current observations not yet cited by any claim, and the ordered navigation trail. Every section is kernel-bounded with an explicit omission count.",
+		promptSnippet:
+			"Where your attention stands: focused locations, uncited candidates, navigation trail.",
+		promptGuidelines: [
+			"Call workspace_working_set to see what you are attending to and what is worth attending to next: a location it reports as stale had an edit land under it, so re-read before you rely on it.",
+		],
+		parameters: Type.Object({}),
+		async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
+			return runKernel(ctx.cwd, ["working-set", "--compact"], signal);
+		},
+	});
 }

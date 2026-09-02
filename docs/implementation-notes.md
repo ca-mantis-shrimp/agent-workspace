@@ -804,5 +804,11 @@ restart-safe attention model, projected through a new `working-set` command.
   coordinates, latest-reason-wins, recency ranking, uncited exclusion, ordered
   trail, out-of-band edit → stale-first, cold-restart trail recovery); the other
   proves all three omission counters at once with a 13/13/17 over-cap fixture.
-  40 Rust tests, strict fmt and clippy pass. Deferred: the thin Pi projection of
-  this surface (criterion 7).
+  40 Rust tests, strict fmt and clippy pass.
+- **Pi projection (criterion 7).** A `workspace_working_set` Pi tool mirrors the
+  existing `workspace_status`/`workspace_delta` orientation tools: it shells the
+  bounded `working-set --compact` command through the shared `runKernel` helper
+  and forwards the kernel JSON verbatim, adding no semantics. Parameterless — the
+  view is inherently bounded, so there is no brief/full split to expose. 5 Pi
+  tests plus typecheck pass. This closes all seven acceptance criteria; the
+  `working-set` action is complete.
