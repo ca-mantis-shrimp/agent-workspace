@@ -66,15 +66,15 @@ working sets, persistent findings, evidence-gated reversible transactions,
 checkpoint/delta recovery, and the Pi and Claude Code projections all share
 kernel-owned semantics and have been exercised on the live repository.
 
-The final dogfood pass found two boundaries that should be fixed before a
-statusline-frequency Neovim projection: compact status takes about six seconds
-on the accumulated workspace because it eagerly reconciles historical state,
-and stale-first working-set ranking can omit the newest current focus. It also
-found and fixed a tracked-directory-symlink crash in transaction startup. The
-next architecture slice is therefore bounded/incremental reconciliation and
-working-set curation; the thin Neovim projection follows on that shared-state
-contract. Measurements and the decision rationale are in the
-[dogfood field report](docs/reflection-dogfood-cold-resume.md). Implementation
+The final self-dogfood pass found and fixed bounded-orientation, working-set
+curation, tracked-directory-symlink, and candidate-evidence defects. The next
+evaluation moves outside this repository: install the kernel independently,
+resolve project-scoped state from an external local store, and test whether a
+cold agent trusts a narrow current claim without defensively reconstructing it.
+The storage, ownership, and Clearhead authority boundaries are recorded in the
+[external-workspace decision](docs/decision-external-workspace-and-clearhead-boundary.md).
+Measurements from the self-hosted phase are in the
+[dogfood field report](docs/reflection-dogfood-cold-resume.md), and implementation
 choices settled by running code are recorded in
 [`docs/implementation-notes.md`](docs/implementation-notes.md).
 
