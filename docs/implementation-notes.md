@@ -1158,3 +1158,35 @@ kernel resolve.
   external substrate. Still ahead before trust is actually measured: the project
   registry (human-readable name↔identity, explicit cross-clone identity), the
   global Pi projection, and the genuine multi-session foreign-repo task.
+
+## 2026-09-02 — Installed-kernel discovery (portability slice 4)
+
+Setting up the first foreign repo immediately surfaced a second in-repo coupling
+slice 1 had not touched: both adapters resolved the kernel *binary* as
+`<observed-repo>/target/debug/agent-workspace`. That only holds while the
+workspace watches its own source tree; a foreign repo has no such binary, so the
+adapter would silently find nothing. The foreign test pulled this feature before
+a line of the test project existed — the intended "pull by observed failure"
+dynamic, working.
+
+- **Binary discovery mirrors state resolution.** Both `runtime_for`
+  (`workspace_runtime.py`) and `runtimeFor` (`index.ts`) now resolve the binary by
+  precedence: `AGENT_WORKSPACE_BIN` (explicit; points at a live dev build) →
+  `agent-workspace` on `PATH` (an installed kernel) → the in-repo `target/debug`
+  build (self-dogfood fallback). Node has no `which`, so the TS side scans
+  `PATH` entries itself. Now both the code and its state come from outside the
+  observed repository.
+- **No behavior change for self-dogfood.** With `AGENT_WORKSPACE_BIN` unset and
+  nothing named `agent-workspace` on `PATH`, resolution falls to the in-repo
+  build — exactly the old path. 7 Pi tests + typecheck and the 16-check Claude
+  orientation drive stay green (the drives never set the env, so they remain
+  deterministic on the fallback).
+- **Curation, surfaced by the same drive.** The orientation drive's inline-budget
+  check tripped — not from this change, but because the active-claim set had
+  grown to seven, six of them shipped-slice claims I had added without ever
+  retiring. Consolidated them into one archival frontier claim (self-build
+  complete; foreign dogfood is next) via supersession; compact status dropped
+  1928 → 831 bytes. The predicted durable safeguard — a kernel-bounded
+  active-claim cap in the wake projection — is still worth adding once a workspace
+  has many *genuinely* active claims, but the immediate cause was missing
+  lifecycle hygiene, not too many live beliefs.

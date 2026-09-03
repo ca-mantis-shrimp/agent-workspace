@@ -4,7 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { access, realpath } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 interface ReadParameters {
 	path: string;
@@ -39,6 +39,32 @@ interface ReadToolCallEvent {
 interface RepositoryRuntime {
 	root: string;
 	binary: string;
+}
+
+async function fileExists(path: string): Promise<boolean> {
+	try {
+		await access(path);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+// Discover the kernel binary the way the state root resolves: an installed
+// kernel, not one assumed to live inside the observed repository. Precedence,
+// highest first: `AGENT_WORKSPACE_BIN`, `agent-workspace` on `PATH`, then the
+// in-repo `target/debug` build (self-dogfood).
+async function resolveBinary(root: string): Promise<string | undefined> {
+	const explicit = process.env.AGENT_WORKSPACE_BIN;
+	if (explicit && (await fileExists(explicit))) return explicit;
+	const pathDirs = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+	for (const dir of pathDirs) {
+		const candidate = join(dir, "agent-workspace");
+		if (await fileExists(candidate)) return candidate;
+	}
+	const inRepo = join(root, "target", "debug", "agent-workspace");
+	if (await fileExists(inRepo)) return inRepo;
+	return undefined;
 }
 
 function readParameters(input: unknown): ReadParameters | undefined {
@@ -100,17 +126,14 @@ export default function (pi: ExtensionAPI) {
 		// No workspace path: the kernel resolves the project-scoped state root
 		// from --repository alone (see src/locate.rs). A thin transport names the
 		// repository and lets the kernel decide where state lives.
-		const runtime = {
-			root,
-			binary: join(root, "target", "debug", "agent-workspace"),
-		};
-		try {
-			await access(runtime.binary);
-		} catch {
-			// Do not cache this miss: a build later in the same Pi session should
-			// activate the adapter without requiring a restart.
+		const binary = await resolveBinary(root);
+		if (!binary) {
+			// Do not cache this miss: a build (or an AGENT_WORKSPACE_BIN export)
+			// later in the same Pi session should activate the adapter without
+			// requiring a restart.
 			return undefined;
 		}
+		const runtime = { root, binary };
 		runtimes.set(cwd, runtime);
 		return runtime;
 	}
@@ -249,7 +272,7 @@ export default function (pi: ExtensionAPI) {
 					{
 						type: "text",
 						text:
-							"No agent-workspace runtime here: this is not a Git checkout with a built target/debug/agent-workspace binary.",
+							"No agent-workspace runtime here: this is not a Git checkout, or no kernel binary was found (AGENT_WORKSPACE_BIN, `agent-workspace` on PATH, or a built target/debug/agent-workspace).",
 					},
 				],
 				details: { runtime: "absent" },
