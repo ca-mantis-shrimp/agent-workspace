@@ -1,5 +1,4 @@
 /target/
-/.agent-workspace/
 **/node_modules/
 /.pi/fusion/
 /.pi/tasks/
