@@ -1034,3 +1034,50 @@ layer, opt-in and fail-closed; deferred to its own action.
 - **Coverage.** 50 Rust tests (two new: disk re-verification rejects drift with
   byte-exact recovery and preview↔accept parity in both directions; evidence
   candidate-binding + the record-time materialization gate). Strict fmt/clippy.
+
+## 2026-09-02 — External state resolution (foreign-dogfood, portability slice 1)
+
+The project-local prototype hardwired workspace state to `<repo>/.agent-workspace`:
+every adapter passed `--workspace <repo>/.agent-workspace`, and `Workspace::open`
+trusted that path verbatim. That is fine while the workspace only ever observes
+its own repository, but foreign dogfood needs an installed kernel that resolves
+*one logical workspace per project* under an external, XDG-style local state
+root — dynamic state must not travel implicitly inside the observed repo's Git
+tree (see `docs/decision-external-workspace-and-clearhead-boundary.md`).
+
+This is the first, deliberately thin cut: location only. Registry, global Pi
+projection, and workstream/worktree/session partitioning are follow-up slices,
+pulled next by the foreign handoff.
+
+- **New leaf module `src/locate.rs`.** `resolve_state_root(repository_root,
+  workspace_override, state_root_override)` owns resolution and nothing else, in
+  keeping with the ongoing lib.rs modularization. Precedence: an explicit
+  `--workspace` (legacy, verbatim) short-circuits everything so existing adapters
+  and fixtures keep working while they are repointed; otherwise a state-root base
+  is joined with a project identity subdirectory.
+- **State-root base.** `--state-root` → `$AGENT_WORKSPACE_STATE` →
+  `$XDG_STATE_HOME/agent-workspace` → `$HOME/.local/state/agent-workspace`.
+  Resolved manually (empty env values treated as absent) rather than pulling a
+  `dirs`/`xdg` crate — the XDG spec is trivial here and the dep is not worth it.
+- **Project identity = content address of the git *common* directory.**
+  `git rev-parse --git-common-dir`, made absolute against the repo and
+  canonicalized, then `hex_digest`-ed (reusing the kernel's existing SHA-256
+  helper). Linked worktrees of one repository share the common dir → share state;
+  independent clones each have their own → stay separate; the remote URL is
+  deliberately ignored, so matching remotes never silently merge. A non-git
+  target falls back to the canonical repository path so ad hoc directories remain
+  usable. The digest is opaque on purpose — the human-readable name↔identity
+  mapping is exactly what the deferred registry slice provides.
+- **CLI.** `--workspace` is now optional (a legacy override); `--state-root` is
+  new; `run` resolves before `Workspace::open`. Usage string updated.
+- **Coverage.** 52 Rust tests (two new: worktree-shares / clone-separates against
+  a real `git worktree`, and the `--workspace` override bypassing resolution).
+  Env-fallback branches are left to the linear `non_empty_env` reads rather than
+  racy in-process env mutation under parallel tests. Additionally driven live
+  through the real binary: `bind-objective` with only `--state-root` landed state
+  under `<state-root>/<hash>/` (not in the repo), status round-tripped, and a
+  linked worktree resolved to the same hash dir and read back the same objective.
+- **Residual.** Adapters (`.claude/hooks/*.py`, Pi `index.ts`) still pass
+  `--workspace <repo>/.agent-workspace` and are unchanged this slice; repointing
+  them at `--state-root` is the next step, alongside the registry and global Pi
+  projection.

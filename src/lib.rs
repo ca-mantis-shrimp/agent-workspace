@@ -5,9 +5,11 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
+mod locate;
 mod model;
 mod projection;
 mod reconcile;
+pub use locate::resolve_state_root;
 pub use model::*;
 pub use projection::*;
 use projection::{BRIEF_OBJECTIVE_MAX_CHARS, WORKING_SET_UNCITED_CANDIDATE_LIMIT, claim_headline};

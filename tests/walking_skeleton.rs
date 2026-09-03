@@ -4536,6 +4536,66 @@ impl GitFixture {
     }
 }
 
+#[test]
+fn state_root_is_shared_across_worktrees_and_separate_across_clones() {
+    // One logical workspace per project: a linked worktree of the same
+    // repository must resolve to the same external state root, while an
+    // independent clone must not — identity comes from the git common
+    // directory, never the remote URL.
+    use agent_workspace::resolve_state_root;
+
+    let state = TempDir::new().unwrap();
+    let state_root = state.path();
+
+    let primary = GitFixture::new();
+    let worktree = primary.root.path().join("linked-worktree");
+    git(
+        &primary.repository,
+        &["worktree", "add", "--quiet", worktree.to_str().unwrap()],
+    );
+
+    let clone = GitFixture::new();
+
+    let resolve = |repo: &Path| resolve_state_root(repo, None, Some(state_root)).unwrap();
+
+    let main_root = resolve(&primary.repository);
+    let worktree_root = resolve(&worktree);
+    let clone_root = resolve(&clone.repository);
+
+    assert_eq!(
+        main_root, worktree_root,
+        "linked worktrees of one repository share state"
+    );
+    assert_ne!(
+        main_root, clone_root,
+        "independent clones must not share state"
+    );
+    assert!(
+        main_root.starts_with(state_root),
+        "resolved state lives under the external state root"
+    );
+}
+
+#[test]
+fn explicit_workspace_override_bypasses_resolution() {
+    // The legacy `--workspace` path is honored verbatim so existing adapters
+    // and fixtures keep working while they are repointed.
+    use agent_workspace::resolve_state_root;
+
+    let fixture = GitFixture::new();
+    let explicit = fixture.root.path().join("verbatim-state");
+    let state = TempDir::new().unwrap();
+
+    let resolved = resolve_state_root(
+        &fixture.repository,
+        Some(explicit.as_path()),
+        Some(state.path()),
+    )
+    .unwrap();
+
+    assert_eq!(resolved, explicit);
+}
+
 fn git(repository: &Path, arguments: &[&str]) {
     let output = Command::new("git")
         .args(arguments)

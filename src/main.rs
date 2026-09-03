@@ -1,7 +1,7 @@
 use agent_workspace::{
     ClaimScopeStrategy, EvidenceOutcome, FindingCaptureOptions, FindingDisposition,
     FindingSeverity, Normalizer, ObservationCaptureOptions, ObservationSelector,
-    ReadCaptureOutcome, ReadCaptureRequest, Workspace, WorkspaceError,
+    ReadCaptureOutcome, ReadCaptureRequest, Workspace, WorkspaceError, resolve_state_root,
 };
 use serde::Serialize;
 use std::env;
@@ -24,7 +24,12 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
         return Err(CliError::Usage(usage()));
     };
     let options = Options::parse(rest)?;
-    let workspace = Workspace::open(&options.repository, &options.workspace)?;
+    let workspace_root = resolve_state_root(
+        &options.repository,
+        options.workspace.as_deref(),
+        options.state_root.as_deref(),
+    )?;
+    let workspace = Workspace::open(&options.repository, &workspace_root)?;
 
     // Serialize every invocation against this workspace. Held until `run`
     // returns, this exclusive lock wraps each command's full read-modify-write,
@@ -348,7 +353,11 @@ fn print_selected_json(value: &impl Serialize, compact: bool) -> Result<(), CliE
 
 struct Options {
     repository: PathBuf,
-    workspace: PathBuf,
+    /// Legacy verbatim state-directory override. When absent the kernel resolves
+    /// an external, project-scoped state root from `state_root` and git identity.
+    workspace: Option<PathBuf>,
+    /// Base directory for external project-scoped state (`--state-root`).
+    state_root: Option<PathBuf>,
     path: Option<PathBuf>,
     provider: Option<String>,
     id: Option<u64>,
@@ -393,6 +402,7 @@ impl Options {
     fn parse(arguments: &[String]) -> Result<Self, CliError> {
         let mut repository = None;
         let mut workspace = None;
+        let mut state_root = None;
         let mut path = None;
         let mut provider = None;
         let mut id = None;
@@ -457,6 +467,7 @@ impl Options {
             match flag.as_str() {
                 "--repository" => repository = Some(PathBuf::from(value)),
                 "--workspace" => workspace = Some(PathBuf::from(value)),
+                "--state-root" => state_root = Some(PathBuf::from(value)),
                 "--path" => path = Some(PathBuf::from(value)),
                 "--provider" => provider = Some(value.clone()),
                 "--statement" => statement = Some(value.clone()),
@@ -577,8 +588,8 @@ impl Options {
         Ok(Self {
             repository: repository
                 .ok_or_else(|| CliError::Usage("missing --repository".to_owned()))?,
-            workspace: workspace
-                .ok_or_else(|| CliError::Usage("missing --workspace".to_owned()))?,
+            workspace,
+            state_root,
             path,
             provider,
             id,
@@ -671,5 +682,6 @@ fn parse_byte_range(value: &str) -> Result<ObservationSelector, CliError> {
 }
 
 fn usage() -> String {
-    "usage: agent-workspace <command> --repository PATH --workspace PATH [options]".to_owned()
+    "usage: agent-workspace <command> --repository PATH [--state-root PATH | --workspace PATH] [options]"
+        .to_owned()
 }
