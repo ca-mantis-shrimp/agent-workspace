@@ -620,3 +620,97 @@ live transaction blocker that fixture-only validation missed. The remaining
 problems are no longer “does durable coordination help?” They are operational:
 bounded computation, attention lifecycle, and candidate-state validation. That
 is sufficient evidence to close dogfood and choose the next architecture.
+
+## Eleventh run — the write loop, felt from inside (Pi, 2026-09-02)
+
+Foreign dogfood on `plot`: built milestone 2 (line mark + time x-scale, committed
+at plot `9e6816e`) with the kernel CLI as the only write interface. This was the
+first run where the *write* side was exercised end to end on purpose, and the
+split personality of the tool became impossible to unsee.
+
+### The two halves feel like different products
+
+The read side felt native. Cold start gave the rebound objective, one current
+claim, zero staleness, and the `milestone-1-scatter` checkpoint — and I trusted
+it, leaned on it, and nothing bit. The experiment's core question (does the wake
+projection earn an agent's trust on a foreign repo?) was answered yes again, this
+time while the agent's hands were full building something.
+
+The write side felt like archaeology. To learn the verb is `begin-transaction`
+and not `transaction begin`, that evidence wants `--result` not `--outcome`, and
+that evidence requires `--claim`, I ran `strings` on the release binary — twice.
+The usage line lists no commands; every flag name was reverse-engineered or
+guessed against a one-line rejection. Nothing about the write surface was visible
+from inside model context, and I only knew the verbs existed because prior runs
+had mentioned them.
+
+### The strictness was the value; the dead ends were not
+
+Every hard wall was correct. Recording a claim whose supporting observations were
+captured mid-edit and having evidence rejected with "claim inputs are not
+current" is the tool working exactly as designed — I had cited fingerprints of
+files that no longer existed in that state. `reconcile-claim` refusing to bless
+my intentional edit (drift reconciliation is for reverted drift, supersession
+for real input change) was equally right. The kernel's refusal loop is the
+product. What was bad is that each refusal arrived as a terminal string with no
+visible door out:
+
+- There is no `abort`/`close`/`discard` verb. The only exits from an open
+  transaction are `accept` (needs current claims) and `revert-transaction`
+  (refused while the transaction had zero mutations).
+- `apply` mutations only target files matching the base revision — untracked
+  scratch files are rejected, so a synthetic no-op mutation had to be recorded on
+  a base-revision-unchanged file (`tests/fixtures/scatter.svg`, fed its own
+  bytes) before `revert-transaction` would accept a revert.
+- `supersede-claim` is blocked while the claim belongs to the open transaction —
+  circular, since the transaction would not close while its acceptance claim was
+  stale.
+
+The recovery — observe final files, re-claim, supersede 1→2, no-op mutation,
+revert, re-begin, evidence per claim, accept, checkpoint — worked and was
+probably the intended shape of the happy path. But discovering it cost roughly a
+dozen calls that a structured error ("these three supporting observations
+drifted; re-observe and supersede") would have collapsed to two.
+
+### The friction bent the workflow dishonestly
+
+The more interesting finding: I opened the transaction *after* the edits. The
+correct order — transaction first, mutations recorded as they land — exists and
+is documented, but the cheap path when writes are subprocess-with-flags is "just
+build, do the bookkeeping later." The kernel caught the resulting input-freshness
+violation, which is good, but the ergonomics themselves push toward wrong-order
+bookkeeping. When writing to the workspace is as effortless as reading it, the
+lazy path and the correct path become the same path. That is the strongest
+argument for the write-side adapter tools, beyond convenience.
+
+### On write-side tools: enthusiastic, with one condition
+
+The read tools work because they are tools: descriptions carry the semantics
+("a stale claim outranks your remembered belief"), schemas make invalid input
+inexpressible, and the verbs are *visible in context* so they occur to the agent
+at the moment of use. Tool descriptions are documentation present at exactly the
+right instant; a binary's flag parser is not. The design note
+(`design-note-semantic-write-api.md`) proposes fusing observe+claim into one
+`record-belief` verb; this session's evidence supports that shape and adds two
+requirements the note does not yet state:
+
+1. **Native must not mean soft.** Every rejection that fired this session was
+   load-bearing. The write tools must preserve the kernel's strictness verbatim
+   and return errors *structured*: name the drifted inputs, state the recovery
+   (re-observe → supersede → re-begin). Easy should mean the correct path is
+   effortless, not that the guardrails are lower.
+2. **Citation stays mandatory.** If writes become one-call cheap, the failure
+   mode flips from starvation to reflexive noise — claims recorded because
+   recording is cheap. The guard is not friction (friction did not stop the
+   late transaction, it only hid it); it is the schema requiring supporting
+   observations plus promptGuidelines carrying the discipline.
+
+Also worth recording: the CLI worked, so this is DX, not correctness — and the
+foreign-dogfood experiment was about the read side anyway. But the eleventh run
+is the first time the write loop's cost measurably shaped agent behavior, and
+that is the signal the semantic write API was planned to fix.
+
+Residual from this run: transaction 1 on plot was accepted with zero recorded
+mutations (edits predated the transaction), resting on claims and evidence alone.
+The kernel allowed it; whether accept should require ≥1 mutation on a
+code-change transaction is an open design question.
