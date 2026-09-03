@@ -1081,3 +1081,46 @@ pulled next by the foreign handoff.
   `--workspace <repo>/.agent-workspace` and are unchanged this slice; repointing
   them at `--state-root` is the next step, alongside the registry and global Pi
   projection.
+
+## 2026-09-02 — Claude Code adapter repointed to external state (portability slice 2)
+
+Slice 1 taught the kernel to resolve an external, project-scoped state root but
+left every adapter still passing `--workspace <repo>/.agent-workspace`, so
+nothing actually used the portable path. This slice moves the first live
+interface — the Claude Code adapter — onto it.
+
+- **The repoint is one function.** All three hooks funnel through
+  `workspace_runtime.runtime_for`, which used to return `(root, binary,
+  workspace_dir)` and hand each hook the in-repo `.agent-workspace`. It now
+  returns `(root, binary)`; `capture-read.py` and `orient-session.py` pass only
+  `--repository` and let the kernel resolve where state lives. A thin transport
+  must not second-guess resolution — that was the whole point of slice 1.
+- **New `state-path` kernel command.** Pure resolution: prints the state root the
+  kernel *would* use for a repository, without opening or creating it or taking a
+  lock. Two reasons it earns its keep: transparency (a human or adapter can ask
+  "where did my workspace go?"), and it gave the one-time migration an exact
+  target computed by the kernel's own hash rather than a fragile bash
+  reimplementation of `sha256(realpath(git-common-dir))` — the kind of duplicated
+  logic that drifts.
+- **Migration, not reset.** The live `.agent-workspace` (8925 events, the whole
+  self-dogfood history my own SessionStart orientation reads) would have been
+  orphaned by the flip. So it was **copied** to
+  `~/.local/state/agent-workspace/<hash>` — the path `state-path` reports — and
+  the original left in place as a frozen backup. Non-destructive and reversible:
+  deleting the external copy restores the prior world. Verified the migrated
+  state reads back through the new resolution (objective, claim 61, and the
+  slice-1 checkpoint all present).
+- **The orientation drive had to move too.** `orient_session_drive.py` recomputed
+  its "expected" status/delta by shelling the kernel with the pinned in-repo
+  `--workspace`; against the repointed hook that compares two different
+  workspaces. Both reference commands now drop `--workspace` so the drive and the
+  hook resolve the same place. 16/16 checks green.
+- **Verification.** Orientation drive 16/16 (reading external); a synthetic
+  `PostToolUse(Read)` drove `capture-read.py` to record observation 288 into the
+  external workspace while the frozen backup stayed at 8925 events; 53 Rust tests
+  (one new: `state-path` prints the resolved root without creating it); fmt +
+  clippy clean.
+- **Residual.** The Pi adapter (`.pi/extensions/agent-workspace/index.ts` and its
+  tests) still passes `--workspace` and is deliberately unchanged this slice, to
+  keep the change reviewable. Repointing Pi, the project registry, and the global
+  Pi projection are the next cuts before the real foreign-repo task.

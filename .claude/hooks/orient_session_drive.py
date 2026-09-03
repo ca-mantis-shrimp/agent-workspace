@@ -81,6 +81,10 @@ def main() -> int:
     status_start = out.index(status_heading) + len(status_heading)
     status_end = out.index(delta_heading)
     projected_status = out[status_start:status_end]
+    # Recompute the reference with the SAME resolution the hook uses (no
+    # `--workspace`): the kernel locates the project-scoped state root from
+    # `--repository` alone, so both this reference and the hook read the same
+    # place. A pinned in-repo path would compare against a different workspace.
     kernel_status = subprocess.run(
         [
             BINARY,
@@ -88,8 +92,6 @@ def main() -> int:
             "--compact",
             "--repository",
             REPO,
-            "--workspace",
-            os.path.join(REPO, ".agent-workspace"),
         ],
         capture_output=True,
         text=True,
@@ -115,8 +117,6 @@ def main() -> int:
             "--compact",
             "--repository",
             REPO,
-            "--workspace",
-            os.path.join(REPO, ".agent-workspace"),
         ],
         capture_output=True,
         text=True,

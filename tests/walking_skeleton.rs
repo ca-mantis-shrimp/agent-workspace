@@ -4577,6 +4577,35 @@ fn state_root_is_shared_across_worktrees_and_separate_across_clones() {
 }
 
 #[test]
+fn state_path_reports_the_resolved_root_without_creating_it() {
+    // `state-path` is pure resolution for transparency: it must print where
+    // state lives and touch nothing, so an adapter or human can inspect the
+    // location before any workspace exists there.
+    let fixture = GitFixture::new();
+    let state = TempDir::new().unwrap();
+    let base = state.path().join("root");
+
+    let output = invoke(&[
+        "state-path",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--state-root",
+        base.to_str().unwrap(),
+    ]);
+    let reported = String::from_utf8(output.stdout).unwrap();
+    let reported = reported.trim();
+
+    assert!(
+        Path::new(reported).starts_with(&base),
+        "reported path {reported} lives under the state root"
+    );
+    assert!(
+        !base.exists(),
+        "state-path must not create the state directory"
+    );
+}
+
+#[test]
 fn explicit_workspace_override_bypasses_resolution() {
     // The legacy `--workspace` path is honored verbatim so existing adapters
     // and fixtures keep working while they are repointed.

@@ -53,23 +53,24 @@ def main() -> None:
     runtime = runtime_for(event.get("cwd") or ".")
     if runtime is None:
         return
-    root, binary, workspace = runtime
+    root, binary = runtime
 
     repository_path = repository_relative(root, absolute_path)
     if repository_path is None:
         return
-    # The kernel already refuses sensitive paths, but its own state directory is
-    # an adapter concern: observing our own workspace is self-referential noise.
+    # The kernel already refuses sensitive paths, and it now keeps its own state
+    # outside the repository — but a legacy in-repo `.agent-workspace` may still
+    # linger as a frozen backup, and observing it is self-referential noise.
     if repository_path.startswith(".agent-workspace/"):
         return
 
+    # No `--workspace`: the kernel resolves the project-scoped state root from
+    # `--repository` alone. A thin transport names the repository and nothing more.
     args = [
         binary,
         "observe-read",
         "--repository",
         root,
-        "--workspace",
-        workspace,
         "--path",
         repository_path,
         "--provider",

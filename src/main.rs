@@ -29,6 +29,15 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
         options.workspace.as_deref(),
         options.state_root.as_deref(),
     )?;
+
+    // `state-path` is pure resolution: report where state lives (or would live)
+    // without opening or creating it, so an adapter or a human can see the
+    // location the kernel chose. It takes no lock because it touches nothing.
+    if command.as_str() == "state-path" {
+        println!("{}", workspace_root.display());
+        return Ok(());
+    }
+
     let workspace = Workspace::open(&options.repository, &workspace_root)?;
 
     // Serialize every invocation against this workspace. Held until `run`
@@ -682,6 +691,7 @@ fn parse_byte_range(value: &str) -> Result<ObservationSelector, CliError> {
 }
 
 fn usage() -> String {
-    "usage: agent-workspace <command> --repository PATH [--state-root PATH | --workspace PATH] [options]"
+    "usage: agent-workspace <command> --repository PATH [--state-root PATH | --workspace PATH] [options]\n\
+     (use `state-path` to print the resolved state directory without creating it)"
         .to_owned()
 }

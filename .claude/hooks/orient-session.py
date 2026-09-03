@@ -50,11 +50,14 @@ FRAMING = (
 )
 
 
-def kernel_json(binary: str, root: str, workspace: str, command: list):
+def kernel_json(binary: str, root: str, command: list):
     """Run a read-only kernel command and return its stdout, or None if the
-    invocation fails (e.g. `delta` with no checkpoint yet)."""
+    invocation fails (e.g. `delta` with no checkpoint yet).
+
+    No `--workspace`: the kernel resolves the project-scoped state root from
+    `--repository` alone, so orientation reads wherever state actually lives."""
     result = subprocess.run(
-        [binary, *command, "--repository", root, "--workspace", workspace],
+        [binary, *command, "--repository", root],
         capture_output=True,
         text=True,
         timeout=10,
@@ -95,9 +98,9 @@ def main() -> None:
     runtime = runtime_for(event.get("cwd") or ".")
     if runtime is None:
         return
-    root, binary, workspace = runtime
+    root, binary = runtime
 
-    status = kernel_json(binary, root, workspace, ["status", "--compact"])
+    status = kernel_json(binary, root, ["status", "--compact"])
     if status is None:
         return
     parsed_status = parse_status(status)
@@ -113,7 +116,7 @@ def main() -> None:
     # Delta is best-effort: a workspace with no checkpoint yet still deserves its
     # status, so a missing/failed delta narrows the orientation, never suppresses
     # it.
-    delta = kernel_json(binary, root, workspace, ["delta", "--compact"])
+    delta = kernel_json(binary, root, ["delta", "--compact"])
     if delta is not None:
         sections += [
             "# delta since last checkpoint (verbatim bounded kernel JSON)",
