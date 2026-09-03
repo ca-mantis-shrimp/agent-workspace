@@ -390,6 +390,46 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
+		name: "workspace_record_belief",
+		label: "Workspace Record Belief",
+		description:
+			"Record a belief — the fused write verb: \"I now believe X, and it rests on files Y, Z.\" Replaces the raw-CLI observe-then-claim two-step. For each rests-on path the kernel reuses the freshest existing observation when it is current (typically your ambient read captures) and only otherwise captures a whole-file observation, focuses it, and records the claim with the statement as the focus reason. Citation is mandatory: at least one rests-on path is required, so a belief you cannot cite cannot be recorded. Rejections from the kernel are strict and name the failed inputs — re-read the named file (your read is auto-captured), then re-record.",
+		promptSnippet:
+			"Write side: assert a belief citing the files it rests on; reuses fresh observations.",
+		promptGuidelines: [
+			"Call workspace_record_belief whenever you form a durable belief about code, citing the files the belief rests on: the write loop exists so the next session's workspace_status has something current to be fresh about. A claim it reports as stale outranks your remembered belief.",
+		],
+		parameters: Type.Object({
+			statement: Type.String({
+				description:
+					"The belief itself, thesis-first: the assertion you are staking on the cited files.",
+			}),
+			rests_on: Type.Array(
+				Type.String({
+					description: "Repository-relative path the belief rests on.",
+				}),
+				{
+					minItems: 1,
+					description:
+						"Cited supporting paths (required, non-empty). Re-read a path with the read tool first if its freshness is uncertain — your read is auto-captured and will be reused.",
+				},
+			),
+			scope: Type.Optional(
+				Type.Union([Type.Literal("declared"), Type.Literal("conservative-siblings")], {
+					description:
+						"Claim scope strategy: `declared` (default) binds only the cited paths; `conservative-siblings` additionally fingerprints the cited files' repository siblings.",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			const command = ["record-belief", "--statement", params.statement];
+			for (const path of params.rests_on) command.push("--rests-on", path);
+			if (params.scope) command.push("--scope", params.scope);
+			return runKernel(ctx.cwd, command, signal);
+		},
+	});
+
+	pi.registerTool({
 		name: "workspace_transaction_preview",
 		label: "Workspace Transaction Preview",
 		description:

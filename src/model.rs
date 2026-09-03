@@ -299,6 +299,26 @@ pub struct Claim {
     pub report: FreshnessReport,
 }
 
+/// One `rests-on` path of a recorded belief: which observation carries it, and
+/// whether that observation already existed in a fresh state (typically ambient
+/// adapter capture) and was reused, or had to be captured now. Reuse is the
+/// point of the fused verb — it joins the ambient sense ledger to the
+/// deliberate belief ledger instead of forking them.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BeliefSupport {
+    pub path: PathBuf,
+    pub observation_id: u64,
+    pub reused: bool,
+}
+
+/// The result of the fused belief operation: the claim the agent asserted,
+/// plus the per-path reuse accounting that makes the join visible.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Belief {
+    pub claim: Claim,
+    pub supports: Vec<BeliefSupport>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Objective {
     pub intent: String,

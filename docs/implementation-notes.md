@@ -1190,3 +1190,54 @@ dynamic, working.
   active-claim cap in the wake projection — is still worth adding once a workspace
   has many *genuinely* active claims, but the immediate cause was missing
   lifecycle hygiene, not too many live beliefs.
+
+## 2026-09-03 — The fused write verb: `record-belief` (write-API slice 1)
+
+The semantic write API plan (`docs/design-note-semantic-write-api.md`) diagnosed
+claim starvation: the read side is first-class in both adapters, but the write
+loop was raw CLI behind prose, so observations accumulated ambiently while
+claims almost never landed (plot sat at ~22 observations to 1 claim). This slice
+ships the plan's thinnest falsifiable cut.
+
+- **`Workspace::record_belief(statement, rests_on, scope_strategy)`** — the
+  agent's cognitive act ("I believe X, resting on files Y, Z") as one kernel
+  operation. Per cited path: reuse the *freshest* existing observation when
+  reconcile says it is current (joining the ambient capture ledger to the belief
+  ledger — reuse is the point, not an optimization), else capture a whole-file
+  observation now with the path's detected normalizer. Each support is focused
+  with the statement itself as the focus reason, so the belief's provenance
+  lands in the working set and navigation trail. Returns `Belief { claim,
+  supports[] }` where each `BeliefSupport` records `reused` — the per-path
+  accounting that makes the join visible and testable.
+- **Citation is schema-enforced, not friction-enforced.** `rests_on` empty →
+  kernel rejection; the CLI additionally rejects before invocation. Duplicate
+  paths collapse onto one support. This is eleventh-run requirement 2: a cheap
+  write path flips the failure mode from starvation to reflexive noise, and the
+  guard belongs in the schema.
+- **CLI verb `record-belief`** with `--statement` (required), repeatable
+  `--rests-on` (required, ≥1), and the shared `--scope`. Kernel strictness is
+  preserved verbatim — rejections still name their inputs (requirement 1); the
+  verb only removes the two-step id threading.
+- **Pi tool `workspace_record_belief`** — the write side is now a tool, not
+  prose. `statement` + `rests_on` (minItems 1) + optional `scope` literal enum;
+  promptGuidelines point at *when* to write (whenever you form a durable belief)
+  and what outranks it (a stale claim). Adapters stay thin transports; the
+  fusion/reuse logic is kernel-owned, so the future MCP adapter maps the same
+  verb.
+- **Teeth proven by the S1 machinery, both directions.** New acceptance tests:
+  reuse does not duplicate (fail-guard — a duplicate capture would re-fork the
+  ledgers), no-observation capture works, an out-of-band edit turns the
+  recorded belief `stale`, a stale dependency is re-observed rather than reused,
+  uncited rejection at kernel and CLI level, and the CLI verb surfaces in
+  compact `status`. 55 Rust tests, 8 Pi tests.
+- **Test hermeticity debt paid.** Two Pi tests had relied on PATH/in-repo
+  fallback for kernel discovery and began failing once the kernel was installed
+  globally (portability slice 4): the installed binary shadowed their fakes.
+  They now pin `AGENT_WORKSPACE_BIN` (and clear PATH where absence is the case),
+  restoring determinism under both deployment modes.
+- **Deferred per plan:** `--supersedes` on the fused verb, `set-objective`
+  fusion, transaction verbs as tools, and the recovery door for open
+  transactions (`abort`/`discard`) — the last is a real kernel gap the
+  eleventh run exposed, not just DX. The falsifiable measurement (three beliefs
+  in a foreign-repo slice, claim-count vs. baseline) happens in the next plot
+  session.

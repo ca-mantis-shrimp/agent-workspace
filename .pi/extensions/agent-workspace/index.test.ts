@@ -31,72 +31,83 @@ process.stdin.on("end", () => {
 	);
 	await chmod(binary, 0o755);
 
-	let toolCallHandler: ((event: unknown) => void) | undefined;
-	let contextHandler:
-		| ((
-				event: { messages: unknown[] },
-				ctx: { cwd: string; signal?: AbortSignal },
-		  ) => Promise<void>)
-		| undefined;
-	const fakePi = {
-		on(event: string, handler: unknown) {
-			if (event === "tool_call")
-				toolCallHandler = handler as typeof toolCallHandler;
-			if (event === "context") contextHandler = handler as typeof contextHandler;
-		},
-		registerTool() {},
-		async exec(command: string) {
-			assert.equal(command, "git");
-			return { code: 0, stdout: `${root}\n`, stderr: "", killed: false };
-		},
-	} as unknown as ExtensionAPI;
+	// Pin the fake kernel through the adapter's highest-precedence lookup.
+	// Without this, an agent-workspace binary installed on PATH (the
+	// installed-kernel deployment) shadows the fake and the test drives the
+	// real kernel.
+	const previousBinary = process.env.AGENT_WORKSPACE_BIN;
+	process.env.AGENT_WORKSPACE_BIN = binary;
+	try {
+		let toolCallHandler: ((event: unknown) => void) | undefined;
+		let contextHandler:
+			| ((
+					event: { messages: unknown[] },
+					ctx: { cwd: string; signal?: AbortSignal },
+			  ) => Promise<void>)
+			| undefined;
+		const fakePi = {
+			on(event: string, handler: unknown) {
+				if (event === "tool_call")
+					toolCallHandler = handler as typeof toolCallHandler;
+				if (event === "context") contextHandler = handler as typeof contextHandler;
+			},
+			registerTool() {},
+			async exec(command: string) {
+				assert.equal(command, "git");
+				return { code: 0, stdout: `${root}\n`, stderr: "", killed: false };
+			},
+		} as unknown as ExtensionAPI;
 
-	registerAgentWorkspace(fakePi);
-	assert.ok(toolCallHandler);
-	assert.ok(contextHandler);
-	const visible =
-		"αlpha\nbeta\n\n[1 more lines in file. Use offset=4 to continue.]";
-	toolCallHandler({
-		toolName: "read",
-		toolCallId: "read-1",
-		input: { path: "src/example.txt", offset: 2, limit: 2 },
-	});
-	await contextHandler(
-		{
-			messages: [
-				{
-					role: "toolResult",
-					toolCallId: "read-1",
-					toolName: "read",
-					content: [{ type: "text", text: visible }],
-					isError: false,
-					timestamp: Date.now(),
-				},
-			],
-		},
-		{ cwd: root },
-	);
+		registerAgentWorkspace(fakePi);
+		assert.ok(toolCallHandler);
+		assert.ok(contextHandler);
+		const visible =
+			"αlpha\nbeta\n\n[1 more lines in file. Use offset=4 to continue.]";
+		toolCallHandler({
+			toolName: "read",
+			toolCallId: "read-1",
+			input: { path: "src/example.txt", offset: 2, limit: 2 },
+		});
+		await contextHandler(
+			{
+				messages: [
+					{
+						role: "toolResult",
+						toolCallId: "read-1",
+						toolName: "read",
+						content: [{ type: "text", text: visible }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{ cwd: root },
+		);
 
-	const captured = JSON.parse(await readFile(capturePath, "utf8")) as {
-		args: string[];
-		stdin: string;
-	};
-	assert.equal(captured.args[0], "observe-read");
-	assert.equal(
-		captured.args[captured.args.indexOf("--path") + 1],
-		"src/example.txt",
-	);
-	assert.equal(
-		captured.args[captured.args.indexOf("--provider") + 1],
-		"pi.read",
-	);
-	assert.equal(captured.args[captured.args.indexOf("--offset") + 1], "2");
-	assert.equal(captured.args[captured.args.indexOf("--limit") + 1], "2");
-	assert.equal(
-		captured.args[captured.args.indexOf("--model-visible-bytes") + 1],
-		Buffer.byteLength(visible).toString(),
-	);
-	assert.equal(captured.stdin, "αlpha\nbeta");
+		const captured = JSON.parse(await readFile(capturePath, "utf8")) as {
+			args: string[];
+			stdin: string;
+		};
+		assert.equal(captured.args[0], "observe-read");
+		assert.equal(
+			captured.args[captured.args.indexOf("--path") + 1],
+			"src/example.txt",
+		);
+		assert.equal(
+			captured.args[captured.args.indexOf("--provider") + 1],
+			"pi.read",
+		);
+		assert.equal(captured.args[captured.args.indexOf("--offset") + 1], "2");
+		assert.equal(captured.args[captured.args.indexOf("--limit") + 1], "2");
+		assert.equal(
+			captured.args[captured.args.indexOf("--model-visible-bytes") + 1],
+			Buffer.byteLength(visible).toString(),
+		);
+		assert.equal(captured.stdin, "αlpha\nbeta");
+	} finally {
+		if (previousBinary === undefined) delete process.env.AGENT_WORKSPACE_BIN;
+		else process.env.AGENT_WORKSPACE_BIN = previousBinary;
+	}
 });
 
 type FakeExec = (command: string, args: string[]) => Promise<ExecOutcome>;
@@ -302,6 +313,61 @@ test("workspace_transaction_preview passes the transaction id through to the ker
 	assert.equal(result.content[0].text, "executed:preview-transaction");
 });
 
+test("workspace_record_belief passes the belief and citations through to the kernel", async () => {
+	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
+	await installKernelPlaceholder(root);
+	const calls: string[][] = [];
+	const exec: FakeExec = (command, args) => {
+		if (command !== "git") calls.push(args);
+		return repositoryRootStub(root)(command, args);
+	};
+	const tools = registerWithFakePi(exec);
+	const recordBelief = tools.get("workspace_record_belief");
+	assert.ok(recordBelief, "workspace_record_belief must be registered");
+
+	const result = await recordBelief.execute(
+		"call-1",
+		{ statement: "foo returns one", rests_on: ["src/lib.rs"] },
+		undefined,
+		undefined,
+		{ cwd: root },
+	);
+	assert.deepEqual(calls[0], [
+		"record-belief",
+		"--statement",
+		"foo returns one",
+		"--rests-on",
+		"src/lib.rs",
+		"--repository",
+		root,
+	]);
+	assert.ok(
+		!calls[0].includes("--scope"),
+		"default scope is the kernel's declared default, not an adapter flag",
+	);
+	assert.equal(result.content[0].text, "executed:record-belief");
+
+	await recordBelief.execute(
+		"call-2",
+		{
+			statement: "module shape held",
+			rests_on: ["src/lib.rs", "src/main.rs"],
+			scope: "conservative-siblings",
+		},
+		undefined,
+		undefined,
+		{ cwd: root },
+	);
+	const scope = calls[1].indexOf("--scope");
+	assert.notEqual(scope, -1);
+	assert.equal(calls[1][scope + 1], "conservative-siblings");
+	assert.equal(
+		calls[1].filter((flag) => flag === "--rests-on").length,
+		2,
+		"every cited path is forwarded",
+	);
+});
+
 test("orientation tools degrade to plain text outside a repository and throw on kernel failure", async () => {
 	const outside = await mkdtemp(join(tmpdir(), "agent-workspace-outside-"));
 	const tools = registerWithFakePi(async (_command, _args) => ({
@@ -320,20 +386,35 @@ test("orientation tools degrade to plain text outside a repository and throw on 
 	const missingRoot = await mkdtemp(
 		join(tmpdir(), "agent-workspace-no-binary-"),
 	);
-	const missing = registerWithFakePi(async (command) => {
-		assert.equal(command, "git");
-		return { code: 0, stdout: `${missingRoot}\n`, stderr: "" };
-	});
-	const missingStatus = missing.get("workspace_status");
-	assert.ok(missingStatus);
-	const noBinary = await missingStatus.execute(
-		"call-2",
-		{},
-		undefined,
-		undefined,
-		{ cwd: missingRoot },
-	);
-	assert.match(noBinary.content[0].text, /built target\/debug\/agent-workspace/);
+	// Hermeticity: the binary lookup must find nothing. A globally installed
+	// agent-workspace on PATH (the installed-kernel deployment) would otherwise
+	// satisfy the lookup and turn this "absent runtime" case into a real
+	// invocation, so the lookup environment is pinned to empty for this case.
+	const savedPath = process.env.PATH;
+	const savedBinary = process.env.AGENT_WORKSPACE_BIN;
+	process.env.PATH = "";
+	delete process.env.AGENT_WORKSPACE_BIN;
+	try {
+		const missing = registerWithFakePi(async (command) => {
+			assert.equal(command, "git");
+			return { code: 0, stdout: `${missingRoot}\n`, stderr: "" };
+		});
+		const missingStatus = missing.get("workspace_status");
+		assert.ok(missingStatus);
+		const noBinary = await missingStatus.execute(
+			"call-2",
+			{},
+			undefined,
+			undefined,
+			{ cwd: missingRoot },
+		);
+		assert.match(noBinary.content[0].text, /built target\/debug\/agent-workspace/);
+	} finally {
+		if (savedPath === undefined) delete process.env.PATH;
+		else process.env.PATH = savedPath;
+		if (savedBinary === undefined) delete process.env.AGENT_WORKSPACE_BIN;
+		else process.env.AGENT_WORKSPACE_BIN = savedBinary;
+	}
 
 	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
 	await installKernelPlaceholder(root);

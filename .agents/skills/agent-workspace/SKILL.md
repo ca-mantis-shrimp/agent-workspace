@@ -48,27 +48,33 @@ against a specific one.
 ## The loop
 
 1. `bind-objective --intent "..."` — declare what you're doing.
-2. `observe --path <file>` — record that you looked at a file, *before* forming a
-   belief about it. Returns an observation.
-3. `claim --statement "..." --observation <id> --scope declared` — assert the
-   belief, citing the observations that back it. Add `--dependency <path>` for a
-   file the claim depends on but you didn't directly observe.
-3b. When a claim is genuinely outdated — not merely drift-stale — replace it:
+2. **`record-belief --statement "..." --rests-on <path> [--rests-on <path>]`** —
+   the fused write verb: *"I now believe X, and it rests on files Y, Z"* in one
+   call. In Pi, prefer the `workspace_record_belief` tool — same verb, schema
+   present at the moment of use. For each cited path the kernel **reuses** the
+   freshest existing observation when it is current (typically your ambient read
+   captures) and only otherwise captures a whole-file observation, then focuses
+   it and records the claim. Citation is mandatory: no `--rests-on`, no belief.
+   The mechanical two-step still exists when you need it:
+   `observe --path <file>` then `claim --statement "..." --observation <id>`
+   (add `--dependency <path>` for a file the claim depends on but you didn't
+   directly observe).
+2b. When a claim is genuinely outdated — not merely drift-stale — replace it:
    record the successor claim, then `supersede-claim --id <old> --claim <new>
    --reason "why"`. Supersession is for decisions that no longer hold or
    assessments that were consumed, never for input drift (that is what
    `stale` is for). Superseded claims leave the active projection but stay
    readable history with their replacement link and reason.
-4. `status` — check freshness *before acting* on any claim. Distinguish
+3. `status` — check freshness *before acting* on any claim. Distinguish
    `claims` (live beliefs) from `superseded_claims` (retired history): a
    superseded claim is not evidence of anything current, even when its recorded
    freshness says `current`.
-5. To make a reversible clean-base experiment: `begin-transaction --claim
+4. To make a reversible clean-base experiment: `begin-transaction --claim
    <id>`, then `apply --id <tx> --path <file> --content "..."`, and use
    `revert-transaction` when needed. Post-mutation acceptance is not yet a sound
    workflow: descriptive claims become stale after the owned edit, and the
    separate acceptance-criterion model is still pending.
-6. When you finish an objective or switch to a new one, `checkpoint --label
+5. When you finish an objective or switch to a new one, `checkpoint --label
    <name> [--note "..."]` *before* you `bind-objective` the next. The checkpoint
    snapshots the objective in force, so rebinding records the transition instead
    of silently overwriting the completed one — and it becomes the baseline the

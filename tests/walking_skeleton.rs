@@ -1,8 +1,9 @@
 use agent_workspace::{
-    Claim, ClaimInputSource, ClaimLifecycle, DeltaStatus, Evidence, Finding, FindingDisposition,
-    FindingSeverity, FreshnessWithinScope, Normalizer, Objective, Observation, ObservationCapture,
-    ObservationSelector, RevealedFinding, RevealedObservation, ScopeCompleteness, ScopeSource,
-    Transaction, TransactionState, Workspace, WorkspaceStatus,
+    Belief, BeliefSupport, Claim, ClaimInputSource, ClaimLifecycle, DeltaStatus, Evidence, Finding,
+    FindingDisposition, FindingSeverity, FreshnessWithinScope, Normalizer, Objective, Observation,
+    ObservationCapture, ObservationCaptureOptions, ObservationSelector, RevealedFinding,
+    RevealedObservation, ScopeCompleteness, ScopeSource, Transaction, TransactionState, Workspace,
+    WorkspaceStatus,
 };
 use serde_json::Value;
 use std::fs;
@@ -4512,6 +4513,219 @@ fn invoke_failure(arguments: &[&str]) -> Output {
         .unwrap();
     assert!(!output.status.success(), "command unexpectedly succeeded");
     output
+}
+
+/// The fused belief verb is the starvation fix: observations are captured
+/// ambiently by adapters, but claims used to be a deliberate two-step CLI
+/// detour, so observations piled up and claims almost never landed. The
+/// fail-guard case matters as much as the happy path — if `record_belief`
+/// captured a duplicate observation while a fresh one existed, it would re-fork
+/// the two ledgers the verb exists to join.
+#[test]
+fn record_belief_reuses_a_fresh_ambient_observation_instead_of_duplicating_it() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let handle = Workspace::open(&fixture.repository, &workspace).unwrap();
+
+    // The ambient capture an adapter's read hook would have recorded.
+    let ambient = handle
+        .capture_file_observation(
+            "src/lib.rs",
+            "adapter.capture",
+            ObservationCaptureOptions::default(),
+        )
+        .unwrap();
+
+    let belief = handle
+        .record_belief(
+            "foo returns one",
+            &["src/lib.rs".into()],
+            agent_workspace::ClaimScopeStrategy::Declared,
+        )
+        .unwrap();
+
+    let support: &BeliefSupport = &belief.supports[0];
+    assert_eq!(support.path, Path::new("src/lib.rs"));
+    assert_eq!(support.observation_id, ambient.observation.id);
+    assert!(
+        support.reused,
+        "a fresh observation must be reused, not duplicated"
+    );
+    assert_eq!(
+        belief.claim.supporting_observation_ids,
+        vec![ambient.observation.id]
+    );
+    assert_eq!(
+        belief.claim.report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+    // Exactly one observation exists: the ambient one, now joined to a claim.
+    let status = handle.resume_status().unwrap();
+    assert_eq!(status.observations.len(), 1);
+    assert_eq!(status.claims.len(), 1);
+    // The fusion focuses the supporting observation with the statement itself
+    // as the reason, so the belief's provenance lands in the working set.
+    let entry = status
+        .working_set
+        .iter()
+        .find(|entry| entry.observation_id == ambient.observation.id)
+        .expect("the belief's support is focused");
+    assert_eq!(entry.reason, "foo returns one");
+}
+
+#[test]
+fn record_belief_captures_when_no_observation_exists_and_stales_after_an_edit() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let handle = Workspace::open(&fixture.repository, &workspace).unwrap();
+
+    let belief = handle
+        .record_belief(
+            "foo returns one",
+            &["src/lib.rs".into()],
+            agent_workspace::ClaimScopeStrategy::Declared,
+        )
+        .unwrap();
+    assert!(!belief.supports[0].reused);
+    assert_eq!(
+        belief.claim.report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 { 2 }\n",
+    )
+    .unwrap();
+
+    // The teeth: the belief is a real claim bound to real inputs, so the S1
+    // staleness machinery turns it stale on an out-of-band edit.
+    let status = handle.resume_status().unwrap();
+    assert_eq!(status.claims.len(), 1);
+    assert_eq!(
+        status.claims[0].report.freshness_within_scope,
+        FreshnessWithinScope::Stale
+    );
+}
+
+#[test]
+fn record_belief_re_observes_a_stale_dependency_rather_than_reusing_it() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let handle = Workspace::open(&fixture.repository, &workspace).unwrap();
+
+    let ambient = handle
+        .capture_file_observation(
+            "src/lib.rs",
+            "adapter.capture",
+            ObservationCaptureOptions::default(),
+        )
+        .unwrap();
+    // The file changed after the ambient capture: its observation is stale now.
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 { 2 }\n",
+    )
+    .unwrap();
+
+    let belief = handle
+        .record_belief(
+            "foo returns two",
+            &["src/lib.rs".into()],
+            agent_workspace::ClaimScopeStrategy::Declared,
+        )
+        .unwrap();
+
+    assert!(
+        !belief.supports[0].reused,
+        "a stale observation must not be reused"
+    );
+    assert_ne!(belief.supports[0].observation_id, ambient.observation.id);
+    assert_eq!(
+        belief.claim.report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+    assert_eq!(
+        belief.claim.supporting_observation_ids,
+        vec![belief.supports[0].observation_id]
+    );
+}
+
+#[test]
+fn record_belief_requires_a_citation() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let handle = Workspace::open(&fixture.repository, &workspace).unwrap();
+
+    let error = handle
+        .record_belief(
+            "uncited",
+            &[],
+            agent_workspace::ClaimScopeStrategy::Declared,
+        )
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("at least one cited path"),
+        "unexpected error: {error}"
+    );
+
+    // The CLI enforces the same schema before the kernel is even invoked, so
+    // the friction-free path cannot silently produce uncited bookkeeping.
+    let output = Command::new(env!("CARGO_BIN_EXE_agent-workspace"))
+        .args([
+            "record-belief",
+            "--repository",
+            fixture.repository.to_str().unwrap(),
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--statement",
+            "uncited",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--rests-on"), "unexpected stderr: {stderr}");
+}
+
+#[test]
+fn record_belief_cli_end_to_end_surfaces_the_claim_in_status() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+
+    let output = invoke(&[
+        "record-belief",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--statement",
+        "foo returns one",
+        "--rests-on",
+        "src/lib.rs",
+        "--rests-on",
+        "src/helper.rs",
+    ]);
+    let belief: Belief = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(belief.supports.len(), 2);
+    assert!(belief.supports.iter().all(|support| !support.reused));
+    assert_eq!(
+        belief.claim.report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+
+    let status = invoke(&[
+        "status",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+    ]);
+    let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+    let claims = status["claims"].as_array().unwrap();
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0]["headline"], "foo returns one");
+    assert_eq!(claims[0]["freshness"], "current");
 }
 
 fn invoke(arguments: &[&str]) -> Output {

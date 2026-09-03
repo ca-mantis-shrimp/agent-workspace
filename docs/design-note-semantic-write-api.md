@@ -1,5 +1,14 @@
 # Design note — semantic write API (plan, not yet built)
 
+> **Status update 2026-09-03:** the first cut has shipped — `record-belief`
+> exists as a kernel method (`Workspace::record_belief`), a CLI verb, and the
+> `workspace_record_belief` Pi tool, with observation reuse and mandatory
+> citation as specified below (implementation notes: "The fused write verb",
+> 2026-09-03). Still open: the foreign-repo falsifiable measurement, the
+> `--supersedes` flag, `set-objective` fusion, transaction verbs as tools, and
+> the recovery door for open transactions. The design rationale below is
+> unchanged.
+
 *Written during the foreign-dogfood run on `~/Experiments/plot`, after fixing the
 `--workspace` in-repo footgun. Assesses the thinnest change that closes the
 write-loop gap both adapters share. Anchored to the CLI write verbs in

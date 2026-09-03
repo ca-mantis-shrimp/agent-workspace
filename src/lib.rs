@@ -1420,6 +1420,106 @@ impl Workspace {
             .ok_or(WorkspaceError::ClaimNotFound(claim_id))
     }
 
+    /// Record a belief: the agent's cognitive act of "I now believe X, and it
+    /// rests on files Y, Z" as one operation instead of the two-step
+    /// observe-then-claim that starved claims (observations captured ambiently
+    /// by adapters, claims left as raw-CLI friction).
+    ///
+    /// Each `rests-on` path is **required** — a belief you cannot cite is a
+    /// belief you cannot record, and mandatory citation is the schema-level
+    /// guard against reflexive, uncited bookkeeping. For every path the freshest
+    /// existing observation is reconciled and **reused when current** (joining
+    /// the ambient capture ledger to this belief); only when it is stale or
+    /// absent is a whole-file observation captured now. Every supporting
+    /// observation is focused with the statement itself as the reason, so the
+    /// belief's provenance lands in the working set and navigation trail.
+    pub fn record_belief(
+        &self,
+        statement: impl Into<String>,
+        rests_on: &[PathBuf],
+        scope_strategy: ClaimScopeStrategy,
+    ) -> Result<Belief, WorkspaceError> {
+        let statement = statement.into();
+        if statement.trim().is_empty() {
+            return Err(WorkspaceError::InvalidClaim(
+                "statement must not be empty".to_owned(),
+            ));
+        }
+        if rests_on.is_empty() {
+            return Err(WorkspaceError::InvalidClaim(
+                "a belief must rest on at least one cited path".to_owned(),
+            ));
+        }
+
+        // Duplicate paths collapse onto one support: citing the same file twice
+        // is one citation, not two observations.
+        let mut seen = BTreeSet::new();
+        let mut supports = Vec::new();
+        let mut supporting_observation_ids = Vec::new();
+        for path in rests_on {
+            let path = validate_relative_path(path)?;
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            let (observation_id, reused) = match self.freshest_observation(&path)? {
+                Some(candidate) => {
+                    let reconciled = self.reconcile_observation(candidate.id)?;
+                    if reconciled.report.freshness_within_scope == FreshnessWithinScope::Current {
+                        (reconciled.id, true)
+                    } else {
+                        let capture = self.capture_belief_observation(&path)?;
+                        (capture.observation.id, false)
+                    }
+                }
+                None => {
+                    let capture = self.capture_belief_observation(&path)?;
+                    (capture.observation.id, false)
+                }
+            };
+            self.focus_observation(observation_id, statement.clone())?;
+            supporting_observation_ids.push(observation_id);
+            supports.push(BeliefSupport {
+                path,
+                observation_id,
+                reused,
+            });
+        }
+
+        let claim = self.record_claim_with_scope(
+            statement,
+            &supporting_observation_ids,
+            &[],
+            scope_strategy,
+        )?;
+        Ok(Belief { claim, supports })
+    }
+
+    /// The newest observation recorded for `path`, if any. Reconcile decides
+    /// freshness, so recency alone never promotes a stale record.
+    fn freshest_observation(&self, path: &Path) -> Result<Option<Observation>, WorkspaceError> {
+        Ok(self
+            .project()?
+            .observations
+            .values()
+            .filter(|observation| observation.path == path)
+            .max_by_key(|observation| observation.id)
+            .cloned())
+    }
+
+    fn capture_belief_observation(
+        &self,
+        path: &Path,
+    ) -> Result<ObservationCapture, WorkspaceError> {
+        self.capture_file_observation(
+            path,
+            "agent.belief",
+            ObservationCaptureOptions {
+                normalizer: Normalizer::detect_for_path(path),
+                ..ObservationCaptureOptions::default()
+            },
+        )
+    }
+
     pub fn reconcile_claim(&self, claim_id: u64) -> Result<Claim, WorkspaceError> {
         let projection = self.project()?;
         let claim = projection

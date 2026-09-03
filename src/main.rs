@@ -243,6 +243,21 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 options.scope_strategy,
             )?)?;
         }
+        "record-belief" => {
+            let statement = options
+                .statement
+                .ok_or_else(|| CliError::Usage("record-belief requires --statement".to_owned()))?;
+            if options.rests_on.is_empty() {
+                return Err(CliError::Usage(
+                    "record-belief requires at least one --rests-on path".to_owned(),
+                ));
+            }
+            print_json(&workspace.record_belief(
+                statement,
+                &options.rests_on,
+                options.scope_strategy,
+            )?)?;
+        }
         "reconcile-claim" => {
             let id = options
                 .id
@@ -373,6 +388,7 @@ struct Options {
     statement: Option<String>,
     observation_ids: Vec<u64>,
     dependencies: Vec<PathBuf>,
+    rests_on: Vec<PathBuf>,
     scope_strategy: ClaimScopeStrategy,
     claim_ids: Vec<u64>,
     claim_id: Option<u64>,
@@ -418,6 +434,7 @@ impl Options {
         let mut statement = None;
         let mut observation_ids = Vec::new();
         let mut dependencies = Vec::new();
+        let mut rests_on = Vec::new();
         let mut scope_strategy = ClaimScopeStrategy::Declared;
         let mut claim_ids = Vec::new();
         let mut claim_id = None;
@@ -490,6 +507,10 @@ impl Options {
                         .map_err(|_| CliError::Usage(format!("invalid observation id: {value}")))?,
                 ),
                 "--dependency" => dependencies.push(PathBuf::from(value)),
+                // `record-belief`'s citation list: the belief's supporting
+                // paths, each of which resolves to a reused-or-created
+                // observation inside the kernel.
+                "--rests-on" => rests_on.push(PathBuf::from(value)),
                 "--claim" => {
                     let parsed = value
                         .parse()
@@ -609,6 +630,7 @@ impl Options {
             statement,
             observation_ids,
             dependencies,
+            rests_on,
             scope_strategy,
             claim_ids,
             claim_id,
