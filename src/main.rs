@@ -475,6 +475,10 @@ impl Options {
                 .ok_or_else(|| CliError::Usage(format!("missing value for {flag}")))?;
             match flag.as_str() {
                 "--repository" => repository = Some(PathBuf::from(value)),
+                // Intentionally undocumented (absent from `usage()`): an exact
+                // state-path override for tests and deliberate power use. It is
+                // guarded in `resolve_state_root` against in-repo paths, which
+                // silently fork state from the git-identity workspace.
                 "--workspace" => workspace = Some(PathBuf::from(value)),
                 "--state-root" => state_root = Some(PathBuf::from(value)),
                 "--path" => path = Some(PathBuf::from(value)),
@@ -691,7 +695,7 @@ fn parse_byte_range(value: &str) -> Result<ObservationSelector, CliError> {
 }
 
 fn usage() -> String {
-    "usage: agent-workspace <command> --repository PATH [--state-root PATH | --workspace PATH] [options]\n\
+    "usage: agent-workspace <command> --repository PATH [--state-root PATH] [options]\n\
      (use `state-path` to print the resolved state directory without creating it)"
         .to_owned()
 }

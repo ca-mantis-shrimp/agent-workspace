@@ -4288,6 +4288,37 @@ fn append_raw_event(workspace: &Path, event: Value) {
     fs::write(event_log, contents).unwrap();
 }
 
+#[test]
+fn in_repo_workspace_override_is_rejected_not_silently_forked() {
+    // The original foreign-dogfood footgun: an agent passes `--workspace` at a
+    // path *inside* the repo, which used to silently open a fresh state store
+    // divorced from the git-identity workspace that orientation reads — a claim
+    // recorded there never surfaces in `status`. The kernel must now refuse it
+    // loudly (non-zero exit, explanatory stderr) rather than fork state. A
+    // *sibling* state dir outside the repo stays valid and is exercised by every
+    // other test in this file via `--workspace <root>/workspace-state`.
+    let fixture = GitFixture::new();
+    let in_repo = fixture.repository.join(".agent-workspace");
+
+    let rejected = invoke_failure(&[
+        "status",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        in_repo.to_str().unwrap(),
+    ]);
+
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("outside the repository"),
+        "expected an in-repo --workspace to be rejected with guidance, got stderr: {}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+    assert!(
+        !in_repo.exists(),
+        "a rejected --workspace must not have created an in-repo state directory"
+    );
+}
+
 fn invoke_with_stdin(arguments: &[&str], stdin: &str) -> Output {
     use std::io::Write;
     let mut child = Command::new(env!("CARGO_BIN_EXE_agent-workspace"))

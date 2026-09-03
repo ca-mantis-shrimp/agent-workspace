@@ -29,7 +29,7 @@ needed. Read `freshness_within_scope` on every claim:
 - `unknown` — an input couldn't be verified. Treat as not-yet-trusted.
 
 ```
-agent-workspace status --repository . --workspace .agent-workspace
+agent-workspace status --repository .
 ```
 
 If a checkpoint exists, follow `status` with `delta` — the concise resume
@@ -39,7 +39,7 @@ transactions. `status` is the full projection; `delta` is "what changed since I
 was last here."
 
 ```
-agent-workspace delta --repository . --workspace .agent-workspace
+agent-workspace delta --repository .
 ```
 
 `delta` defaults to the most recent checkpoint; pass `--since <label>` to diff
@@ -86,7 +86,15 @@ freshness: an honestly narrow claim beats a falsely confident one.
 
 - **IDs are zero-indexed.** Read the `id` from the returned JSON — do not guess
   sequential 1-based ids. A wrong id fails hard.
-- `--repository` and `--workspace` are required on every call. `--repository` is
-  the repo root; `--workspace` is the durable state directory (reuse the same one
-  across sessions — that's what makes cold resume work).
-- Build first: `cargo build`, then use `target/debug/agent-workspace`.
+- **Pass `--repository <repo root>` on every call — and nothing else for state.**
+  The kernel resolves one durable, project-scoped state store *outside* the repo,
+  keyed by your git identity (see `src/locate.rs`). That is what makes cold resume
+  work, and it is the same store the orientation hook and `workspace_status` read.
+- **Do not pass `--workspace`.** It is an exact-path override for tests and power
+  use; an in-repo path silently forks state from the store everything else reads,
+  so the kernel now *rejects* a `--workspace` that resolves inside the repository.
+  It is absent from `--help` for the same reason. Just pass `--repository` and let
+  resolution do its job.
+- Use the installed `agent-workspace` (on `PATH`, or via `AGENT_WORKSPACE_BIN`).
+  The in-repo `target/debug/agent-workspace` build is only for self-dogfooding the
+  kernel's own source tree.

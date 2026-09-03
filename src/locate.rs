@@ -23,9 +23,13 @@ const STATE_ROOT_ENV: &str = "AGENT_WORKSPACE_STATE";
 /// Resolve the state directory the workspace for `repository_root` lives in.
 ///
 /// Precedence, highest first:
-/// 1. `workspace_override` (`--workspace`) — used verbatim. This is the legacy
-///    path that keeps existing adapters and tests working unchanged while they
-///    are repointed in a follow-up slice.
+/// 1. `workspace_override` (`--workspace`) — used verbatim, but *rejected* when
+///    it resolves inside the observed repository. An in-repo state path silently
+///    forks state from the git-identity store that the orientation/read side
+///    resolves, so a claim recorded against it never surfaces in `status` — a
+///    split-brain that reads as the tool losing work. This is the exact shape of
+///    the original footgun (an agent passing `.agent-workspace` from the repo
+///    root). An external path (tests, deliberate power use) is still honored.
 /// 2. A state-root base joined with a project identity subdirectory.
 ///
 /// The base is `state_root_override` (`--state-root`) if given, else
@@ -37,11 +41,50 @@ pub fn resolve_state_root(
     state_root_override: Option<&Path>,
 ) -> Result<PathBuf, WorkspaceError> {
     if let Some(explicit) = workspace_override {
+        if canonical_prefix(explicit).starts_with(canonical_prefix(repository_root)) {
+            return Err(WorkspaceError::InvalidPath(PathBuf::from(
+                "--workspace must point outside the repository: an in-repo state path silently forks state from the git-identity workspace that orientation reads. Omit --workspace (recommended) or pass an external --state-root.",
+            )));
+        }
         return Ok(explicit.to_path_buf());
     }
     let base = state_root_base(state_root_override)?;
     let identity = project_identity(repository_root)?;
     Ok(base.join(identity))
+}
+
+/// Resolve `path` to an absolute form with as much of it canonicalized as
+/// currently exists on disk, re-attaching any not-yet-created tail. This lets a
+/// containment check compare a state directory that has not been created yet
+/// against the repository root without being fooled by symlinks (e.g. a `/tmp`
+/// that resolves elsewhere) or relative paths resolved from the process cwd.
+fn canonical_prefix(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    let mut ancestor = absolute.clone();
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        if let Ok(mut resolved) = ancestor.canonicalize() {
+            for part in tail.iter().rev() {
+                resolved.push(part);
+            }
+            return resolved;
+        }
+        match ancestor.file_name() {
+            Some(name) => {
+                tail.push(name.to_os_string());
+                if !ancestor.pop() {
+                    return absolute;
+                }
+            }
+            None => return absolute,
+        }
+    }
 }
 
 /// Resolve the base directory that holds one subdirectory per project.
