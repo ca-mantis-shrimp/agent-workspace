@@ -164,27 +164,23 @@ test("workspace_status projects the kernel brief status by default and supports 
 	const brief = await status.execute("call-1", {}, undefined, undefined, {
 		cwd: root,
 	});
-	assert.deepEqual(calls[0].slice(0, 6), [
+	assert.deepEqual(calls[0].slice(0, 4), [
 		"status",
 		"--compact",
 		"--repository",
 		root,
-		"--workspace",
-		join(root, ".agent-workspace"),
 	]);
-	assert.equal(calls[0].length, 6);
+	assert.equal(calls[0].length, 4);
 	assert.equal(brief.content[0].text, "executed:status");
 
 	await status.execute("call-2", { full: true }, undefined, undefined, {
 		cwd: root,
 	});
-	assert.deepEqual(calls[1].slice(0, 6), [
+	assert.deepEqual(calls[1].slice(0, 4), [
 		"status",
 		"--full",
 		"--repository",
 		root,
-		"--workspace",
-		join(root, ".agent-workspace"),
 	]);
 });
 
@@ -248,8 +244,6 @@ test("workspace_working_set projects the bounded attention model via the kernel"
 		"--compact",
 		"--repository",
 		root,
-		"--workspace",
-		join(root, ".agent-workspace"),
 	]);
 	assert.equal(result.content[0].text, "executed:working-set");
 });
@@ -274,8 +268,6 @@ test("workspace_findings projects the bounded quickfix queue via the kernel", as
 		"--compact",
 		"--repository",
 		root,
-		"--workspace",
-		join(root, ".agent-workspace"),
 	]);
 	assert.equal(result.content[0].text, "executed:findings");
 });
@@ -306,8 +298,6 @@ test("workspace_transaction_preview passes the transaction id through to the ker
 		"3",
 		"--repository",
 		root,
-		"--workspace",
-		join(root, ".agent-workspace"),
 	]);
 	assert.equal(result.content[0].text, "executed:preview-transaction");
 });

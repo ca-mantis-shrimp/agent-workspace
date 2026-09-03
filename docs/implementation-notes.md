@@ -1124,3 +1124,37 @@ interface — the Claude Code adapter — onto it.
   tests) still passes `--workspace` and is deliberately unchanged this slice, to
   keep the change reviewable. Repointing Pi, the project registry, and the global
   Pi projection are the next cuts before the real foreign-repo task.
+
+## 2026-09-02 — Pi adapter repointed to external state (portability slice 3)
+
+Mirror of slice 2 for the second interface. `index.ts` had exactly two
+`--workspace` sites — `captureRead`'s `observe-read` and `runKernel`'s
+orientation invocation — plus a `workspace` field on `RepositoryRuntime` built as
+`join(root, ".agent-workspace")`. All three are gone: the runtime carries only
+`{ root, binary }`, and both invocations pass `--repository` alone and let the
+kernel resolve.
+
+- **No second migration.** Pi observes *this* repository, so it resolves the same
+  git-common-dir identity as the Claude adapter and lands in the workspace slice 2
+  already migrated to. The two adapters now share one substrate — which is the
+  decision doc's "multiple agents share the repository/workstream substrate
+  without sharing a working set" claim getting exercised for the first time.
+- **The hermeticity worry was a false alarm.** I expected Pi's tests to need an
+  `AGENT_WORKSPACE_STATE` tempdir to avoid polluting real `~/.local/state`. They
+  don't: `index.test.ts` runs against a *fake* kernel (a stub `pi.exec` and a
+  throwaway Node script as the binary) and asserts on the argv the extension
+  builds, never touching real state. So the test change was purely updating four
+  arg-assertions to no longer expect `--workspace` (the `workspace_delta` and
+  degradation tests never asserted it). Reading the tests before acting saved a
+  needless env-plumbing detour.
+- **Verification.** 7/7 Pi tests + `tsc --noEmit` clean. Then the integration the
+  unit tests can't reach, driven against the real binary: the exact arg vector
+  `captureRead` now builds (`observe-read --repository . --provider pi.read
+  --model-visible-bytes N --offset --limit`, no `--workspace`) recorded a
+  `pi.read` observation into the shared external workspace, and `status` there
+  returned the same objective and active claims (including 61/62 recorded by the
+  Claude adapter) — a Pi agent resuming here inherits the shared orientation.
+- **State of the objective.** Both interfaces are now portable and share one
+  external substrate. Still ahead before trust is actually measured: the project
+  registry (human-readable name↔identity, explicit cross-clone identity), the
+  global Pi projection, and the genuine multi-session foreign-repo task.

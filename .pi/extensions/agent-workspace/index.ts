@@ -39,7 +39,6 @@ interface ReadToolCallEvent {
 interface RepositoryRuntime {
 	root: string;
 	binary: string;
-	workspace: string;
 }
 
 function readParameters(input: unknown): ReadParameters | undefined {
@@ -98,10 +97,12 @@ export default function (pi: ExtensionAPI) {
 			return undefined;
 		}
 		const root = git.stdout.trim();
+		// No workspace path: the kernel resolves the project-scoped state root
+		// from --repository alone (see src/locate.rs). A thin transport names the
+		// repository and lets the kernel decide where state lives.
 		const runtime = {
 			root,
 			binary: join(root, "target", "debug", "agent-workspace"),
-			workspace: join(root, ".agent-workspace"),
 		};
 		try {
 			await access(runtime.binary);
@@ -169,8 +170,6 @@ export default function (pi: ExtensionAPI) {
 			"observe-read",
 			"--repository",
 			runtime.root,
-			"--workspace",
-			runtime.workspace,
 			"--path",
 			repositoryPath,
 			"--provider",
@@ -260,13 +259,7 @@ export default function (pi: ExtensionAPI) {
 		try {
 			result = await pi.exec(
 				runtime.binary,
-				[
-					...command,
-					"--repository",
-					runtime.root,
-					"--workspace",
-					runtime.workspace,
-				],
+				[...command, "--repository", runtime.root],
 				{ signal, timeout: 10_000 },
 			);
 		} catch (error) {
