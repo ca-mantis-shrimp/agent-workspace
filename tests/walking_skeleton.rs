@@ -2756,6 +2756,44 @@ fn auto_normalizer_detects_rustfmt_for_rust_and_none_otherwise() {
     );
 }
 
+/// The selection seam is configurable, not hard-coded: a committed
+/// `.agent-workspace/normalizers.toml` overlays the builtin default, so a real
+/// `observe` capture persists the *configured* normalizer. Proven by the case
+/// that inverts the default — disabling rustfmt for Rust — so a pass cannot come
+/// from the builtin still being in force.
+#[test]
+fn capture_resolves_the_normalizer_from_committed_repo_config() {
+    let fixture = GitFixture::with_files(&[("src/task.rs", "pub fn f() -> i32 { 1 }\n")]);
+    let config_dir = fixture.repository.join(".agent-workspace");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("normalizers.toml"),
+        "[normalizers]\nrs = { tool = \"none\" }\n",
+    )
+    .unwrap();
+
+    let workspace = fixture.root.path().join("workspace-state");
+    let observed: Observation = serde_json::from_slice(
+        &invoke(&[
+            "observe",
+            "--repository",
+            fixture.repository.to_str().unwrap(),
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--path",
+            "src/task.rs",
+        ])
+        .stdout,
+    )
+    .unwrap();
+
+    assert_eq!(
+        observed.normalizer,
+        Normalizer::None,
+        "config must override the builtin rs -> rustfmt default at capture time"
+    );
+}
+
 /// Reconcile fast path: while the raw bytes are unchanged, reconcile must not
 /// need the formatter at all. Proven black-box by reconciling under a PATH
 /// that has git (which the CLI still needs) but no rustfmt: without the fast

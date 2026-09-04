@@ -1,11 +1,24 @@
-# Design note — configurable normalizers (plan, not yet built)
+# Design note — configurable normalizers
 
-> **Status 2026-09-03:** not started. This plans the seam that lets the kernel
-> normalize more than Rust for freshness fingerprinting *without editing core
-> code per language*. Written after a prettier reflow of the Pi adapter TS
-> (semantic no-op) staled claim 67 — because TS fingerprints raw bytes today.
-> Precedent: [`push-signals-belong-in-kernel-projection`] and the write-back-lag
-> slice — solve it once in the core, every adapter inherits it.
+> **Status 2026-09-04:** slice 1 shipped (Clearhead `configurable-normalizers`).
+> This plans the seam that lets the kernel normalize more than Rust for freshness
+> fingerprinting *without editing core code per language*. Written after a
+> prettier reflow of the Pi adapter TS (semantic no-op) staled claim 67 — because
+> TS fingerprints raw bytes today. Precedent:
+> [`push-signals-belong-in-kernel-projection`] and the write-back-lag slice —
+> solve it once in the core, every adapter inherits it.
+>
+> **Slice 1 (done):** `src/normalizer_config.rs` resolves extension → registered
+> normalizer, reading `.agent-workspace/normalizers.toml` (committed, seeded
+> `rs = rustfmt`) overlaid on a builtin default. `Normalizer::detect_for_path` is
+> gone; the five capture-time call sites resolve through it, and `Workspace::
+> default_normalizer_for` wraps it. `Normalizer::from_tool_name` is the shared
+> registry for both config and the CLI `--normalize` flag. **Deviation from the
+> plan below:** the loader is **fail-closed from the start** (unknown tool /
+> malformed TOML → named `InvalidConfig` error), folding slice-3/4's failure
+> stance in early rather than shipping a fail-open window. Adds the `toml` dep.
+> `ts` is still unmapped, so a TS reflow still stales claim 67 until slice 2
+> registers Prettier. 65 Rust tests (4 unit + 1 acceptance new).
 
 ## The gap
 
@@ -111,11 +124,13 @@ case normalization exists to catch.
 
 ## Build slices (each ships with acceptance coverage)
 
-1. **Extract the seam.** Replace `Normalizer::detect_for_path`'s hard-coded
-   `match` with a resolver that reads the config file and maps extension →
-   registered normalizer. Seed config with `rs = rustfmt` only, so behavior is
-   byte-for-byte unchanged. Test: existing Rust freshness tests still pass; a new
-   test asserts the resolver returns `Rustfmt` for `.rs`, `None` for unmapped.
+1. ~~**Extract the seam.**~~ **DONE 2026-09-04.** Replaced
+   `Normalizer::detect_for_path` with `normalizer_config::resolve_for_path`
+   reading `.agent-workspace/normalizers.toml` overlaid on a builtin
+   `{rs = rustfmt}`. Byte-for-byte unchanged when absent. Fail-closed on
+   unknown-tool/malformed (pulled forward from slices 3–4). Tests: existing Rust
+   freshness tests pass; unit tests cover default/overlay/unknown/malformed; an
+   acceptance test proves `observe` persists the *configured* normalizer.
 2. **Prove the seam on a real second language.** Register `Prettier`
    (`normalize_unit` variant + invocation) and add `ts = prettier` to config.
    This is the language that actually bit us. Test: a prettier reflow of a `.ts`

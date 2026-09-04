@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 mod locate;
 mod model;
+mod normalizer_config;
 mod projection;
 mod reconcile;
 pub use locate::resolve_state_root;
@@ -29,6 +30,7 @@ pub enum WorkspaceError {
     Json(serde_json::Error),
     InvalidPath(PathBuf),
     InvalidObjective(String),
+    InvalidConfig(String),
     InvalidWorkingSet(String),
     Git(String),
     ObservationNotFound(u64),
@@ -59,6 +61,7 @@ impl fmt::Display for WorkspaceError {
                 )
             }
             Self::InvalidObjective(message) => write!(formatter, "invalid objective: {message}"),
+            Self::InvalidConfig(message) => write!(formatter, "invalid config: {message}"),
             Self::InvalidWorkingSet(message) => {
                 write!(formatter, "invalid working set entry: {message}")
             }
@@ -1011,7 +1014,7 @@ impl Workspace {
 
         let options = ObservationCaptureOptions {
             selector: plan.selector,
-            normalizer: Normalizer::detect_for_path(&path),
+            normalizer: self.default_normalizer_for(&path)?,
             retain_native_payload: false,
             model_visible_bytes: Some(
                 request
@@ -1515,10 +1518,18 @@ impl Workspace {
             path,
             "agent.belief",
             ObservationCaptureOptions {
-                normalizer: Normalizer::detect_for_path(path),
+                normalizer: self.default_normalizer_for(path)?,
                 ..ObservationCaptureOptions::default()
             },
         )
+    }
+
+    /// The normalizer a fresh capture of `path` uses under this repository's
+    /// configuration (the CLI's `auto` default and the kernel's default for
+    /// belief/claim dependencies). Resolves `.agent-workspace/normalizers.toml`
+    /// over the builtin default; see [`crate::normalizer_config`].
+    pub fn default_normalizer_for(&self, path: &Path) -> Result<Normalizer, WorkspaceError> {
+        normalizer_config::resolve_for_path(&self.repository_root, path)
     }
 
     pub fn reconcile_claim(&self, claim_id: u64) -> Result<Claim, WorkspaceError> {

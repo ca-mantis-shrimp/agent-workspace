@@ -1,0 +1,12 @@
+# Freshness normalizers for this repository.
+#
+# Maps a file extension to the formatter the kernel canonicalizes with *before*
+# fingerprinting, so a semantics-preserving reformat does not stale a claim.
+# This file overlays the kernel's builtin default (`rs = rustfmt`, all else raw
+# bytes); an absent file is exactly that default. `tool` may only name a
+# formatter the kernel knows how to drive (currently `rustfmt`, `none`) — an
+# unknown name fails closed. See docs/design-note-configurable-normalizers.md.
+
+[normalizers]
+rs = { tool = "rustfmt" }   # matches the builtin default; stated here for visibility
+# ts = { tool = "prettier" }   # the Pi adapter's TS — lands when Prettier is registered (slice 2)

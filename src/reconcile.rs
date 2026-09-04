@@ -136,7 +136,7 @@ pub(crate) fn fingerprint_dependency(
     relative_path: &Path,
 ) -> Result<(Normalizer, String, Option<String>), WorkspaceError> {
     let bytes = fs::read(resolve_repository_file(repository_root, relative_path)?)?;
-    let normalizer = Normalizer::detect_for_path(relative_path);
+    let normalizer = crate::normalizer_config::resolve_for_path(repository_root, relative_path)?;
     let input_fingerprint = hex_digest(&normalize_unit(&bytes, normalizer));
     let raw_fingerprint = (normalizer != Normalizer::None).then(|| hex_digest(&bytes));
     Ok((normalizer, input_fingerprint, raw_fingerprint))

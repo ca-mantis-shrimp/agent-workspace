@@ -106,9 +106,10 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
             let provider = options.provider.unwrap_or_else(|| "filesystem".to_owned());
             // `auto` (the default) resolves to a concrete normalizer here, at
             // capture time; the record persists the resolved scheme.
-            let normalizer = options
-                .normalizer
-                .unwrap_or_else(|| Normalizer::detect_for_path(&path));
+            let normalizer = match options.normalizer {
+                Some(normalizer) => normalizer,
+                None => workspace.default_normalizer_for(&path)?,
+            };
             print_json(&workspace.capture_file_observation(
                 path,
                 provider,
@@ -179,9 +180,10 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
             let mut native_payload = String::new();
             std::io::stdin().read_to_string(&mut native_payload)?;
             let native_payload = (!native_payload.is_empty()).then_some(native_payload);
-            let normalizer = options
-                .normalizer
-                .unwrap_or_else(|| Normalizer::detect_for_path(&path));
+            let normalizer = match options.normalizer {
+                Some(normalizer) => normalizer,
+                None => workspace.default_normalizer_for(&path)?,
+            };
             print_json(&workspace.record_finding(
                 provider,
                 severity,
@@ -554,11 +556,9 @@ impl Options {
                 "--normalize" => {
                     normalizer = match value.as_str() {
                         "auto" => None,
-                        "none" => Some(Normalizer::None),
-                        "rustfmt" => Some(Normalizer::Rustfmt),
-                        _ => {
-                            return Err(CliError::Usage(format!("invalid normalizer: {value}")));
-                        }
+                        name => Some(Normalizer::from_tool_name(name).ok_or_else(|| {
+                            CliError::Usage(format!("invalid normalizer: {value}"))
+                        })?),
                     }
                 }
                 "--retain-payload" => {

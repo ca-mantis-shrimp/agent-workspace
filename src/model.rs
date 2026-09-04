@@ -81,7 +81,7 @@ pub enum ObservationSelector {
 /// default stays `None` so records written before normalizers existed (or via
 /// the `--normalize none` escape hatch) keep their byte-exact meaning; fresh
 /// captures resolve the CLI's `auto` default through
-/// [`Normalizer::detect_for_path`] and persist the *concrete* normalizer, so
+/// [`crate::normalizer_config`] and persist the *concrete* normalizer, so
 /// reconcile always applies the scheme the record was written with.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -95,21 +95,18 @@ pub enum Normalizer {
 }
 
 impl Normalizer {
-    /// The normalizer a fresh capture uses for `path` when the caller did not
-    /// pick one explicitly (the CLI's `auto` default, and the kernel's default
-    /// for claim dependencies). Recognized source types get their canonical
-    /// formatter; everything else fingerprints raw bytes. Recognition is by
-    /// extension only — cheap, deterministic, and honest about not detecting
-    /// anything deeper.
-    pub fn detect_for_path(path: &Path) -> Self {
-        match path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| extension.to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("rs") => Self::Rustfmt,
-            _ => Self::None,
+    /// Map a registered tool name to its variant, or `None` for a name the
+    /// kernel does not know how to drive. This is the *registry*: the closed set
+    /// of formatters whose invocation is defined here, which is what lets config
+    /// (`.agent-workspace/normalizers.toml`) select a normalizer by name without
+    /// ever naming an arbitrary — and thus non-deterministic — shell command.
+    /// Shared by config resolution ([`crate::normalizer_config`]) and the CLI's
+    /// `--normalize` flag so the accepted names never drift between them.
+    pub fn from_tool_name(name: &str) -> Option<Self> {
+        match name {
+            "none" => Some(Self::None),
+            "rustfmt" => Some(Self::Rustfmt),
+            _ => None,
         }
     }
 }
