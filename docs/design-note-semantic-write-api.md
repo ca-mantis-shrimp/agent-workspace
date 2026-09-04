@@ -55,7 +55,8 @@ deliberate *belief* instead of running two disconnected ledgers.
 
 ## Proposed surface — four intentional verbs, not eight mechanical ones
 
-- `record-belief --statement "..." --rests-on <path> [--rests-on <path>] [--scope ...] [--supersedes <id>]`
+- `record-belief --statement "..." --rests-on <path> [--rests-on <path>]`
+  `[--scope ...] [--supersedes <id>]`
   — fuses `focus_observation` + `record_claim` (+ `supersede_claim` when
   `--supersedes` is given) into one **atomic** kernel operation. Reuses a fresh
   existing observation per `rests-on` path. Returns the claim with its freshness.
@@ -84,7 +85,8 @@ fusion, `--supersedes`, and MCP until it proves out.
 - **Task:** a foreign-repo slice in which the agent must form three beliefs about
   code it reads.
 - **Teeth (mechanical):** each `record-belief` must (a) surface in `status` as a
-  claim, and (b) reuse-or-create an observation such that an out-of-band edit to a
+  claim, and (b) reuse-or-create an observation such that an out-of-band edit
+  to a
   `rests-on` path turns the claim `stale` — reusing the S1 staleness machinery.
 - **Measure:** claim count and raw-CLI invocation count vs. the `observe`+`claim`
   baseline. **Pass** = at least as many claims land, with fewer calls and no
@@ -105,7 +107,8 @@ fusion, `--supersedes`, and MCP until it proves out.
 `record-belief` is necessary **regardless** of transport — the MCP adapter would
 expose this same verb, so building it CLI-first is not throwaway. It fixes *drift*
 and *friction-starvation* everywhere. What it does **not** fix is
-*invisibility-starvation in the Claude adapter specifically*: hooks cannot offer a
+*invisibility-starvation in the Claude adapter specifically*: hooks cannot
+offer a
 callable tool, so until MCP, a Claude agent still only learns the verb from the
 skill. That is the honest split. **Trigger to build the MCP transport:** a second
 machine needing the shared store, **or** measured claim-starvation that persists
@@ -144,7 +147,8 @@ amendments here so the plan reflects them, not just the reflection log:
 - **New scope — recovery has no clean door.** The run exposed a genuine kernel
   gap, not just DX: there is no `abort`/`discard` verb, `revert-transaction` is
   refused on a zero-mutation transaction, and `supersede-claim` is blocked while
-  the claim belongs to the open transaction — a cycle the agent escaped only via a
+  the claim belongs to the open transaction — a cycle the agent escaped only
+  via a
   synthetic no-op mutation fed a file its own bytes. Structured rejections address
   the *symptom*; a first-class clean exit from an open transaction addresses the
   *cause*. This widens the eventual surface beyond `record-belief`, though
@@ -167,3 +171,29 @@ honors the charter by exposing the agent's *intent* (a belief) rather than the
 kernel's *mechanics* (observe-then-claim), keeping the surface semantic and small.
 And it attacks starvation at its actual cause — the observe/claim split — with the
 smallest thing that can be **false**: one verb and a claim-count.
+
+## Micro-dogfood after the Pi tool shipped (2026-09-04)
+
+Using `workspace_record_belief` during the structural-freshness design discussion
+felt materially better than the former CLI sequence: the statement and citations
+matched the cognitive act, fresh ambient observations were reused without ID
+threading, and mandatory `rests_on` made unsupported assertion harder. Three
+pieces of friction became concrete:
+
+1. **The default result is too large.** A routine write returns the complete
+   claim, every input fingerprint, the full freshness report, and every support.
+   The useful receipt is usually claim id, freshness/scope, support ids, and
+   `reused`; full input material belongs behind progressive disclosure.
+2. **Correction still falls out of the semantic surface.** Claim 74 was too
+   affirmative. Correcting it required recording claim 75 and then shelling the
+   raw `supersede-claim` CLI. The deferred atomic `supersedes` parameter is now
+   directly observed need, not speculative convenience.
+3. **Cheap writes increase curation pressure.** Claims 74, 75, and 76 captured a
+   fast-moving design conversation. Supersession kept the known-bad statement
+   out of the active set, but the tool should make replacement as easy as initial
+   recording rather than encouraging a trail of simultaneously active nuances.
+
+Net assessment: the verb made the correct action feel native, but its read-back
+surface is over-complete and its correction path is unfinished. The next write
+API slice should add atomic supersession and a brief-default receipt before
+adding more semantic verbs.

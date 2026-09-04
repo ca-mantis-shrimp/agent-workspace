@@ -1,8 +1,15 @@
 # Design note — configurable normalizers
 
-> **Status 2026-09-04:** slice 1 shipped (Clearhead `configurable-normalizers`).
-> This plans the seam that lets the kernel normalize more than Rust for freshness
-> fingerprinting *without editing core code per language*. Written after a
+> **Status 2026-09-04:** slice 1 shipped, then this direction was superseded
+> before slice 2. Do not add Prettier, Black, or another formatter integration.
+> The formatter seam remains a historical compatibility path while
+> [`research-structural-freshness-without-formatter-coupling.md`](research-structural-freshness-without-formatter-coupling.md)
+> tests a versioned tree-sitter relevance identity. This note remains the record
+> of the implemented slice and the formatter-coupling problem it exposed.
+>
+> This originally planned a seam that lets the kernel normalize more than Rust
+> for freshness fingerprinting *without editing core code per language*.
+> Written after a
 > prettier reflow of the Pi adapter TS (semantic no-op) staled claim 67 — because
 > TS fingerprints raw bytes today. Precedent:
 > [`push-signals-belong-in-kernel-projection`] and the write-back-lag slice —
@@ -51,8 +58,8 @@ Two problems were bundled in discussion; keep them apart:
   mid-turn reformat breaks the next `Edit`'s exact-string match). Separate slice,
   separate doc. Noted here only so a future session does not conflate them.
 
-A alone would have prevented claim 67's staling. B is a lower-stakes convenience.
-Do A first; it serves what this tool is *for*.
+A alone would have prevented claim 67's staling. B is a lower-stakes
+convenience. Do A first; it serves what this tool is *for*.
 
 ## Design — registry × config
 
@@ -131,18 +138,19 @@ case normalization exists to catch.
    unknown-tool/malformed (pulled forward from slices 3–4). Tests: existing Rust
    freshness tests pass; unit tests cover default/overlay/unknown/malformed; an
    acceptance test proves `observe` persists the *configured* normalizer.
-2. **Prove the seam on a real second language.** Register `Prettier`
-   (`normalize_unit` variant + invocation) and add `ts = prettier` to config.
-   This is the language that actually bit us. Test: a prettier reflow of a `.ts`
-   observation's file is `current`, not `stale`, when prettier is present.
-3. **Decide + implement fallback semantics** (raw vs `Unknown`) per the open
-   decision above, with a test that forces the tool absent and asserts the chosen
-   verdict — the guard against cross-environment divergence.
-4. **Loader hardening.** Reject/warn on an entry lacking a resolvable pinned
-   version; unknown `tool` names fail closed with a named error.
+2. ~~**Prove the seam on a real second language.**~~ **CANCELLED.** Do not
+   register Prettier. The formatter/runtime dependency is the architectural
+   coupling the structural-freshness research replaces.
+3. ~~**Decide + implement formatter fallback semantics.**~~ **CANCELLED AS A
+   FORWARD PATH.** Existing records retain historical behavior; structural
+   records instead fail to `Unknown` when their stamped provider cannot safely
+   reconcile.
+4. ~~**Loader hardening for more formatter integrations.**~~ **CANCELLED.** No
+   new formatters should be registered while the structural experiment runs.
 
-After slice 1, adding Python is: register `Black` once (slice-2-shaped), then a
-two-line config edit — the "stop editing core per language" property is the goal.
+The shipped slice remains replay-compatible evidence, not the intended growth
+path. The replacement experiment and its acceptance criteria are in the linked
+research paper.
 
 ## Deliberately out of scope
 

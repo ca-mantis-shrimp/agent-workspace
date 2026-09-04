@@ -1241,3 +1241,38 @@ ships the plan's thinnest falsifiable cut.
   eleventh run exposed, not just DX. The falsifiable measurement (three beliefs
   in a foreign-repo slice, claim-count vs. baseline) happens in the next plot
   session.
+
+## 2026-09-04 — Structural freshness research supersedes formatter expansion
+
+A user challenge exposed that the configurable-normalizer direction was still
+making formatting infrastructure part of freshness. A two-advisor council then
+converged on a narrower target architecture, recorded in
+[`research-structural-freshness-without-formatter-coupling.md`](research-structural-freshness-without-formatter-coupling.md).
+
+- **Four identities, not one overloaded fingerprint.** Exact capture identity
+  proves what the model saw; structural location identity relocates code;
+  structural relevance identity decides claim freshness; exact candidate
+  identity continues to govern mutation, rollback, and validation attestation.
+- **No formatter authority in adapters or freshness.** Adapters remain native
+  read transports. The kernel selects a versioned structural-provider scheme
+  and persists provider, grammar, projection, selector, and digest identity.
+  Formatter names and invocations do not belong in the new freshness path.
+- **Conservative promise.** The first tree-sitter projection targets
+  trivia-insensitive concrete syntax, not general semantic equivalence. It may
+  false-stale on optional semicolons, parentheses, or alternate literal
+  spellings. Generic token dropping is rejected because false-current is the
+  contract's dangerous failure direction.
+- **Bounded-read honesty.** Structural projection may cover only model-visible
+  tokens. Enclosing syntax can aid relocation but cannot silently expand claim
+  support. Parse errors, incompatible provider versions, and ambiguous
+  relocation produce `Unknown`; unsupported new captures retain exact-text
+  freshness.
+- **Migration stance.** Existing `None`/`Rustfmt` observations retain their
+  recorded forward-only meaning. Configurable-normalizer slice 2 (Prettier) is
+  stopped. A Rust/TypeScript differential corpus must prove zero significant
+  collisions, useful reflow equality, honest bounded coverage, and exact
+  transaction behavior before structural freshness becomes the default.
+- **Council evidence.** `oracle` run
+  `15a6f1c1-eac2-49bc-9553-b47ba7f001a6` and `reviewer` run
+  `b2f358c3-9f37-4a65-93c3-1a35e5b6abc0` converged in one pass; workflow
+  `8fd49172-a4d2-488e-8e1d-fe3bf4338717`.
