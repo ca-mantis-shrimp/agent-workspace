@@ -2711,6 +2711,194 @@ fn rustfmt_normalized_observation_ignores_reformat_but_catches_semantics() {
     );
 }
 
+/// The TypeScript half of normalized fingerprinting: a `.ts` observation
+/// captured with `--normalize prettier` fingerprints prettier's canonical form,
+/// so a format-on-save reflow (same meaning, different bytes) stays `current`
+/// while a real edit still stales. This is the concrete fix for the pain that
+/// drove the whole formatter-vs-structural investigation: an agent's TS belief
+/// must not go stale — nor tempt a revert — just because prettier reflowed the
+/// file. Skips when prettier is unavailable, since the fallback is raw bytes and
+/// a reflow would then (correctly) stale, which is not what this asserts.
+#[test]
+fn prettier_normalized_observation_ignores_reflow_but_catches_semantics() {
+    if !Command::new("prettier")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+    {
+        eprintln!("SKIP: prettier unavailable; normalization falls back to raw bytes");
+        return;
+    }
+
+    let fixture = GitFixture::with_files(&[(
+        "src/task.ts",
+        "export function f(x: number): number {\n  return x + 1;\n}\n",
+    )]);
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = fixture
+        .root
+        .path()
+        .join("workspace-state")
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    let observe = |normalize: &str| -> Observation {
+        serde_json::from_slice(
+            &invoke(&[
+                "observe",
+                "--repository",
+                &repo,
+                "--workspace",
+                &ws,
+                "--path",
+                "src/task.ts",
+                "--normalize",
+                normalize,
+            ])
+            .stdout,
+        )
+        .unwrap()
+    };
+    let normalized_id = observe("prettier").id.to_string();
+    let byte_id = observe("none").id.to_string();
+
+    let reconcile = |id: &str| -> FreshnessWithinScope {
+        let observation: Observation = serde_json::from_slice(
+            &invoke(&[
+                "reconcile",
+                "--repository",
+                &repo,
+                "--workspace",
+                &ws,
+                "--id",
+                id,
+            ])
+            .stdout,
+        )
+        .unwrap();
+        observation.report.freshness_within_scope
+    };
+
+    // Format-on-save reflow: prettier-equivalent to the original, different bytes.
+    fs::write(
+        fixture.repository.join("src/task.ts"),
+        "export  function f(x:number):number{\n      return x+1;\n}\n",
+    )
+    .unwrap();
+    assert_eq!(
+        reconcile(&normalized_id),
+        FreshnessWithinScope::Current,
+        "a prettier reflow must not stale a prettier-normalized TS observation"
+    );
+    assert_eq!(
+        reconcile(&byte_id),
+        FreshnessWithinScope::Stale,
+        "the byte observation still stales on any byte change, reflow included"
+    );
+
+    // A real edit must stale even the normalized observation.
+    fs::write(
+        fixture.repository.join("src/task.ts"),
+        "export function f(x: number): number {\n  return x + 2;\n}\n",
+    )
+    .unwrap();
+    assert_eq!(
+        reconcile(&normalized_id),
+        FreshnessWithinScope::Stale,
+        "a real edit must still stale a normalized observation"
+    );
+}
+
+/// The Python half: a `.py` observation captured with `--normalize ruff`
+/// fingerprints ruff's canonical form, so a reflow of an adapter hook stays
+/// `current` while a real edit stales. Same idempotence guarantee as prettier;
+/// this repo's own Claude hooks are Python, so the case is not hypothetical.
+/// Skips when ruff is unavailable.
+#[test]
+fn ruff_normalized_observation_ignores_reflow_but_catches_semantics() {
+    if !Command::new("ruff")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+    {
+        eprintln!("SKIP: ruff unavailable; normalization falls back to raw bytes");
+        return;
+    }
+
+    let fixture = GitFixture::with_files(&[("hooks/orient.py", "def f(x):\n    return x + 1\n")]);
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = fixture
+        .root
+        .path()
+        .join("workspace-state")
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    let observe = |normalize: &str| -> Observation {
+        serde_json::from_slice(
+            &invoke(&[
+                "observe",
+                "--repository",
+                &repo,
+                "--workspace",
+                &ws,
+                "--path",
+                "hooks/orient.py",
+                "--normalize",
+                normalize,
+            ])
+            .stdout,
+        )
+        .unwrap()
+    };
+    let normalized_id = observe("ruff").id.to_string();
+
+    let reconcile = |id: &str| -> FreshnessWithinScope {
+        let observation: Observation = serde_json::from_slice(
+            &invoke(&[
+                "reconcile",
+                "--repository",
+                &repo,
+                "--workspace",
+                &ws,
+                "--id",
+                id,
+            ])
+            .stdout,
+        )
+        .unwrap();
+        observation.report.freshness_within_scope
+    };
+
+    // Reflow: ruff-equivalent to the original, different bytes.
+    fs::write(
+        fixture.repository.join("hooks/orient.py"),
+        "def  f( x ):\n        return    x+1\n",
+    )
+    .unwrap();
+    assert_eq!(
+        reconcile(&normalized_id),
+        FreshnessWithinScope::Current,
+        "a ruff reflow must not stale a ruff-normalized Python observation"
+    );
+
+    // A real edit must stale even the normalized observation.
+    fs::write(
+        fixture.repository.join("hooks/orient.py"),
+        "def f(x):\n    return x + 2\n",
+    )
+    .unwrap();
+    assert_eq!(
+        reconcile(&normalized_id),
+        FreshnessWithinScope::Stale,
+        "a real edit must still stale a normalized observation"
+    );
+}
+
 /// The `auto` default: `observe` with no `--normalize` flag resolves the
 /// normalizer from the path extension — rustfmt for recognized Rust source,
 /// raw bytes for unrecognized types — and persists the *resolved* scheme on
@@ -4880,7 +5068,11 @@ impl GitFixture {
             &["config", "user.email", "fixture@example.invalid"],
         );
         git(&repository, &["config", "user.name", "Fixture"]);
-        git(&repository, &["add", "src"]);
+        // Stage exactly the declared files rather than assuming a `src/`
+        // directory — fixtures put files wherever the scenario needs them.
+        for (path, _) in files {
+            git(&repository, &["add", path]);
+        }
         git(&repository, &["commit", "--quiet", "-m", "fixture"]);
 
         Self { root, repository }

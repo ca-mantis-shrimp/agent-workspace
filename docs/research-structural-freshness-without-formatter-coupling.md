@@ -1,5 +1,16 @@
 # Structural freshness without formatter coupling
 
+> **Decision (2026-09-04): investigated, and declined.** A kernel-only spike
+> (tree-sitter Rust + TypeScript, a `TreeSitterCstV1` projection, and a
+> falsification corpus) built the load-bearing part of this proposal and then
+> disproved its value. The spike is documented in
+> [§14 Spike outcome](#14-spike-outcome); the code lives in git history
+> (removed to keep the tree lean). We instead extended the existing
+> formatter-normalizer path to TypeScript (`Normalizer::Prettier`, kernel-side,
+> project-local pinned binary). The sections below are preserved as the original
+> argument that motivated the experiment; read them as *considered alternatives*,
+> not as the shipped design. The corrected recommendation is in §12.
+
 ## Abstract
 
 Agent Workspace currently decides whether a source observation remains fresh by
@@ -391,26 +402,40 @@ Knowing that a formatter made an edit does not prove the edit was exclusively
 formatting, and raw edits can produce equivalent layout changes. Freshness must
 judge the recorded input, not trust the alleged actor.
 
-## 12. Recommendation
+## 12. Recommendation (revised 2026-09-04)
 
-Adopt the four-identity architecture as the target model. Pause the Prettier
-normalizer slice. Implement the structural experiment before deleting the
-shipped normalizer compatibility path.
+**Superseded.** The original recommendation — adopt structural, pause Prettier —
+was reversed after the spike (§14). The shipped decision is:
 
-The key architectural statement is:
+1. **Keep formatter-normalization as the freshness canonicalizer** and extend it
+   to TypeScript via `Normalizer::Prettier`, invoked kernel-side using the
+   repository's own `node_modules/.bin/prettier`. The idempotence
+   `prettier(prettier(x)) == prettier(x)` is the property that matters: a
+   format-on-save reflow cannot stale a claim, because the fingerprint is taken
+   over the canonical form at both capture and reconcile. Structural-V1 could not
+   offer that (it stales trailing-comma / rewrap reflows).
+2. **Do not couple freshness to formatters in *adapters*.** This never required a
+   structural projection — it requires restraint. Adapters forward raw bytes; the
+   kernel canonicalizes. That boundary was already intact.
+3. **Do not build the structural provider.** The four-identity *idea* (§3) remains
+   a useful lens, but the CST projection that would implement its relevance
+   identity is more machinery than its payoff justifies (§14).
+4. **Keep transaction/candidate identity byte-exact.** Unchanged; this part of the
+   original proposal was never in question.
 
-> Exact bytes establish provenance and transaction state. A versioned structural
-> projection establishes freshness relevance for supported code. Adapters own
-> neither decision, and formatters are not freshness providers.
-
-This does not eliminate bytes from the system. It eliminates the mistake of
-using byte inequality—and formatter-normalized byte equality—as the primary
-meaning of code freshness.
+The determinism argument that motivated leaving formatters is weakest exactly
+where TS hurts: JS projects pin their formatter in a lockfile, so invoking the
+project-local prettier is *more* reproducible than a PATH formatter, not less.
+And the acute Rust reflow pain that started this was an rustfmt *edition* drift,
+already fixed by pinning — not evidence that formatters are unusable.
 
 ## 13. Council record
 
-A bounded advisory council reviewed the proposal on 2026-09-04. Both advisors
-converged after one independent pass, so no cross-examination was needed.
+A bounded advisory council reviewed the proposal on 2026-09-04, *before* the
+spike. Both advisors converged after one independent pass, so no
+cross-examination was needed. Their recommendation (adopt the identity split,
+require the falsifiable experiment) was followed to the letter — the experiment
+ran, and it is what produced the reversal in §12/§14.
 
 - `oracle`, forked/context-aware, run
   `15a6f1c1-eac2-49bc-9553-b47ba7f001a6`;
@@ -435,3 +460,51 @@ in adapters and freshness, and require the falsifiable structural experiment.
   normalization, and reconciliation primitives.
 - [`../src/model.rs`](../src/model.rs), observation, claim-input, evidence, and
   transaction identity records.
+
+## 14. Spike outcome
+
+A kernel-only spike (`src/structural.rs`, since removed) implemented
+`TreeSitterCstV1` — a deterministic, injective digest of the full tree-sitter
+CST — with a falsification corpus for Rust and TypeScript. Two results decided
+against adoption.
+
+### 14.1 A near-miss soundness hole
+
+The first projection emitted source text only for *leaf* tokens, on the
+assumption that every significant byte lives in a leaf. That is false: a Rust
+`block_comment` is a non-leaf whose body sits in the gap between its `/*` and
+`*/` children, owned by the comment node but by no leaf. Changing a comment's
+text therefore produced an identical digest — a **false-current collision**, the
+exact failure this proposal cites to reject the "named-node hash" alternative.
+The fix (emit each node's inter-child gaps, blanked when pure whitespace)
+recovered soundness, but the incident is the point: a "language-agnostic"
+structural projection rides on per-grammar modeling choices that vary and
+surprise. Soundness is a moving target, not a one-time proof.
+
+### 14.2 The usefulness bake-off
+
+Real formatting-equivalent reflow pairs were run through three lenses. Recovery
+rate = the fraction of formatting-only changes each lens correctly keeps
+`current` (rustfmt-equality is ground truth for "only formatting changed"):
+
+| lens | recovery | note |
+| --- | --- | --- |
+| raw bytes | 0/5 | the original false-stale pain |
+| rustfmt (formatter) | 5/5 | canonicalization recovers all |
+| `TreeSitterCstV1` | 3/5 | recovers whitespace reflow; cedes token rewrites |
+
+The two CST misses are token rewrites — a trailing comma, and rustfmt's own
+canonical multiline form, which *adds* a trailing comma. So structural-V1 is a
+strict subset of the formatter and, critically, would **still false-stale** a
+single-line call that a formatter reflows to multiline. It does not fully solve
+the motivating problem, while costing compiled grammars, version stamping,
+parse-error handling, and the per-grammar soundness tax of §14.1.
+
+### 14.3 Conclusion
+
+The spike did its job: it converted "structural is the target architecture" from
+a plausible hypothesis into a measured, rejected one. Formatter-normalization,
+computed kernel-side over a lockfile-pinned binary, is the simpler mechanism that
+better serves the actual pain (agents re-reading — or worse, reverting format
+commits — over reflow-induced false-stale). See
+[`implementation-notes.md`](implementation-notes.md) “Prettier normalization.”

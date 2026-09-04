@@ -11,8 +11,22 @@
 //! # .agent-workspace/normalizers.toml
 //! [normalizers]
 //! rs = { tool = "rustfmt" }
-//! # ts = { tool = "prettier" }   # lands when Prettier is registered (slice 2)
+//! ts = { tool = "prettier" }   # opt-in: uses the repo's node_modules prettier
+//! py = { tool = "ruff" }       # or { tool = "black" }
 //! ```
+//!
+//! Every non-`rs` mapping is opt-in rather than a builtin default on purpose: a
+//! repo may format TypeScript with biome/dprint/nothing, and Python with
+//! black/ruff/nothing, so the kernel must not presume a canonicalizer. Declaring
+//! one is a one-line, reviewable commitment that this repo's canonical form for
+//! that extension is that tool's. Registered tools:
+//! [`Normalizer::from_tool_name`] (`rustfmt`, `prettier`, `black`, `ruff`).
+//!
+//! Determinism caveat, sharpest for Python: black and ruff shift their *stable
+//! style* across versions, so a claim's canonical form is only comparable across
+//! environments running the same formatter version. Preferring a project-venv
+//! binary (`.venv/bin`) mitigates this; the `version` field is the reserved slot
+//! to enforce it.
 //!
 //! Selection is read at capture time and the *resolved* scheme is persisted on
 //! the observation, so reconcile always compares like with like and config
@@ -155,9 +169,43 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_tool_fails_closed() {
+    fn prettier_is_registered_and_selectable_for_typescript() {
         let root = tempfile::tempdir().unwrap();
         write_config(root.path(), "[normalizers]\nts = { tool = \"prettier\" }\n");
+        assert_eq!(
+            resolve_for_path(root.path(), &PathBuf::from("src/index.ts")).unwrap(),
+            Normalizer::Prettier
+        );
+        // Still opt-in: a TS file without the config stays raw bytes.
+        assert_eq!(
+            resolve_for_path(tempfile::tempdir().unwrap().path(), &PathBuf::from("a.ts")).unwrap(),
+            Normalizer::None
+        );
+    }
+
+    #[test]
+    fn python_formatters_are_registered_and_selectable() {
+        let root = tempfile::tempdir().unwrap();
+        write_config(root.path(), "[normalizers]\npy = { tool = \"ruff\" }\n");
+        assert_eq!(
+            resolve_for_path(root.path(), &PathBuf::from("hooks/orient.py")).unwrap(),
+            Normalizer::RuffFormat
+        );
+        // `black` is the other registered Python tool.
+        assert_eq!(Normalizer::from_tool_name("black"), Some(Normalizer::Black));
+        // Still opt-in: a .py file with no config stays raw bytes.
+        assert_eq!(
+            resolve_for_path(tempfile::tempdir().unwrap().path(), &PathBuf::from("a.py")).unwrap(),
+            Normalizer::None
+        );
+    }
+
+    #[test]
+    fn an_unknown_tool_fails_closed() {
+        let root = tempfile::tempdir().unwrap();
+        // `biome` is a real formatter but not a registered normalizer; naming it
+        // must fail closed rather than silently degrade to raw-byte comparison.
+        write_config(root.path(), "[normalizers]\nts = { tool = \"biome\" }\n");
         let error = resolve_for_path(root.path(), &PathBuf::from("index.ts")).unwrap_err();
         assert!(
             matches!(error, WorkspaceError::InvalidConfig(_)),

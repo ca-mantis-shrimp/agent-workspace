@@ -1276,3 +1276,61 @@ converged on a narrower target architecture, recorded in
   `15a6f1c1-eac2-49bc-9553-b47ba7f001a6` and `reviewer` run
   `b2f358c3-9f37-4a65-93c3-1a35e5b6abc0` converged in one pass; workflow
   `8fd49172-a4d2-488e-8e1d-fe3bf4338717`.
+
+## 2026-09-04 — Prettier normalization (structural reversal)
+
+The structural direction above was **built as a spike and then declined.** The
+full account is in
+[`research-structural-freshness-without-formatter-coupling.md`](research-structural-freshness-without-formatter-coupling.md)
+§14; the short version: a `TreeSitterCstV1` projection nearly shipped a
+false-current collision (comment bodies live in inter-child gaps, not leaves),
+and a usefulness bake-off measured it recovering only 3/5 formatting reflows
+where the formatter recovers 5/5 — a strict regression on the exact pain that
+motivated the work. The four-identity *lens* survives as analysis; the CST
+provider does not get built.
+
+What shipped instead is the TypeScript half of the normalizer path the structural
+research had stopped:
+
+- **`Normalizer::Prettier`.** Registered in the closed tool registry
+  (`from_tool_name`), so config and the `--normalize` flag can select it by name
+  but never an arbitrary command.
+- **Kernel-side, project-local invocation.** `prettier_canonical` prefers
+  `<repo>/node_modules/.bin/prettier` (the lockfile-pinned version format-on-save
+  actually runs) over a PATH binary, and passes `--stdin-filepath` so prettier
+  picks the parser and discovers the project's own `.prettierrc`. Absent binary
+  or unparseable fragment → raw-bytes fallback, identical to `Rustfmt`.
+- **`normalize_unit` now takes `(repository_root, path)`** because a formatter's
+  canonical form can be project-contextual; `rustfmt` ignores them, `prettier`
+  uses them. All four call sites already had both in scope.
+- **Opt-in, not a builtin default.** `ts → prettier` must be declared in
+  `.agent-workspace/normalizers.toml`; the kernel does not presume prettier over
+  biome/dprint/none. The former "unknown tool" test (which used `prettier` as its
+  unregistered example) now asserts `prettier` *resolves*, and uses `biome` as the
+  fail-closed canary.
+- **Why this beats structural for the real pain.** `prettier(prettier(x)) ==
+  prettier(x)`: because the fingerprint is taken over the canonical form at both
+  capture and reconcile, a format-on-save reflow cannot stale a claim. That is the
+  property that stops agents re-reading — or reverting format commits — over
+  cosmetic churn, and it is precisely what a lossless CST could not guarantee.
+- **Coverage.** `prettier_normalized_observation_ignores_reflow_but_catches_semantics`
+  (integration, skips when prettier is absent) proves a reflow stays `current`, a
+  real edit stales, and the byte-exact observation stales on the reflow too.
+  `prettier_is_registered_and_selectable_for_typescript` covers config selection.
+
+**Python (`black` + `ruff`), same slice.** Extended identically to Python, since
+this repo's own Claude hooks are Python. Both `Normalizer::Black` and
+`Normalizer::RuffFormat` are registered (presume neither — opt in with
+`py = { tool = "ruff" }` or `"black"`); a shared `resolve_formatter_binary`
+helper now backs all three formatters, preferring a repo-local install
+(`node_modules/.bin` for prettier, `.venv/bin`/`venv/bin` for black/ruff) over
+PATH. Invocations: `black -q --stdin-filename <path> -` and
+`ruff format --stdin-filename <path> -`, both stdin→stdout with raw-bytes
+fallback. **Honest caveat recorded in the config doc:** black and ruff shift
+their *stable style* across versions, so cross-environment determinism leans
+harder on a pinned version here than for lockfile-pinned prettier — the
+`version` field is the reserved enforcement slot. Proven by
+`ruff_normalized_observation_ignores_reflow_but_catches_semantics` (ruff is the
+formatter present in-env; skips otherwise). While wiring it, fixed a latent
+`GitFixture::with_files` footgun — it hardcoded `git add src`, so any fixture
+outside `src/` failed; it now stages the declared files.

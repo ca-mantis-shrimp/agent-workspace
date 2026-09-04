@@ -908,7 +908,12 @@ impl Workspace {
         let content = String::from_utf8(unit.to_vec()).map_err(|_| {
             WorkspaceError::InvalidObservation("selected source is not valid UTF-8".to_owned())
         })?;
-        let input_fingerprint = hex_digest(&normalize_unit(unit, normalizer));
+        let input_fingerprint = hex_digest(&normalize_unit(
+            unit,
+            normalizer,
+            &self.repository_root,
+            &path,
+        ));
         // Record the raw unit fingerprint whenever the normalizer makes it
         // distinct in meaning from the input fingerprint, so reconcile can
         // skip the formatter subprocess while the bytes are unchanged.
@@ -1115,7 +1120,12 @@ impl Workspace {
         let resolved_path = resolve_repository_file(&self.repository_root, &path)?;
         let container = fs::read(resolved_path)?;
         let unit = select_observation_unit(&container, &selector)?;
-        let input_fingerprint = hex_digest(&normalize_unit(unit, normalizer));
+        let input_fingerprint = hex_digest(&normalize_unit(
+            unit,
+            normalizer,
+            &self.repository_root,
+            &path,
+        ));
         let raw_fingerprint = (normalizer != Normalizer::None).then(|| hex_digest(unit));
         let container_fingerprint = hex_digest(&container);
 

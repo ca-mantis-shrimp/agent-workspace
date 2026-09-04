@@ -137,7 +137,12 @@ pub(crate) fn fingerprint_dependency(
 ) -> Result<(Normalizer, String, Option<String>), WorkspaceError> {
     let bytes = fs::read(resolve_repository_file(repository_root, relative_path)?)?;
     let normalizer = crate::normalizer_config::resolve_for_path(repository_root, relative_path)?;
-    let input_fingerprint = hex_digest(&normalize_unit(&bytes, normalizer));
+    let input_fingerprint = hex_digest(&normalize_unit(
+        &bytes,
+        normalizer,
+        repository_root,
+        relative_path,
+    ));
     let raw_fingerprint = (normalizer != Normalizer::None).then(|| hex_digest(&bytes));
     Ok((normalizer, input_fingerprint, raw_fingerprint))
 }
@@ -243,35 +248,150 @@ pub(crate) fn read_observation_fingerprints(
     // record — simply never fast-path.
     let unit_fingerprint = match recorded_raw_fingerprint {
         Some(raw) if raw == hex_digest(unit) => recorded_input_fingerprint.to_owned(),
-        _ => hex_digest(&normalize_unit(unit, normalizer)),
+        _ => hex_digest(&normalize_unit(unit, normalizer, repository_root, path)),
     };
     Ok((unit_fingerprint, hex_digest(&container)))
 }
 
 /// Canonicalize an observed unit before fingerprinting. `None` returns the bytes
-/// unchanged. `Rustfmt` returns the rustfmt-canonical form, falling back to the
-/// raw bytes whenever rustfmt is unavailable or the unit does not parse — so a
-/// mid-edit or non-standalone fragment simply fingerprints as its literal bytes
-/// (and thus reads as changed), never as an error.
-pub(crate) fn normalize_unit(unit: &[u8], normalizer: Normalizer) -> Vec<u8> {
+/// unchanged. `Rustfmt`/`Prettier` return the formatter-canonical form, falling
+/// back to the raw bytes whenever the formatter is unavailable or the unit does
+/// not parse — so a mid-edit or non-standalone fragment simply fingerprints as
+/// its literal bytes (and thus reads as changed), never as an error.
+///
+/// `repository_root`/`path` are the file's location, needed by formatters whose
+/// canonical form is project-contextual: prettier resolves its parser and
+/// `.prettierrc` from the file path, and uses the repo-local pinned binary.
+/// rustfmt ignores them (its edition is fixed here).
+pub(crate) fn normalize_unit(
+    unit: &[u8],
+    normalizer: Normalizer,
+    repository_root: &Path,
+    path: &Path,
+) -> Vec<u8> {
+    let raw = || unit.to_vec();
     match normalizer {
         Normalizer::None => unit.to_vec(),
-        Normalizer::Rustfmt => rustfmt_canonical(unit).unwrap_or_else(|| unit.to_vec()),
+        Normalizer::Rustfmt => rustfmt_canonical(unit).unwrap_or_else(raw),
+        Normalizer::Prettier => prettier_canonical(unit, repository_root, path).unwrap_or_else(raw),
+        Normalizer::Black => black_canonical(unit, repository_root, path).unwrap_or_else(raw),
+        Normalizer::RuffFormat => {
+            ruff_format_canonical(unit, repository_root, path).unwrap_or_else(raw)
+        }
     }
 }
 
 pub(crate) fn rustfmt_canonical(unit: &[u8]) -> Option<Vec<u8>> {
-    use std::process::{Command, Stdio};
-    let mut child = Command::new("rustfmt")
-        .args(["--emit", "stdout", "--edition", "2021", "--quiet"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    child.stdin.take()?.write_all(unit).ok()?;
-    let output = child.wait_with_output().ok()?;
-    output.status.success().then_some(output.stdout)
+    run_formatter(Command::new("rustfmt").args([
+        "--emit",
+        "stdout",
+        "--edition",
+        "2021",
+        "--quiet",
+    ]))(unit)
+}
+
+/// Drive prettier over stdin. The project-local `node_modules/.bin/prettier` is
+/// preferred — it is the version the repo's lockfile pins and the version
+/// format-on-save actually runs — so the canonical form matches the editor's and
+/// is reproducible; a bare `prettier` on PATH is the fallback. `--stdin-filepath`
+/// hands prettier the path so it selects the parser (`.ts`, `.tsx`, `.js`, …) and
+/// discovers the project's own config, and running from the repo root anchors
+/// that discovery.
+pub(crate) fn prettier_canonical(
+    unit: &[u8],
+    repository_root: &Path,
+    path: &Path,
+) -> Option<Vec<u8>> {
+    let program =
+        resolve_formatter_binary(repository_root, &["node_modules/.bin/prettier"], "prettier");
+    let mut command = Command::new(program);
+    command
+        .current_dir(repository_root)
+        .arg("--stdin-filepath")
+        .arg(path);
+    run_formatter(&mut command)(unit)
+}
+
+/// Drive `black` over stdin, preferring a project virtualenv binary. `black -`
+/// reads stdin and writes the formatted result to stdout; `--stdin-filename`
+/// gives it the path for config discovery (`pyproject.toml [tool.black]`) and
+/// per-file excludes.
+pub(crate) fn black_canonical(unit: &[u8], repository_root: &Path, path: &Path) -> Option<Vec<u8>> {
+    let program = resolve_formatter_binary(
+        repository_root,
+        &[".venv/bin/black", "venv/bin/black"],
+        "black",
+    );
+    let mut command = Command::new(program);
+    command
+        .current_dir(repository_root)
+        .arg("-q")
+        .arg("--stdin-filename")
+        .arg(path)
+        .arg("-");
+    run_formatter(&mut command)(unit)
+}
+
+/// Drive `ruff format` over stdin (black-compatible), preferring a project
+/// virtualenv binary. `ruff format --stdin-filename <path> -` reads stdin, writes
+/// the formatted result to stdout, and uses the path to discover the project's
+/// `pyproject.toml`/`ruff.toml` config.
+pub(crate) fn ruff_format_canonical(
+    unit: &[u8],
+    repository_root: &Path,
+    path: &Path,
+) -> Option<Vec<u8>> {
+    let program = resolve_formatter_binary(
+        repository_root,
+        &[".venv/bin/ruff", "venv/bin/ruff"],
+        "ruff",
+    );
+    let mut command = Command::new(program);
+    command
+        .current_dir(repository_root)
+        .arg("format")
+        .arg("--stdin-filename")
+        .arg(path)
+        .arg("-");
+    run_formatter(&mut command)(unit)
+}
+
+/// Resolve a formatter binary, preferring a repo-local install (which the
+/// project's environment pins) over a PATH binary. `candidates` are repo-relative
+/// paths tried in order; the first that exists wins, else the PATH `fallback`.
+/// This is what lets a canonical form be reproducible across environments rather
+/// than hostage to whatever version happens to be on PATH.
+fn resolve_formatter_binary(
+    repository_root: &Path,
+    candidates: &[&str],
+    fallback: &str,
+) -> std::ffi::OsString {
+    for candidate in candidates {
+        let local = repository_root.join(candidate);
+        if local.is_file() {
+            return local.into_os_string();
+        }
+    }
+    fallback.into()
+}
+
+/// Shared formatter-subprocess plumbing: pipe `unit` to the configured command's
+/// stdin and return its stdout only on a clean exit. Any spawn/IO/non-zero-exit
+/// outcome is `None`, which the callers turn into the raw-bytes fallback.
+fn run_formatter(command: &mut Command) -> impl FnOnce(&[u8]) -> Option<Vec<u8>> + '_ {
+    use std::process::Stdio;
+    move |unit| {
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        child.stdin.take()?.write_all(unit).ok()?;
+        let output = child.wait_with_output().ok()?;
+        output.status.success().then_some(output.stdout)
+    }
 }
 
 pub(crate) fn observation_reconciliation_fingerprint(

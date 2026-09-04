@@ -92,6 +92,24 @@ pub enum Normalizer {
     /// rustfmt is absent or the unit does not parse (e.g. a mid-edit file, or a
     /// byte-range fragment that is not a standalone item).
     Rustfmt,
+    /// Canonicalize JavaScript/TypeScript source with `prettier`, preferring the
+    /// project-local `node_modules/.bin/prettier` (version-pinned by the repo's
+    /// lockfile) so canonical form is deterministic across environments. Config
+    /// and parser are resolved via `--stdin-filepath`, i.e. the project's own
+    /// `.prettierrc`. Falls back to raw bytes when prettier is absent or the unit
+    /// does not parse — the same conservative degradation as `Rustfmt`.
+    Prettier,
+    /// Canonicalize Python source with `black`, preferring a project virtualenv
+    /// (`.venv`/`venv`) binary over PATH. Config is discovered from the file path
+    /// via `--stdin-filename`. Raw-bytes fallback like the others. Note: black's
+    /// stable style shifts across major versions, so cross-environment determinism
+    /// leans harder on a pinned version than the rustfmt/prettier cases.
+    Black,
+    /// Canonicalize Python source with `ruff format` (black-compatible), preferring
+    /// a project virtualenv binary over PATH. Same `--stdin-filename` config
+    /// discovery and raw-bytes fallback. Ruff is a single fast binary with no
+    /// interpreter-startup tax, which keeps it off the reconcile hot path.
+    RuffFormat,
 }
 
 impl Normalizer {
@@ -106,6 +124,9 @@ impl Normalizer {
         match name {
             "none" => Some(Self::None),
             "rustfmt" => Some(Self::Rustfmt),
+            "prettier" => Some(Self::Prettier),
+            "black" => Some(Self::Black),
+            "ruff" => Some(Self::RuffFormat),
             _ => None,
         }
     }
