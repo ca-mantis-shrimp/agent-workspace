@@ -506,6 +506,7 @@ impl Workspace {
             findings: projection.findings.into_values().collect(),
             transactions: projection.transactions.into_values().collect(),
             checkpoints: projection.checkpoints,
+            observations_since_last_claim: projection.observations_since_last_claim as usize,
         }
     }
 
@@ -2131,6 +2132,12 @@ struct Projection {
     next_finding_id: u64,
     next_transaction_id: u64,
     next_sequence: u64,
+    /// How many observations have been recorded since the most recent claim —
+    /// the write-back lag. Incremented on every `ObservationRecorded`, reset to
+    /// zero on every `ClaimRecorded`. The kernel reports this raw count as a
+    /// proprioceptive fact (like freshness); whether the lag is a debt is the
+    /// agent's judgment, so no threshold or verdict lives here.
+    observations_since_last_claim: u64,
 }
 
 impl Projection {
@@ -2235,6 +2242,7 @@ impl Projection {
                         },
                     },
                 );
+                self.observations_since_last_claim += 1;
             }
             Event::ObservationReconciled {
                 observation_id,
@@ -2310,6 +2318,7 @@ impl Projection {
                         },
                     },
                 );
+                self.observations_since_last_claim = 0;
             }
             Event::ClaimReconciled {
                 claim_id,

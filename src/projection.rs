@@ -26,6 +26,10 @@ pub struct WorkspaceStatus {
     pub transactions: Vec<Transaction>,
     #[serde(default)]
     pub checkpoints: Vec<CheckpointMarker>,
+    /// Observations recorded since the most recent claim — the write-back lag.
+    /// A proprioceptive fact the agent judges, not a verdict the kernel renders.
+    #[serde(default)]
+    pub observations_since_last_claim: usize,
 }
 
 /// The default `status` output: the orientation surface an agent resumes from,
@@ -44,6 +48,11 @@ pub struct BriefStatus {
     pub claims: Vec<BriefClaim>,
     pub claims_omitted: usize,
     pub counts: BriefCounts,
+    /// Observations recorded since the most recent claim — the write-back lag.
+    /// Surfaced at orientation so a resuming agent sees, without asking, whether
+    /// the last session sensed a lot but wrote little back. A raw count, not a
+    /// verdict: only the agent knows if those reads produced a durable belief.
+    pub observations_since_last_claim: usize,
     pub latest_checkpoint: Option<BriefCheckpoint>,
 }
 
@@ -118,6 +127,7 @@ impl WorkspaceStatus {
             objective: self.objective.clone(),
             claims,
             claims_omitted: self.claims.len().saturating_sub(BRIEF_CLAIM_LIMIT),
+            observations_since_last_claim: self.observations_since_last_claim,
             counts: BriefCounts {
                 active_claims: self.claims.len(),
                 superseded_claims: self.superseded_claims.len(),

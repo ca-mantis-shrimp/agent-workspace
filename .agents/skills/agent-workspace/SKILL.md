@@ -28,6 +28,13 @@ needed. Read `freshness_within_scope` on every claim:
 - `stale` — an input changed. Re-observe before you rely on it.
 - `unknown` — an input couldn't be verified. Treat as not-yet-trusted.
 
+Also read `observations_since_last_claim` — the **write-back lag**: how many
+files have been sensed since anyone last recorded a belief. A high number means
+the last session read a lot and concluded little in durable form, so the next
+resume boots blind. It is a raw fact, not a verdict: only you know whether those
+reads produced a belief worth recording. If they did, that is your cue to
+`record-belief` before the conclusion evaporates.
+
 ```
 agent-workspace status --repository .
 ```

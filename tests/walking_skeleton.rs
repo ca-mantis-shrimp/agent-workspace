@@ -4573,6 +4573,74 @@ fn record_belief_reuses_a_fresh_ambient_observation_instead_of_duplicating_it() 
     assert_eq!(entry.reason, "foo returns one");
 }
 
+/// The write-back lag: observations recorded since the most recent claim. It is
+/// the proprioceptive signal an adapter's orientation surfaces so a resuming
+/// agent sees whether the last session sensed a lot but concluded little. It is
+/// a "did I write anything back" signal, not per-observation coverage — any
+/// claim resets it, even one that does not cite every outstanding observation.
+#[test]
+fn write_back_lag_counts_observations_since_the_last_claim() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let handle = Workspace::open(&fixture.repository, &workspace).unwrap();
+
+    let lag = |handle: &Workspace| {
+        handle
+            .resume_brief_status()
+            .unwrap()
+            .observations_since_last_claim
+    };
+
+    // A fresh workspace has sensed nothing and owes nothing.
+    assert_eq!(lag(&handle), 0);
+
+    // Two ambient captures with no belief drawn: the lag climbs, one per read.
+    handle
+        .capture_file_observation(
+            "src/lib.rs",
+            "adapter.capture",
+            ObservationCaptureOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(lag(&handle), 1);
+    handle
+        .capture_file_observation(
+            "src/helper.rs",
+            "adapter.capture",
+            ObservationCaptureOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(lag(&handle), 2);
+
+    // Recording a belief is writing back: the lag resets to zero even though the
+    // uncited helper observation now sits behind the line. This is "did I
+    // conclude anything", not "is every observation cited".
+    handle
+        .record_belief(
+            "foo returns one",
+            &["src/lib.rs".into()],
+            agent_workspace::ClaimScopeStrategy::Declared,
+        )
+        .unwrap();
+    assert_eq!(lag(&handle), 0);
+
+    // A fresh observation after the belief starts the lag climbing again — it is
+    // a live signal, not a one-way latch.
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 { 42 }\n",
+    )
+    .unwrap();
+    handle
+        .capture_file_observation(
+            "src/lib.rs",
+            "adapter.capture",
+            ObservationCaptureOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(lag(&handle), 1);
+}
+
 #[test]
 fn record_belief_captures_when_no_observation_exists_and_stales_after_an_edit() {
     let fixture = GitFixture::new();
