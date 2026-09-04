@@ -250,12 +250,7 @@ test("workspace_working_set projects the bounded attention model via the kernel"
 	const result = await workingSet.execute("call-1", {}, undefined, undefined, {
 		cwd: root,
 	});
-	assert.deepEqual(calls[0], [
-		"working-set",
-		"--compact",
-		"--repository",
-		root,
-	]);
+	assert.deepEqual(calls[0], ["working-set", "--compact", "--repository", root]);
 	assert.equal(result.content[0].text, "executed:working-set");
 });
 
@@ -274,12 +269,7 @@ test("workspace_findings projects the bounded quickfix queue via the kernel", as
 	const result = await findings.execute("call-1", {}, undefined, undefined, {
 		cwd: root,
 	});
-	assert.deepEqual(calls[0], [
-		"findings",
-		"--compact",
-		"--repository",
-		root,
-	]);
+	assert.deepEqual(calls[0], ["findings", "--compact", "--repository", root]);
 	assert.equal(result.content[0].text, "executed:findings");
 });
 
@@ -408,7 +398,10 @@ test("orientation tools degrade to plain text outside a repository and throw on 
 			undefined,
 			{ cwd: missingRoot },
 		);
-		assert.match(noBinary.content[0].text, /built target\/debug\/agent-workspace/);
+		assert.match(
+			noBinary.content[0].text,
+			/built target\/debug\/agent-workspace/,
+		);
 	} finally {
 		if (savedPath === undefined) delete process.env.PATH;
 		else process.env.PATH = savedPath;

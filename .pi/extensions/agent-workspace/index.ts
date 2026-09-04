@@ -393,7 +393,7 @@ export default function (pi: ExtensionAPI) {
 		name: "workspace_record_belief",
 		label: "Workspace Record Belief",
 		description:
-			"Record a belief — the fused write verb: \"I now believe X, and it rests on files Y, Z.\" Replaces the raw-CLI observe-then-claim two-step. For each rests-on path the kernel reuses the freshest existing observation when it is current (typically your ambient read captures) and only otherwise captures a whole-file observation, focuses it, and records the claim with the statement as the focus reason. Citation is mandatory: at least one rests-on path is required, so a belief you cannot cite cannot be recorded. Rejections from the kernel are strict and name the failed inputs — re-read the named file (your read is auto-captured), then re-record.",
+			'Record a belief — the fused write verb: "I now believe X, and it rests on files Y, Z." Replaces the raw-CLI observe-then-claim two-step. For each rests-on path the kernel reuses the freshest existing observation when it is current (typically your ambient read captures) and only otherwise captures a whole-file observation, focuses it, and records the claim with the statement as the focus reason. Citation is mandatory: at least one rests-on path is required, so a belief you cannot cite cannot be recorded. Rejections from the kernel are strict and name the failed inputs — re-read the named file (your read is auto-captured), then re-record.',
 		promptSnippet:
 			"Write side: assert a belief citing the files it rests on; reuses fresh observations.",
 		promptGuidelines: [
@@ -415,10 +415,13 @@ export default function (pi: ExtensionAPI) {
 				},
 			),
 			scope: Type.Optional(
-				Type.Union([Type.Literal("declared"), Type.Literal("conservative-siblings")], {
-					description:
-						"Claim scope strategy: `declared` (default) binds only the cited paths; `conservative-siblings` additionally fingerprints the cited files' repository siblings.",
-				}),
+				Type.Union(
+					[Type.Literal("declared"), Type.Literal("conservative-siblings")],
+					{
+						description:
+							"Claim scope strategy: `declared` (default) binds only the cited paths; `conservative-siblings` additionally fingerprints the cited files' repository siblings.",
+					},
+				),
 			),
 		}),
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -447,7 +450,12 @@ export default function (pi: ExtensionAPI) {
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			return runKernel(
 				ctx.cwd,
-				["preview-transaction", "--compact", "--transaction", String(params.transaction)],
+				[
+					"preview-transaction",
+					"--compact",
+					"--transaction",
+					String(params.transaction),
+				],
 				signal,
 			);
 		},
