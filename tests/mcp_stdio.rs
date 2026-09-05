@@ -57,6 +57,37 @@ impl Server {
     }
 }
 
+impl Server {
+    /// Initialize, complete the handshake, and return the advertised tool names.
+    fn handshake(&mut self) -> Vec<String> {
+        self.send(json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "test", "version": "0"}}
+        }));
+        let init = self.recv_id(1);
+        assert_eq!(init["result"]["serverInfo"]["name"], "agent-workspace");
+        self.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+        self.send(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}));
+        let tools = self.recv_id(2);
+        tools["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// Call a tool and return the JSON-RPC response.
+    fn call(&mut self, id: i64, name: &str, arguments: Value) -> Value {
+        self.send(json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments}
+        }));
+        self.recv_id(id)
+    }
+}
+
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -89,38 +120,19 @@ fn mcp_server_records_a_belief_over_stdio() {
     make_repo(repo.path());
     let mut server = start(repo.path(), state.path());
 
-    // Handshake.
-    server.send(json!({
-        "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
-                   "clientInfo": {"name": "test", "version": "0"}}
-    }));
-    let init = server.recv_id(1);
-    assert_eq!(init["result"]["serverInfo"]["name"], "agent-workspace");
-    server.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
-
-    // The tool is routed and carries its schema.
-    server.send(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}));
-    let tools = server.recv_id(2);
-    let names: Vec<&str> = tools["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|t| t["name"].as_str().unwrap())
-        .collect();
+    let names = server.handshake();
     assert!(
-        names.contains(&"workspace_record_belief"),
+        names.contains(&"workspace_record_belief".to_owned()),
         "tool not routed; got {names:?}"
     );
 
     // A well-cited belief lands.
-    server.send(json!({
-        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
-        "params": {"name": "workspace_record_belief",
-                   "arguments": {"statement": "hello.txt greets the world",
-                                 "rests_on": ["hello.txt"]}}
-    }));
-    let ok = server.recv_id(3);
+    let ok = server.call(
+        3,
+        "workspace_record_belief",
+        json!({"statement": "hello.txt greets the world",
+               "rests_on": ["hello.txt"]}),
+    );
     assert_eq!(
         ok["result"]["isError"],
         json!(false),
@@ -134,13 +146,12 @@ fn mcp_server_records_a_belief_over_stdio() {
 
     // A belief citing a file that does not exist is rejected strictly, and the
     // kernel's error reaches the client as a tool-level error (never softened).
-    server.send(json!({
-        "jsonrpc": "2.0", "id": 4, "method": "tools/call",
-        "params": {"name": "workspace_record_belief",
-                   "arguments": {"statement": "cites a ghost",
-                                 "rests_on": ["does-not-exist.txt"]}}
-    }));
-    let bad = server.recv_id(4);
+    let bad = server.call(
+        4,
+        "workspace_record_belief",
+        json!({"statement": "cites a ghost",
+               "rests_on": ["does-not-exist.txt"]}),
+    );
     assert_eq!(
         bad["result"]["isError"],
         json!(true),
@@ -155,38 +166,19 @@ fn mcp_server_binds_an_objective_over_stdio() {
     make_repo(repo.path());
     let mut server = start(repo.path(), state.path());
 
-    // Handshake.
-    server.send(json!({
-        "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
-                   "clientInfo": {"name": "test", "version": "0"}}
-    }));
-    let init = server.recv_id(1);
-    assert_eq!(init["result"]["serverInfo"]["name"], "agent-workspace");
-    server.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
-
-    // The tool is advertised alongside record_belief.
-    server.send(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}));
-    let tools = server.recv_id(2);
-    let names: Vec<&str> = tools["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|t| t["name"].as_str().unwrap())
-        .collect();
+    let names = server.handshake();
     assert!(
-        names.contains(&"workspace_bind_objective"),
+        names.contains(&"workspace_bind_objective".to_owned()),
         "bind-objective tool not routed; got {names:?}"
     );
 
     // Binding an objective records it and returns the projected Objective.
-    server.send(json!({
-        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
-        "params": {"name": "workspace_bind_objective",
-                   "arguments": {"intent": "write-api slice 2",
-                                 "external_reference": "clearhead:01a06f11"}}
-    }));
-    let ok = server.recv_id(3);
+    let ok = server.call(
+        3,
+        "workspace_bind_objective",
+        json!({"intent": "write-api slice 2",
+               "external_reference": "clearhead:01a06f11"}),
+    );
     assert_eq!(
         ok["result"]["isError"],
         json!(false),
@@ -199,15 +191,142 @@ fn mcp_server_binds_an_objective_over_stdio() {
     );
 
     // An empty intent is rejected strictly so bad objectives cannot land silently.
-    server.send(json!({
-        "jsonrpc": "2.0", "id": 4, "method": "tools/call",
-        "params": {"name": "workspace_bind_objective",
-                   "arguments": {"intent": "   "}}
-    }));
-    let bad = server.recv_id(4);
+    let bad = server.call(4, "workspace_bind_objective", json!({"intent": "   "}));
     assert_eq!(
         bad["result"]["isError"],
         json!(true),
         "empty intent must be an error: {bad}"
+    );
+}
+
+#[test]
+fn mcp_server_supersedes_a_claim_over_stdio() {
+    let repo = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    make_repo(repo.path());
+    let mut server = start(repo.path(), state.path());
+
+    let names = server.handshake();
+    assert!(
+        names.contains(&"workspace_supersede_claim".to_owned()),
+        "supersede tool not routed; got {names:?}"
+    );
+
+    // Two active claims to chain: 2 replaces 1.
+    let first = server.call(
+        3,
+        "workspace_record_belief",
+        json!({"statement": "one", "rests_on": ["hello.txt"]}),
+    );
+    let second = server.call(
+        4,
+        "workspace_record_belief",
+        json!({"statement": "two", "rests_on": ["hello.txt"]}),
+    );
+    let claim = |response: &Value| -> u64 {
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        let belief: Value = serde_json::from_str(text).unwrap();
+        belief["claim"]["id"].as_u64().unwrap()
+    };
+    let (id1, id2) = (claim(&first), claim(&second));
+
+    // Supersession lands and returns the retired claim.
+    let ok = server.call(
+        5,
+        "workspace_supersede_claim",
+        json!({"claim_id": id1, "replacement_claim_id": id2,
+               "reason": "revised after re-reading"}),
+    );
+    assert_eq!(
+        ok["result"]["isError"],
+        json!(false),
+        "supersede should succeed: {ok}"
+    );
+    let text = ok["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("superseded"),
+        "expected a superseded lifecycle: {text}"
+    );
+
+    // Re-superseding a retired claim is rejected strictly.
+    let bad = server.call(
+        6,
+        "workspace_supersede_claim",
+        json!({"claim_id": id1, "replacement_claim_id": id2, "reason": "again"}),
+    );
+    assert_eq!(
+        bad["result"]["isError"],
+        json!(true),
+        "double supersede must be an error: {bad}"
+    );
+}
+
+#[test]
+fn mcp_server_checkpoints_and_captures_reads_over_stdio() {
+    let repo = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    make_repo(repo.path());
+    let mut server = start(repo.path(), state.path());
+
+    let names = server.handshake();
+    assert!(
+        names.contains(&"workspace_checkpoint".to_owned())
+            && names.contains(&"workspace_observe_read".to_owned()),
+        "checkpoint/observe tools not routed; got {names:?}"
+    );
+
+    // A faithful read capture lands; a truncated one skips with its reason
+    // (first-class, never a silent no-op or a generic error).
+    let ok = server.call(
+        3,
+        "workspace_observe_read",
+        json!({"path": "hello.txt", "model_visible_text": "hello world\n"}),
+    );
+    assert_eq!(
+        ok["result"]["isError"],
+        json!(false),
+        "observe_read should succeed: {ok}"
+    );
+    let text = ok["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("\"outcome\": \"captured\""),
+        "expected a captured observation: {text}"
+    );
+
+    let skipped = server.call(
+        4,
+        "workspace_observe_read",
+        json!({"path": "hello.txt", "model_visible_text": "hello world\n",
+               "truncated": true}),
+    );
+    assert_eq!(skipped["result"]["isError"], json!(false));
+    let text = skipped["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("\"outcome\": \"skipped\"") && text.contains("truncated"),
+        "expected a first-class skip: {text}"
+    );
+
+    // A checkpoint draws the line; a duplicate label is rejected strictly.
+    let ok = server.call(
+        5,
+        "workspace_checkpoint",
+        json!({"label": "slice-done", "note": "verbs exposed"}),
+    );
+    assert_eq!(
+        ok["result"]["isError"],
+        json!(false),
+        "checkpoint should succeed: {ok}"
+    );
+    let text = ok["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("slice-done") && text.contains("git_revision"),
+        "expected a checkpoint marker: {text}"
+    );
+
+    let bad = server.call(6, "workspace_checkpoint", json!({"label": "slice-done"}));
+    assert_eq!(
+        bad["result"]["isError"],
+        json!(true),
+        "duplicate label must be an error: {bad}"
     );
 }

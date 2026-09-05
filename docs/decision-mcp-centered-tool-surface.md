@@ -1,6 +1,6 @@
 # Decision — Center the tool surface on MCP
 
-**Status:** decided, not yet implemented  
+**Status:** decided; migration steps 1–2 implemented 2026-09-04 (all write-loop verbs + `workspace_observe_read` on the MCP server). Step 3 (Pi extension → MCP client + capture hook) and step 4 (deprecate TS native tools) open.  
 **Date:** 2026-09-04  
 **Participants:** user + assistant (architectural check-in)  
 **Context:** `workspace_bind_objective` just shipped as the second MCP verb

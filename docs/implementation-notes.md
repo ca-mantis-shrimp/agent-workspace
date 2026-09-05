@@ -1363,3 +1363,37 @@ projected `Objective` as pretty-printed JSON.
   `workspace_record_belief` (the `--supersedes` flag observed as friction in the
   micro-dogfood notes). Freshness-core findings (advisory-state fingerprinting,
   git-revision projection field) also remain deferred.
+
+## 2026-09-04 — MCP write loop completed: supersede-claim, checkpoint, observe-read
+
+Per the migration plan in `docs/decision-mcp-centered-tool-surface.md`, the three
+remaining write-loop verbs are now MCP tools, completing steps 1–2 (stabilize
+verbs, expose `workspace_observe_read`) before the Pi extension refactor.
+
+- **Three new tools in `src/mcp.rs`.** `workspace_supersede_claim(claim_id,
+  replacement_claim_id, reason)`, `workspace_checkpoint(label, note?)`, and
+  `workspace_observe_read(path, model_visible_text, …)`. The repeated
+  `open -> lock -> op` boilerplate is factored into one `run` helper that takes
+  the per-call exclusive lock, invokes the kernel method, and serializes the
+  result — every tool is now a thin closure over it, so an MCP call and a CLI
+  call stay semantically identical by construction.
+- **Skips are first-class on observe_read.** `ReadCaptureOutcome::Skipped` maps
+  to `{"outcome": "skipped", "reason": …}` exactly as the CLI prints it (never
+  a silent no-op or a generic error); captured observations get
+  `"outcome": "captured"` injected. `truncated` defaults to `false` via
+  `#[serde(default)]` so clients may omit it.
+- **Server instructions enumerate the full surface.** Handshake now advertises
+  bind/record/supersede/checkpoint/observe in one paragraph, with the standing
+  rule that a stale claim outranks remembered belief.
+- **Acceptance coverage.** `tests/mcp_stdio.rs` grew two tests (six total) that
+  drive every tool end-to-end over stdio: supersede chains two recorded beliefs
+  and rejects a double supersede; observe_read captures a faithful read, skips a
+  truncated one with its reason, checkpoints with a unique label, and rejects a
+  duplicate label. 63 kernel tests, clippy `-D warnings`, fmt clean.
+- **Live dogfood.** Claim 90 recorded through the fused tool; stale claim 84
+  (MCP walking skeleton) superseded onto it through the new CLI verb; checkpoint
+  `mcp-write-loop-verbs-shipped` drawn.
+- **Still open.** Migration step 3 (refactor the Pi extension to an MCP client +
+  capture hook) and step 4 (deprecate the TypeScript native tools), plus the
+  restarted-Claude-Code live confirmation from write-api-slice-2. Transaction
+  verbs remain CLI-only until earned.
