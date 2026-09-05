@@ -9,6 +9,9 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+#[cfg(feature = "mcp")]
+mod mcp;
+
 fn main() -> ExitCode {
     match run(env::args().skip(1).collect()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -36,6 +39,24 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
     if command.as_str() == "state-path" {
         println!("{}", workspace_root.display());
         return Ok(());
+    }
+
+    // `mcp` is a long-lived stdio server, not a one-shot command: it must not
+    // hold a process-wide exclusive lock for its whole session, so it returns
+    // before the shared open+lock below and instead runs the same open->lock->op
+    // path per tool call, exactly as a fresh CLI invocation would.
+    if command.as_str() == "mcp" {
+        #[cfg(feature = "mcp")]
+        {
+            mcp::serve(options.repository.clone())?;
+            return Ok(());
+        }
+        #[cfg(not(feature = "mcp"))]
+        return Err(CliError::Usage(
+            "this binary was built without the `mcp` feature; rebuild with \
+             `cargo build --features mcp`"
+                .to_owned(),
+        ));
     }
 
     let workspace = Workspace::open(&options.repository, &workspace_root)?;

@@ -11,5 +11,14 @@ serde_json = "1.0"
 sha2 = "0.10"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 
+# The MCP front door is opt-in: a plain build stays the small, synchronous
+# kernel. `--features mcp` pulls the async stack (rmcp + a contained tokio
+# runtime) that serves the workspace verbs over the harness-agnostic protocol.
+rmcp = { version = "3", features = ["server", "transport-io"], optional = true }
+tokio = { version = "1", features = ["rt", "io-std", "net", "time"], optional = true }
+
+[features]
+mcp = ["dep:rmcp", "dep:tokio"]
+
 [dev-dependencies]
 tempfile = "3.21"
