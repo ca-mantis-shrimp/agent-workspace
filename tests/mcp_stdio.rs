@@ -147,3 +147,67 @@ fn mcp_server_records_a_belief_over_stdio() {
         "bad citation must be an error: {bad}"
     );
 }
+
+#[test]
+fn mcp_server_binds_an_objective_over_stdio() {
+    let repo = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    make_repo(repo.path());
+    let mut server = start(repo.path(), state.path());
+
+    // Handshake.
+    server.send(json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                   "clientInfo": {"name": "test", "version": "0"}}
+    }));
+    let init = server.recv_id(1);
+    assert_eq!(init["result"]["serverInfo"]["name"], "agent-workspace");
+    server.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+
+    // The tool is advertised alongside record_belief.
+    server.send(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}));
+    let tools = server.recv_id(2);
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"workspace_bind_objective"),
+        "bind-objective tool not routed; got {names:?}"
+    );
+
+    // Binding an objective records it and returns the projected Objective.
+    server.send(json!({
+        "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": {"name": "workspace_bind_objective",
+                   "arguments": {"intent": "write-api slice 2",
+                                 "external_reference": "clearhead:01a06f11"}}
+    }));
+    let ok = server.recv_id(3);
+    assert_eq!(
+        ok["result"]["isError"],
+        json!(false),
+        "bind_objective should succeed: {ok}"
+    );
+    let text = ok["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("\"intent\""),
+        "expected an objective in the result: {text}"
+    );
+
+    // An empty intent is rejected strictly so bad objectives cannot land silently.
+    server.send(json!({
+        "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+        "params": {"name": "workspace_bind_objective",
+                   "arguments": {"intent": "   "}}
+    }));
+    let bad = server.recv_id(4);
+    assert_eq!(
+        bad["result"]["isError"],
+        json!(true),
+        "empty intent must be an error: {bad}"
+    );
+}

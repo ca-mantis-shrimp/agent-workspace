@@ -46,6 +46,16 @@ pub struct RecordBeliefParams {
     pub scope: Option<String>,
 }
 
+/// Input schema for `workspace_bind_objective`, exposing the CLI
+/// `bind-objective` verb over the same thin transport.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct BindObjectiveParams {
+    /// Why the current work exists, thesis-first.
+    pub intent: String,
+    /// Optional external authority reference (e.g. a Clearhead action id or URL).
+    pub external_reference: Option<String>,
+}
+
 #[tool_router]
 impl WorkspaceServer {
     pub fn new(repository: PathBuf) -> Self {
@@ -76,6 +86,19 @@ impl WorkspaceServer {
             Err(message) => Ok(CallToolResult::error(vec![ContentBlock::text(message)])),
         }
     }
+
+    #[tool(
+        description = "Bind (or rebind) the workspace objective: declare why the current work exists, with an optional reference to an external authority such as a Clearhead action. This records an ObjectiveBound event; a future status/delta will surface the intent and the transition."
+    )]
+    fn workspace_bind_objective(
+        &self,
+        Parameters(params): Parameters<BindObjectiveParams>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.bind(params.intent, params.external_reference) {
+            Ok(json) => Ok(CallToolResult::success(vec![ContentBlock::text(json)])),
+            Err(message) => Ok(CallToolResult::error(vec![ContentBlock::text(message)])),
+        }
+    }
 }
 
 impl WorkspaceServer {
@@ -99,6 +122,20 @@ impl WorkspaceServer {
             .map_err(|error| error.to_string())?;
         serde_json::to_string_pretty(&belief).map_err(|error| error.to_string())
     }
+
+    fn bind(&self, intent: String, external_reference: Option<String>) -> Result<String, String> {
+        let root =
+            resolve_state_root(&self.repository, None, None).map_err(|error| error.to_string())?;
+        let workspace =
+            Workspace::open(&self.repository, &root).map_err(|error| error.to_string())?;
+        let _lock = workspace
+            .lock_exclusive()
+            .map_err(|error| error.to_string())?;
+        let objective = workspace
+            .bind_objective(intent, external_reference)
+            .map_err(|error| error.to_string())?;
+        serde_json::to_string_pretty(&objective).map_err(|error| error.to_string())
+    }
 }
 
 #[tool_handler]
@@ -114,9 +151,10 @@ impl ServerHandler for WorkspaceServer {
         info.server_info = server_info;
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
-            "Agent Workspace: record beliefs about code (workspace_record_belief), citing the \
-             files each rests on, so a future session gets a freshness signal instead of silent \
-             staleness. A claim reported as stale outranks your remembered belief."
+            "Agent Workspace: bind the current objective (workspace_bind_objective) and record \
+             beliefs about code (workspace_record_belief), citing the files each rests on, so a \
+             future session gets a freshness signal instead of silent staleness. A claim reported \
+             as stale outranks your remembered belief."
                 .to_owned(),
         );
         info

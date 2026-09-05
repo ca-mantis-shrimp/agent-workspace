@@ -1334,3 +1334,32 @@ harder on a pinned version here than for lockfile-pinned prettier — the
 formatter present in-env; skips otherwise). While wiring it, fixed a latent
 `GitFixture::with_files` footgun — it hardcoded `git add src`, so any fixture
 outside `src/` failed; it now stages the declared files.
+
+## 2026-09-04 — Write-API slice 2: bind-objective over MCP
+
+The MCP-in-core front door (commit 5f66c52) shipped `workspace_record_belief` as
+the first stdio tool. This slice adds `workspace_bind_objective` so objective
+transitions are available on the same harness-agnostic server, not only through
+the raw CLI.
+
+- **One server, shared semantics.** `src/mcp.rs` is still a thin transport:
+  each call opens the workspace, takes the per-call exclusive lock, and invokes
+the same `Workspace` method a CLI invocation would. `workspace_bind_objective`
+takes `intent` (required) and `external_reference` (optional) and returns the
+projected `Objective` as pretty-printed JSON.
+- **Strict input validation preserved.** `bind_objective` already rejects an
+  empty/whitespace intent in the kernel; the MCP tool surfaces that as a tool-level
+  error, matching `workspace_record_belief`.
+- **Server instructions updated.** The MCP server's `instructions` now mentions
+  both verbs so clients know the surface on handshake.
+- **Acceptance coverage drives stdio end-to-end.** `tests/mcp_stdio.rs` now has
+  `mcp_server_binds_an_objective_over_stdio`: it handshakes, lists tools and
+  asserts both `workspace_record_belief` and `workspace_bind_objective` are
+  advertised, binds an objective with an external reference, and checks that an
+  empty intent returns `isError: true`.
+- **Deferrals unchanged.** The remaining write-loop verbs (`supersede-claim`,
+  `checkpoint`, and transaction verbs) stay on the raw CLI until each earns its
+  MCP tool; the next likely candidate is atomic supersession on
+  `workspace_record_belief` (the `--supersedes` flag observed as friction in the
+  micro-dogfood notes). Freshness-core findings (advisory-state fingerprinting,
+  git-revision projection field) also remain deferred.

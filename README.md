@@ -127,7 +127,8 @@ replaces a native tool:
 - **Proprioception** — a `SessionStart` hook pushes the bounded `status` and
   `delta` into the model's opening context, so a cold session wakes oriented.
 - **Write** — an MCP server (`agent-workspace mcp`) exposes
-  `workspace_record_belief`, the fused observe+claim verb.
+  `workspace_record_belief` (fused observe+claim) and `workspace_bind_objective`
+  (intent binding), both served over the same harness-agnostic stdio server.
 
 Per-repo setup — install the kernel with the (opt-in) MCP subcommand onto your
 `PATH`, then let `.mcp.json` wire the server:
