@@ -1,7 +1,7 @@
 # Field report — first foreign dogfood of the semantic write API
 
 *Written by the working agent after a session in the `plot` repo (the foreign
-dogfood) using the claude-code-adapter and the write-API slice 1 verbs. This is
+dogfood) using the Pi adapter and the write-API slice 1 verbs. This is
 a field report, not a spec — the contract and design notes are authoritative
 for behavior. It follows `reflection-dogfood-cold-resume.md`, which covered the
 self-hosted cold-resume test; this one covers real feature work in a repo that
