@@ -1397,3 +1397,47 @@ verbs, expose `workspace_observe_read`) before the Pi extension refactor.
   capture hook) and step 4 (deprecate the TypeScript native tools), plus the
   restarted-Claude-Code live confirmation from write-api-slice-2. Transaction
   verbs remain CLI-only until earned.
+
+## 2026-09-05 — Pi→MCP refactor: research complete, implementation deferred (action 01a0707c)
+
+Scoping for migration step 3 of the MCP-centered tool surface. Findings below
+were verified against the pinned `@earendil-works/pi-coding-agent` 0.84.4
+sources and the SDK registry; the implementation itself starts next session.
+
+- **Slice grew by the right amount: read surface first.** The extension
+  exposes six tools; five (status, delta, working-set, findings,
+  transaction-preview) have no MCP verb yet. Registering only discovered MCP
+  tools would regress the surface, so the slice is: (A) add the five read verbs
+  to `src/mcp.rs` (kernel methods all public: `resume_brief_status`,
+  `resume_status`, `delta_brief_since`/`delta_since`,
+  `resume_working_set_view`, `resume_findings_view`,
+  `resume_transaction_preview`); (B) then refactor the extension.
+- **CLI `--compact` is cosmetic.** `print_selected_json` only chooses
+  single-line vs pretty serialization — over MCP the verbs can return the
+  kernel object directly and the compact/full distinction collapses to
+  `full: bool`.
+- **Dependency decision (user): official SDK.**
+  `@modelcontextprotocol/sdk@^1.30.0` (verified reachable on the registry). No
+  hand-rolled client — earlier hand-roll assumption explicitly overruled.
+- **Pi API facts that shape the design.** `ExtensionFactory` may be async
+  (`void | Promise<void>`, core/extensions/types.d.ts:1153), so MCP discovery
+  can happen at load; but the factory receives no context, so repo discovery at
+  load needs `process.cwd()` or must stay per-execute (`ctx.cwd`) — the one
+  open design point. `session_shutdown` event exists for closing clients. Pi
+  providers consume tool `parameters` as plain JSON Schema — `convertTools` in
+  `pi-ai` `dist/api/anthropic-messages.js` reads `schema.properties` /
+  `schema.required` directly and there is no TypeBox `Value.Check` in the
+  runtime tool path — so an MCP `inputSchema` passes through with a cast.
+  `promptSnippet`/`promptGuidelines`/`label` are Pi-specific metadata absent
+  from MCP: keep a small static Pi-metadata map keyed by tool name.
+- **Wire format already proven.** `tests/mcp_stdio.rs` (newline-delimited
+  JSON-RPC; `initialize` → `notifications/initialized` → `tools/list` →
+  `tools/call`) doubles as the reference client.
+- **Capture parity requirement.** The capture hook must route to the client's
+  `workspace_observe_read` instead of the observe-read CLI stdin path, and
+  `model_visible_bytes` accounting must survive the JSON hop (existing test
+  asserts the accounting; keep it).
+- **Safety envelope unchanged.** Extensions load at Pi startup, so refactor
+  edits cannot destabilize a live session; the kernel's missing-runtime path
+  stays harmless/silent. Absence-of-runtime must still degrade to plain text,
+  not thrown tool errors.
