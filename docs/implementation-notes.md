@@ -1441,3 +1441,40 @@ sources and the SDK registry; the implementation itself starts next session.
   edits cannot destabilize a live session; the kernel's missing-runtime path
   stays harmless/silent. Absence-of-runtime must still degrade to plain text,
   not thrown tool errors.
+
+## 2026-09-06 — Pi→MCP refactor implemented
+
+The MCP-centered decision is now implemented end to end.
+
+- **Read-surface parity landed first.** `src/mcp.rs` now owns
+  `workspace_status`, `workspace_delta`, `workspace_working_set`,
+  `workspace_findings`, and `workspace_transaction_preview` in addition to the
+  five existing write/capture verbs. Brief/full and `since` dispatch directly to
+  the same kernel methods as the CLI. A missing transaction maps `None` to the
+  kernel's `TransactionNotFound` error rather than returning a successful null.
+- **Pi is a client, not a second tool server.** The extension uses the official
+  `@modelcontextprotocol/sdk` `^1.30.0`, starts one lazy stdio client per
+  repository root, discovers the server's tools at load, and passes each MCP
+  `inputSchema` through to Pi. The only local tool metadata is Pi-specific
+  label/prompt guidance. All hand-written TypeScript command adapters and their
+  duplicated schemas are gone; shutdown closes every client.
+- **Capture uses the same pipe.** Finalized Pi reads call
+  `workspace_observe_read` through the MCP client. Pagination chrome is removed
+  only from `model_visible_text`; `model_visible_bytes` still counts the exact
+  pre-strip model-boundary result, preserving the accounting contract.
+- **Factory-cwd question resolved.** Discovery uses `process.cwd()` at extension
+  load because Pi's factory has no context. Execution and capture still resolve
+  `ctx.cwd`; repositories get distinct clients. This means a binary installed or
+  built after a failed load needs Pi `/reload` before tools can be advertised,
+  which matches Pi's extension lifecycle.
+- **Absence fails by omission.** The research note's suggested plain-text
+  fallback depended on registering static tools before discovery, which would
+  retain duplicate schemas. The implemented MCP-native behavior is safer and
+  thinner: if the initial directory is not a Git repository, no binary exists,
+  or MCP initialization fails, the capture hook remains dormant and no broken
+  workspace tools are advertised. No native Pi read is failed.
+- **Executable proof.** MCP stdio coverage now drives all ten advertised tools,
+  both status/delta projection modes, explicit checkpoint selection, successful
+  transaction preview, and strict not-found rejection. Pi tests use a fake MCP
+  server to prove discovery, input forwarding, strict tool errors, client
+  shutdown, harmless absence, and exact Unicode/model-visible byte accounting.

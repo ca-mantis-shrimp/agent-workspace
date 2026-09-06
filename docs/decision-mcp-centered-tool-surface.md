@@ -1,6 +1,6 @@
 # Decision — Center the tool surface on MCP
 
-**Status:** decided; migration steps 1–2 implemented 2026-09-04 (all write-loop verbs + `workspace_observe_read` on the MCP server). Step 3 (Pi extension → MCP client + capture hook) and step 4 (deprecate TS native tools) open.  
+**Status:** implemented 2026-09-06. The MCP server owns all ten workspace tool schemas; the Pi extension is an official SDK client plus capture hook, and the parallel TypeScript tool implementations are removed.
 **Date:** 2026-09-04  
 **Participants:** user + assistant (architectural check-in)  
 **Context:** `workspace_bind_objective` just shipped as the second MCP verb
@@ -55,6 +55,27 @@ Pi exits.
 4. Deprecate the hand-written TypeScript native tools once parity is proven.
 5. Update README and agent guidance to describe Pi as "MCP client + capture
    hook."
+
+## Implemented shape (2026-09-06)
+
+- The server gained the five missing read projections: `workspace_status`,
+  `workspace_delta`, `workspace_working_set`, `workspace_findings`, and
+  `workspace_transaction_preview`. Brief/full and checkpoint-selection behavior
+  calls the same kernel methods as the CLI; a missing transaction is a strict
+  tool error.
+- The Pi extension uses `@modelcontextprotocol/sdk` `^1.30.0`, discovers tools at
+  load, passes the server's `inputSchema` directly to Pi, and keeps only a static
+  map of Pi-specific labels and prompt guidance. One lazy client is shared per
+  repository root and all clients close on `session_shutdown`.
+- Read capture calls `workspace_observe_read` over that client. The exact
+  model-visible byte count remains a separate argument after Pi pagination
+  chrome is stripped from the semantic text.
+- Absence or incompatibility fails harmlessly: the capture hook remains dormant
+  and no broken workspace tools are advertised.
+- End-to-end stdio coverage exercises all read projections, both bounded and
+  full variants, checkpoint selection, transaction-not-found rejection, and the
+  existing write loop. Pi integration coverage drives discovery, forwarding,
+  strict errors, capture accounting, and shutdown against a fake MCP server.
 
 ## Caveats and preconditions
 

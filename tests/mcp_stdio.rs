@@ -95,6 +95,26 @@ impl Drop for Server {
     }
 }
 
+fn run_cli(repo: &Path, state: &Path, args: &[&str]) -> Value {
+    let output = Command::new(env!("CARGO_BIN_EXE_agent-workspace"))
+        .args(args)
+        .args(["--repository", repo.to_str().unwrap()])
+        .env("XDG_STATE_HOME", state)
+        .output()
+        .expect("run agent-workspace CLI");
+    assert!(
+        output.status.success(),
+        "CLI {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("CLI returned JSON")
+}
+
+fn tool_json(response: &Value) -> Value {
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    serde_json::from_str(text).expect("tool result text is JSON")
+}
+
 fn start(repo: &Path, state: &Path) -> Server {
     let mut child = Command::new(env!("CARGO_BIN_EXE_agent-workspace"))
         .args(["mcp", "--repository", repo.to_str().unwrap()])
@@ -111,6 +131,102 @@ fn start(repo: &Path, state: &Path) -> Server {
         stdin,
         stdout,
     }
+}
+
+#[test]
+fn mcp_server_projects_the_complete_read_surface_over_stdio() {
+    let repo = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    make_repo(repo.path());
+    let mut server = start(repo.path(), state.path());
+
+    let names = server.handshake();
+    for name in [
+        "workspace_status",
+        "workspace_delta",
+        "workspace_working_set",
+        "workspace_findings",
+        "workspace_transaction_preview",
+    ] {
+        assert!(
+            names.contains(&name.to_owned()),
+            "{name} not routed; got {names:?}"
+        );
+    }
+
+    let bound = server.call(
+        3,
+        "workspace_bind_objective",
+        json!({"intent": "exercise the MCP read surface"}),
+    );
+    assert_eq!(bound["result"]["isError"], json!(false));
+    let belief = server.call(
+        4,
+        "workspace_record_belief",
+        json!({"statement": "hello.txt contains the fixture greeting",
+               "rests_on": ["hello.txt"]}),
+    );
+    let claim_id = tool_json(&belief)["claim"]["id"].as_u64().unwrap();
+    let transaction = run_cli(
+        repo.path(),
+        state.path(),
+        &[
+            "begin-transaction",
+            "--intent",
+            "preview me",
+            "--claim",
+            &claim_id.to_string(),
+        ],
+    );
+    let transaction_id = transaction["id"].as_u64().unwrap();
+    let checkpoint = server.call(
+        5,
+        "workspace_checkpoint",
+        json!({"label": "read-surface-baseline"}),
+    );
+    assert_eq!(checkpoint["result"]["isError"], json!(false));
+
+    let brief_status = tool_json(&server.call(6, "workspace_status", json!({})));
+    assert_eq!(
+        brief_status["objective"]["intent"],
+        "exercise the MCP read surface"
+    );
+    assert_eq!(brief_status["counts"]["open_transactions"], 1);
+    let full_status = tool_json(&server.call(7, "workspace_status", json!({"full": true})));
+    assert!(full_status["observations"].as_array().is_some());
+
+    let brief_delta = tool_json(&server.call(8, "workspace_delta", json!({})));
+    assert_eq!(brief_delta["checkpoint"]["label"], "read-surface-baseline");
+    let full_delta = tool_json(&server.call(
+        9,
+        "workspace_delta",
+        json!({"full": true, "since": "read-surface-baseline"}),
+    ));
+    assert_eq!(full_delta["checkpoint"]["label"], "read-surface-baseline");
+
+    let working_set = tool_json(&server.call(10, "workspace_working_set", json!({})));
+    assert!(working_set["locations"].as_array().is_some());
+    let findings = tool_json(&server.call(11, "workspace_findings", json!({})));
+    assert!(findings["open"].as_array().is_some());
+
+    let preview = tool_json(&server.call(
+        12,
+        "workspace_transaction_preview",
+        json!({"transaction": transaction_id}),
+    ));
+    assert_eq!(preview["id"], transaction_id);
+    let missing = server.call(
+        13,
+        "workspace_transaction_preview",
+        json!({"transaction": transaction_id + 999}),
+    );
+    assert_eq!(missing["result"]["isError"], json!(true));
+    assert!(
+        missing["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("not found")
+    );
 }
 
 #[test]

@@ -103,6 +103,32 @@ pub struct ObserveReadParams {
     pub truncated: bool,
 }
 
+/// Input schema shared by projections that offer a bounded default and a full
+/// audit expansion.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct FullParams {
+    /// Return the complete audit projection instead of the bounded default.
+    #[serde(default)]
+    pub full: bool,
+}
+
+/// Input schema for `workspace_delta`.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct DeltaParams {
+    /// Return complete changed entities instead of the bounded id summary.
+    #[serde(default)]
+    pub full: bool,
+    /// Diff against this checkpoint label instead of the latest checkpoint.
+    pub since: Option<String>,
+}
+
+/// Input schema for `workspace_transaction_preview`.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct TransactionPreviewParams {
+    /// Id of the transaction to preview.
+    pub transaction: u64,
+}
+
 #[tool_router]
 impl WorkspaceServer {
     pub fn new(repository: PathBuf) -> Self {
@@ -110,6 +136,50 @@ impl WorkspaceServer {
             repository,
             tool_router: Self::tool_router(),
         }
+    }
+
+    #[tool(
+        description = "Orient in the persistent agent workspace: objective, a kernel-bounded stale-first claim window with explicit omission count, aggregate freshness, open transactions, and latest checkpoint. `full` returns the complete audit record. A stale claim outranks your remembered belief."
+    )]
+    fn workspace_status(
+        &self,
+        Parameters(params): Parameters<FullParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.tool_result(self.status(params.full))
+    }
+
+    #[tool(
+        description = "Kernel-bounded changes since a checkpoint: objective shift plus total/recent ids for claims, observations, and transactions. Use after workspace_status when resuming; `full` returns complete changed entities and `since` selects a checkpoint label."
+    )]
+    fn workspace_delta(
+        &self,
+        Parameters(params): Parameters<DeltaParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.tool_result(self.delta(params.full, params.since))
+    }
+
+    #[tool(
+        description = "The bounded attention model: ranked semantic locations you have focused (path, selector, revision, freshness, why), current observations not yet cited by any claim, and the ordered navigation trail. Every section is kernel-bounded with an explicit omission count."
+    )]
+    fn workspace_working_set(&self) -> Result<CallToolResult, McpError> {
+        self.tool_result(self.working_set())
+    }
+
+    #[tool(
+        description = "The persistent quickfix-like queue: open provider-reported findings ranked most-severe first, kernel-bounded with an explicit omission count, plus freshness and disposition counts."
+    )]
+    fn workspace_findings(&self) -> Result<CallToolResult, McpError> {
+        self.tool_result(self.findings())
+    }
+
+    #[tool(
+        description = "Review a change transaction before accepting it: intent, affected locations, associated findings, evidence, acceptance claims, residual risks, and current readiness. A missing transaction id is a strict tool error."
+    )]
+    fn workspace_transaction_preview(
+        &self,
+        Parameters(params): Parameters<TransactionPreviewParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.tool_result(self.transaction_preview(params.transaction))
     }
 
     #[tool(
@@ -188,6 +258,13 @@ impl WorkspaceServer {
 }
 
 impl WorkspaceServer {
+    fn tool_result(&self, result: Result<String, String>) -> Result<CallToolResult, McpError> {
+        Ok(match result {
+            Ok(json) => CallToolResult::success(vec![ContentBlock::text(json)]),
+            Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
+        })
+    }
+
     /// The in-process `open -> lock -> op` path, mirroring CLI dispatch. Runs
     /// `op` under the per-call exclusive lock and returns the kernel's JSON on
     /// success, or its (strict, input-naming) error text. Every tool below is a
@@ -206,6 +283,43 @@ impl WorkspaceServer {
             .map_err(|error| error.to_string())?;
         let value = op(&workspace).map_err(|error| error.to_string())?;
         serde_json::to_string_pretty(&value).map_err(|error| error.to_string())
+    }
+
+    fn status(&self, full: bool) -> Result<String, String> {
+        self.run(move |workspace| {
+            if full {
+                serde_json::to_value(workspace.resume_status()?).map_err(Into::into)
+            } else {
+                serde_json::to_value(workspace.resume_brief_status()?).map_err(Into::into)
+            }
+        })
+    }
+
+    fn delta(&self, full: bool, since: Option<String>) -> Result<String, String> {
+        self.run(move |workspace| {
+            if full {
+                serde_json::to_value(workspace.delta_since(since.as_deref())?).map_err(Into::into)
+            } else {
+                serde_json::to_value(workspace.delta_brief_since(since.as_deref())?)
+                    .map_err(Into::into)
+            }
+        })
+    }
+
+    fn working_set(&self) -> Result<String, String> {
+        self.run(Workspace::resume_working_set_view)
+    }
+
+    fn findings(&self) -> Result<String, String> {
+        self.run(Workspace::resume_findings_view)
+    }
+
+    fn transaction_preview(&self, transaction_id: u64) -> Result<String, String> {
+        self.run(move |workspace| {
+            workspace.resume_transaction_preview(transaction_id)?.ok_or(
+                agent_workspace::WorkspaceError::TransactionNotFound(transaction_id),
+            )
+        })
     }
 
     fn record(
@@ -280,13 +394,12 @@ impl ServerHandler for WorkspaceServer {
         info.server_info = server_info;
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
-            "Agent Workspace: bind the current objective (workspace_bind_objective), record \
-             beliefs about code (workspace_record_belief, citing the files each rests on), \
-             retire revised claims (workspace_supersede_claim), and checkpoint coherent \
-             slices of work (workspace_checkpoint) so a future session gets a freshness \
-             signal instead of silent staleness. Capture reads through \
-             workspace_observe_read. A claim reported as stale outranks your remembered \
-             belief."
+            "Agent Workspace: orient with workspace_status then workspace_delta; inspect \
+             attention, findings, and transaction readiness with workspace_working_set, \
+             workspace_findings, and workspace_transaction_preview. Bind the objective, \
+             record cited beliefs, retire revised claims, checkpoint coherent slices, and \
+             capture native reads through the corresponding workspace_* tools. A claim \
+             reported as stale outranks your remembered belief."
                 .to_owned(),
         );
         info

@@ -142,23 +142,27 @@ Code after wiring** for the tool to appear.
 
 ### Pi
 
-The project-local extension at `.pi/extensions/agent-workspace/` auto-captures
-successful text reads without replacing Pi's native `read`, and exposes the
-`workspace_status`, `workspace_delta`, `workspace_working_set`,
-`workspace_findings`, and `workspace_record_belief` tools. Build the kernel, then
-start Pi from the repository (or `/reload` a trusted session):
+The project-local extension at `.pi/extensions/agent-workspace/` is an official
+MCP SDK client plus a Pi-specific read-capture hook. At load it starts
+`agent-workspace mcp`, discovers the server's tools and schemas, and registers
+them as Pi tools with only Pi-specific labels and prompt guidance added locally.
+There is no parallel TypeScript implementation of workspace verbs. Build the
+MCP-enabled kernel, then start Pi from the repository (or `/reload` a trusted
+session):
 
 ```sh
-cargo build
+cargo build --features mcp
 pi
 ```
 
-A bounded `read` streams its chrome-stripped model-visible text to `observe-read`;
-the kernel — not the extension — maps lines to a UTF-8 byte selector and validates
-drift, sensitivity, and containment, while the adapter separately preserves the
-full model-visible byte count. Failed, truncated, drifted, out-of-repository,
-workspace-internal, and sensitive-path reads fail closed; native payload
-retention remains off.
+A bounded native `read` forwards its chrome-stripped model-visible text to the
+discovered `workspace_observe_read` MCP tool; the kernel — not the extension —
+maps lines to a UTF-8 byte selector and validates drift, sensitivity, and
+containment, while the adapter separately preserves the full model-visible byte
+count. Failed, truncated, drifted, out-of-repository, workspace-internal, and
+sensitive-path reads fail closed; native payload retention remains off. The
+extension keeps one lazy MCP client per repository root and closes clients on
+Pi session shutdown.
 
 ## Principles
 

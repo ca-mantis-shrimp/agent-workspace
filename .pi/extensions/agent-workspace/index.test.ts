@@ -6,121 +6,8 @@ import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import registerAgentWorkspace from "./index.ts";
 
-test("successful reads stream model-visible text to kernel-owned observe-read", async () => {
-	const root = await mkdtemp(join(tmpdir(), "agent-workspace-extension-"));
-	await mkdir(join(root, "src"));
-	await mkdir(join(root, "target", "debug"), { recursive: true });
-	await writeFile(
-		join(root, "src", "example.txt"),
-		"zero\nαlpha\nbeta\ntail\n",
-		"utf8",
-	);
-	const capturePath = join(root, "capture.json");
-	const binary = join(root, "target", "debug", "agent-workspace");
-	await writeFile(
-		binary,
-		`#!/usr/bin/env node
-let stdin = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", chunk => stdin += chunk);
-process.stdin.on("end", () => {
-  require("node:fs").writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ args: process.argv.slice(2), stdin }));
-  process.stdout.write("{}\\n");
-});
-`,
-	);
-	await chmod(binary, 0o755);
-
-	// Pin the fake kernel through the adapter's highest-precedence lookup.
-	// Without this, an agent-workspace binary installed on PATH (the
-	// installed-kernel deployment) shadows the fake and the test drives the
-	// real kernel.
-	const previousBinary = process.env.AGENT_WORKSPACE_BIN;
-	process.env.AGENT_WORKSPACE_BIN = binary;
-	try {
-		let toolCallHandler: ((event: unknown) => void) | undefined;
-		let contextHandler:
-			| ((
-					event: { messages: unknown[] },
-					ctx: { cwd: string; signal?: AbortSignal },
-			  ) => Promise<void>)
-			| undefined;
-		const fakePi = {
-			on(event: string, handler: unknown) {
-				if (event === "tool_call")
-					toolCallHandler = handler as typeof toolCallHandler;
-				if (event === "context") contextHandler = handler as typeof contextHandler;
-			},
-			registerTool() {},
-			async exec(command: string) {
-				assert.equal(command, "git");
-				return { code: 0, stdout: `${root}\n`, stderr: "", killed: false };
-			},
-		} as unknown as ExtensionAPI;
-
-		registerAgentWorkspace(fakePi);
-		assert.ok(toolCallHandler);
-		assert.ok(contextHandler);
-		const visible =
-			"αlpha\nbeta\n\n[1 more lines in file. Use offset=4 to continue.]";
-		toolCallHandler({
-			toolName: "read",
-			toolCallId: "read-1",
-			input: { path: "src/example.txt", offset: 2, limit: 2 },
-		});
-		await contextHandler(
-			{
-				messages: [
-					{
-						role: "toolResult",
-						toolCallId: "read-1",
-						toolName: "read",
-						content: [{ type: "text", text: visible }],
-						isError: false,
-						timestamp: Date.now(),
-					},
-				],
-			},
-			{ cwd: root },
-		);
-
-		const captured = JSON.parse(await readFile(capturePath, "utf8")) as {
-			args: string[];
-			stdin: string;
-		};
-		assert.equal(captured.args[0], "observe-read");
-		assert.equal(
-			captured.args[captured.args.indexOf("--path") + 1],
-			"src/example.txt",
-		);
-		assert.equal(
-			captured.args[captured.args.indexOf("--provider") + 1],
-			"pi.read",
-		);
-		assert.equal(captured.args[captured.args.indexOf("--offset") + 1], "2");
-		assert.equal(captured.args[captured.args.indexOf("--limit") + 1], "2");
-		assert.equal(
-			captured.args[captured.args.indexOf("--model-visible-bytes") + 1],
-			Buffer.byteLength(visible).toString(),
-		);
-		assert.equal(captured.stdin, "αlpha\nbeta");
-	} finally {
-		if (previousBinary === undefined) delete process.env.AGENT_WORKSPACE_BIN;
-		else process.env.AGENT_WORKSPACE_BIN = previousBinary;
-	}
-});
-
-type FakeExec = (command: string, args: string[]) => Promise<ExecOutcome>;
-
-interface ExecOutcome {
-	code: number;
-	stdout: string;
-	stderr: string;
-}
-
 interface RegisteredTool {
 	name: string;
-	parameters: unknown;
 	execute: (
 		toolCallId: string,
 		params: Record<string, unknown>,
@@ -130,295 +17,220 @@ interface RegisteredTool {
 	) => Promise<{ content: { type: string; text: string }[]; details: unknown }>;
 }
 
-function registerWithFakePi(exec: FakeExec): Map<string, RegisteredTool> {
+interface FakeHarness {
+	pi: ExtensionAPI;
+	tools: Map<string, RegisteredTool>;
+	handlers: Map<string, (...args: any[]) => unknown>;
+}
+
+function fakeHarness(root: string, gitSucceeds = true): FakeHarness {
 	const tools = new Map<string, RegisteredTool>();
-	const fakePi = {
-		on() {},
+	const handlers = new Map<string, (...args: any[]) => unknown>();
+	const pi = {
+		on(event: string, handler: (...args: any[]) => unknown) {
+			handlers.set(event, handler);
+		},
 		registerTool(definition: RegisteredTool) {
 			tools.set(definition.name, definition);
 		},
-		exec,
-	} as unknown as ExtensionAPI;
-	registerAgentWorkspace(fakePi);
-	return tools;
-}
-
-async function installKernelPlaceholder(root: string): Promise<void> {
-	await mkdir(join(root, "target", "debug"), { recursive: true });
-	await writeFile(join(root, "target", "debug", "agent-workspace"), "stub");
-}
-
-function repositoryRootStub(root: string): FakeExec {
-	return (command, args) => {
-		if (command === "git")
-			return Promise.resolve({ code: 0, stdout: `${root}\n`, stderr: "" });
-		return Promise.resolve({
-			code: 0,
-			stdout: `executed:${args[0]}`,
-			stderr: "",
-		});
-	};
-}
-
-test("workspace_status projects the kernel brief status by default and supports full", async () => {
-	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
-	await installKernelPlaceholder(root);
-	const calls: string[][] = [];
-	const exec: FakeExec = (command, args) => {
-		if (command !== "git") calls.push(args);
-		return repositoryRootStub(root)(command, args);
-	};
-	const tools = registerWithFakePi(exec);
-	const status = tools.get("workspace_status");
-	assert.ok(status, "workspace_status must be registered");
-
-	const brief = await status.execute("call-1", {}, undefined, undefined, {
-		cwd: root,
-	});
-	assert.deepEqual(calls[0].slice(0, 4), [
-		"status",
-		"--compact",
-		"--repository",
-		root,
-	]);
-	assert.equal(calls[0].length, 4);
-	assert.equal(brief.content[0].text, "executed:status");
-
-	await status.execute("call-2", { full: true }, undefined, undefined, {
-		cwd: root,
-	});
-	assert.deepEqual(calls[1].slice(0, 4), [
-		"status",
-		"--full",
-		"--repository",
-		root,
-	]);
-});
-
-test("workspace_delta passes the checkpoint selector through to the kernel", async () => {
-	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
-	await installKernelPlaceholder(root);
-	const calls: string[][] = [];
-	const exec: FakeExec = (command, args) => {
-		if (command !== "git") calls.push(args);
-		return repositoryRootStub(root)(command, args);
-	};
-	const tools = registerWithFakePi(exec);
-	const delta = tools.get("workspace_delta");
-	assert.ok(delta, "workspace_delta must be registered");
-
-	await delta.execute("call-1", {}, undefined, undefined, { cwd: root });
-	assert.equal(calls[0][0], "delta");
-	assert.ok(calls[0].includes("--compact"));
-	assert.ok(
-		!calls[0].includes("--since"),
-		"default delta diffs against the latest checkpoint",
-	);
-
-	await delta.execute(
-		"call-2",
-		{ since: "session-8-claims-curated" },
-		undefined,
-		undefined,
-		{
-			cwd: root,
-		},
-	);
-	const since = calls[1].indexOf("--since");
-	assert.notEqual(since, -1);
-	assert.equal(calls[1][since + 1], "session-8-claims-curated");
-
-	await delta.execute("call-3", { full: true }, undefined, undefined, {
-		cwd: root,
-	});
-	assert.ok(calls[2].includes("--full"));
-	assert.ok(!calls[2].includes("--compact"));
-});
-
-test("workspace_working_set projects the bounded attention model via the kernel", async () => {
-	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
-	await installKernelPlaceholder(root);
-	const calls: string[][] = [];
-	const exec: FakeExec = (command, args) => {
-		if (command !== "git") calls.push(args);
-		return repositoryRootStub(root)(command, args);
-	};
-	const tools = registerWithFakePi(exec);
-	const workingSet = tools.get("workspace_working_set");
-	assert.ok(workingSet, "workspace_working_set must be registered");
-
-	const result = await workingSet.execute("call-1", {}, undefined, undefined, {
-		cwd: root,
-	});
-	assert.deepEqual(calls[0], ["working-set", "--compact", "--repository", root]);
-	assert.equal(result.content[0].text, "executed:working-set");
-});
-
-test("workspace_findings projects the bounded quickfix queue via the kernel", async () => {
-	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
-	await installKernelPlaceholder(root);
-	const calls: string[][] = [];
-	const exec: FakeExec = (command, args) => {
-		if (command !== "git") calls.push(args);
-		return repositoryRootStub(root)(command, args);
-	};
-	const tools = registerWithFakePi(exec);
-	const findings = tools.get("workspace_findings");
-	assert.ok(findings, "workspace_findings must be registered");
-
-	const result = await findings.execute("call-1", {}, undefined, undefined, {
-		cwd: root,
-	});
-	assert.deepEqual(calls[0], ["findings", "--compact", "--repository", root]);
-	assert.equal(result.content[0].text, "executed:findings");
-});
-
-test("workspace_transaction_preview passes the transaction id through to the kernel", async () => {
-	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
-	await installKernelPlaceholder(root);
-	const calls: string[][] = [];
-	const exec: FakeExec = (command, args) => {
-		if (command !== "git") calls.push(args);
-		return repositoryRootStub(root)(command, args);
-	};
-	const tools = registerWithFakePi(exec);
-	const preview = tools.get("workspace_transaction_preview");
-	assert.ok(preview, "workspace_transaction_preview must be registered");
-
-	const result = await preview.execute(
-		"call-1",
-		{ transaction: 3 },
-		undefined,
-		undefined,
-		{ cwd: root },
-	);
-	assert.deepEqual(calls[0], [
-		"preview-transaction",
-		"--compact",
-		"--transaction",
-		"3",
-		"--repository",
-		root,
-	]);
-	assert.equal(result.content[0].text, "executed:preview-transaction");
-});
-
-test("workspace_record_belief passes the belief and citations through to the kernel", async () => {
-	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
-	await installKernelPlaceholder(root);
-	const calls: string[][] = [];
-	const exec: FakeExec = (command, args) => {
-		if (command !== "git") calls.push(args);
-		return repositoryRootStub(root)(command, args);
-	};
-	const tools = registerWithFakePi(exec);
-	const recordBelief = tools.get("workspace_record_belief");
-	assert.ok(recordBelief, "workspace_record_belief must be registered");
-
-	const result = await recordBelief.execute(
-		"call-1",
-		{ statement: "foo returns one", rests_on: ["src/lib.rs"] },
-		undefined,
-		undefined,
-		{ cwd: root },
-	);
-	assert.deepEqual(calls[0], [
-		"record-belief",
-		"--statement",
-		"foo returns one",
-		"--rests-on",
-		"src/lib.rs",
-		"--repository",
-		root,
-	]);
-	assert.ok(
-		!calls[0].includes("--scope"),
-		"default scope is the kernel's declared default, not an adapter flag",
-	);
-	assert.equal(result.content[0].text, "executed:record-belief");
-
-	await recordBelief.execute(
-		"call-2",
-		{
-			statement: "module shape held",
-			rests_on: ["src/lib.rs", "src/main.rs"],
-			scope: "conservative-siblings",
-		},
-		undefined,
-		undefined,
-		{ cwd: root },
-	);
-	const scope = calls[1].indexOf("--scope");
-	assert.notEqual(scope, -1);
-	assert.equal(calls[1][scope + 1], "conservative-siblings");
-	assert.equal(
-		calls[1].filter((flag) => flag === "--rests-on").length,
-		2,
-		"every cited path is forwarded",
-	);
-});
-
-test("orientation tools degrade to plain text outside a repository and throw on kernel failure", async () => {
-	const outside = await mkdtemp(join(tmpdir(), "agent-workspace-outside-"));
-	const tools = registerWithFakePi(async (_command, _args) => ({
-		code: 1,
-		stdout: "",
-		stderr: "fatal: not a git repository",
-	}));
-	const status = tools.get("workspace_status");
-	assert.ok(status);
-
-	const absent = await status.execute("call-1", {}, undefined, undefined, {
-		cwd: outside,
-	});
-	assert.match(absent.content[0].text, /not a Git checkout/);
-
-	const missingRoot = await mkdtemp(
-		join(tmpdir(), "agent-workspace-no-binary-"),
-	);
-	// Hermeticity: the binary lookup must find nothing. A globally installed
-	// agent-workspace on PATH (the installed-kernel deployment) would otherwise
-	// satisfy the lookup and turn this "absent runtime" case into a real
-	// invocation, so the lookup environment is pinned to empty for this case.
-	const savedPath = process.env.PATH;
-	const savedBinary = process.env.AGENT_WORKSPACE_BIN;
-	process.env.PATH = "";
-	delete process.env.AGENT_WORKSPACE_BIN;
-	try {
-		const missing = registerWithFakePi(async (command) => {
+		async exec(command: string) {
 			assert.equal(command, "git");
-			return { code: 0, stdout: `${missingRoot}\n`, stderr: "" };
-		});
-		const missingStatus = missing.get("workspace_status");
-		assert.ok(missingStatus);
-		const noBinary = await missingStatus.execute(
-			"call-2",
-			{},
-			undefined,
-			undefined,
-			{ cwd: missingRoot },
-		);
-		assert.match(
-			noBinary.content[0].text,
-			/built target\/debug\/agent-workspace/,
-		);
-	} finally {
-		if (savedPath === undefined) delete process.env.PATH;
-		else process.env.PATH = savedPath;
-		if (savedBinary === undefined) delete process.env.AGENT_WORKSPACE_BIN;
-		else process.env.AGENT_WORKSPACE_BIN = savedBinary;
-	}
+			return gitSucceeds
+				? { code: 0, stdout: `${root}\n`, stderr: "", killed: false }
+				: { code: 1, stdout: "", stderr: "not a repository", killed: false };
+		},
+	} as unknown as ExtensionAPI;
+	return { pi, tools, handlers };
+}
 
-	const root = await mkdtemp(join(tmpdir(), "agent-workspace-tools-"));
-	await installKernelPlaceholder(root);
-	const failing = registerWithFakePi(async (command) => {
-		if (command === "git") return { code: 0, stdout: `${root}\n`, stderr: "" };
-		return { code: 2, stdout: "", stderr: "workspace error" };
-	});
-	const failingStatus = failing.get("workspace_status");
-	assert.ok(failingStatus);
-	await assert.rejects(
-		failingStatus.execute("call-3", {}, undefined, undefined, { cwd: root }),
-		/workspace error/,
+const TOOL_NAMES = [
+	"workspace_status",
+	"workspace_delta",
+	"workspace_working_set",
+	"workspace_findings",
+	"workspace_transaction_preview",
+	"workspace_record_belief",
+	"workspace_bind_objective",
+	"workspace_supersede_claim",
+	"workspace_checkpoint",
+	"workspace_observe_read",
+];
+
+async function installFakeMcp(root: string, capturePath: string): Promise<string> {
+	await mkdir(join(root, "target", "debug"), { recursive: true });
+	const binary = join(root, "target", "debug", "agent-workspace");
+	const tools = TOOL_NAMES.map((name) => ({
+		name,
+		description: `MCP description for ${name}`,
+		inputSchema: {
+			type: "object",
+			properties:
+				name === "workspace_status"
+					? { full: { type: "boolean" } }
+					: name === "workspace_record_belief"
+						? { statement: { type: "string" }, rests_on: { type: "array" } }
+						: {},
+			required:
+				name === "workspace_record_belief" ? ["statement", "rests_on"] : [],
+		},
+	}));
+	await writeFile(
+		binary,
+		`#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+const tools = ${JSON.stringify(tools)};
+const capture = ${JSON.stringify(capturePath)};
+function send(value) { process.stdout.write(JSON.stringify(value) + "\\n"); }
+readline.createInterface({ input: process.stdin }).on("line", line => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    send({jsonrpc:"2.0", id:message.id, result:{protocolVersion:message.params.protocolVersion, capabilities:{tools:{}}, serverInfo:{name:"fake-agent-workspace",version:"0"}}});
+  } else if (message.method === "tools/list") {
+    send({jsonrpc:"2.0", id:message.id, result:{tools}});
+  } else if (message.method === "tools/call") {
+    fs.appendFileSync(capture, JSON.stringify(message.params) + "\\n");
+    const fail = message.params.arguments && message.params.arguments.fail === true;
+    send({jsonrpc:"2.0", id:message.id, result:{content:[{type:"text",text:fail ? "strict kernel rejection" : JSON.stringify(message.params.arguments)}],isError:fail}});
+  }
+});
+`,
 	);
+	await chmod(binary, 0o755);
+	return binary;
+}
+
+async function capturedCalls(path: string): Promise<any[]> {
+	try {
+		return (await readFile(path, "utf8"))
+			.trim()
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line));
+	} catch {
+		return [];
+	}
+}
+
+test("discovers the complete MCP surface and routes Pi tools through the official client", async () => {
+	const root = await mkdtemp(join(tmpdir(), "agent-workspace-mcp-extension-"));
+	const capturePath = join(root, "calls.jsonl");
+	const binary = await installFakeMcp(root, capturePath);
+	const previousBinary = process.env.AGENT_WORKSPACE_BIN;
+	process.env.AGENT_WORKSPACE_BIN = binary;
+	try {
+		const harness = fakeHarness(root);
+		await registerAgentWorkspace(harness.pi, root);
+		assert.deepEqual([...harness.tools.keys()].sort(), [...TOOL_NAMES].sort());
+
+		const status = harness.tools.get("workspace_status");
+		assert.ok(status);
+		const result = await status.execute(
+			"call-1",
+			{ full: true },
+			undefined,
+			undefined,
+			{ cwd: root },
+		);
+		assert.equal(result.content[0].text, JSON.stringify({ full: true }));
+
+		const belief = harness.tools.get("workspace_record_belief");
+		assert.ok(belief);
+		await belief.execute(
+			"call-2",
+			{ statement: "fixture belief", rests_on: ["src/example.txt"] },
+			undefined,
+			undefined,
+			{ cwd: root },
+		);
+		const calls = await capturedCalls(capturePath);
+		assert.deepEqual(calls[0], {
+			name: "workspace_status",
+			arguments: { full: true },
+		});
+		assert.deepEqual(calls[1], {
+			name: "workspace_record_belief",
+			arguments: {
+				statement: "fixture belief",
+				rests_on: ["src/example.txt"],
+			},
+		});
+
+		await assert.rejects(
+			status.execute("call-3", { fail: true }, undefined, undefined, {
+				cwd: root,
+			}),
+			/strict kernel rejection/,
+		);
+		await harness.handlers.get("session_shutdown")?.();
+	} finally {
+		if (previousBinary === undefined) delete process.env.AGENT_WORKSPACE_BIN;
+		else process.env.AGENT_WORKSPACE_BIN = previousBinary;
+	}
+});
+
+test("successful reads preserve model-visible byte accounting through workspace_observe_read", async () => {
+	const root = await mkdtemp(join(tmpdir(), "agent-workspace-mcp-capture-"));
+	await mkdir(join(root, "src"));
+	await writeFile(join(root, "src", "example.txt"), "zero\nαlpha\nbeta\ntail\n");
+	const capturePath = join(root, "calls.jsonl");
+	const binary = await installFakeMcp(root, capturePath);
+	const previousBinary = process.env.AGENT_WORKSPACE_BIN;
+	process.env.AGENT_WORKSPACE_BIN = binary;
+	try {
+		const harness = fakeHarness(root);
+		await registerAgentWorkspace(harness.pi, root);
+		const toolCall = harness.handlers.get("tool_call");
+		const context = harness.handlers.get("context");
+		assert.ok(toolCall);
+		assert.ok(context);
+		const visible =
+			"αlpha\nbeta\n\n[1 more lines in file. Use offset=4 to continue.]";
+		toolCall({
+			toolName: "read",
+			toolCallId: "read-1",
+			input: { path: "src/example.txt", offset: 2, limit: 2 },
+		});
+		await context(
+			{
+				messages: [
+					{
+						role: "toolResult",
+						toolCallId: "read-1",
+						toolName: "read",
+						content: [{ type: "text", text: visible }],
+						isError: false,
+						details: {},
+					},
+				],
+			},
+			{ cwd: root },
+		);
+		const calls = await capturedCalls(capturePath);
+		const capture = calls.find(
+			(call) => call.name === "workspace_observe_read",
+		);
+		assert.ok(capture);
+		assert.deepEqual(capture.arguments, {
+			path: "src/example.txt",
+			provider: "pi.read",
+			offset: 2,
+			limit: 2,
+			model_visible_text: "αlpha\nbeta",
+			model_visible_bytes: Buffer.byteLength(visible),
+			truncated: false,
+		});
+		await harness.handlers.get("session_shutdown")?.();
+	} finally {
+		if (previousBinary === undefined) delete process.env.AGENT_WORKSPACE_BIN;
+		else process.env.AGENT_WORKSPACE_BIN = previousBinary;
+	}
+});
+
+test("absence of a repository is harmless and advertises no broken tools", async () => {
+	const outside = await mkdtemp(join(tmpdir(), "agent-workspace-no-repo-"));
+	const harness = fakeHarness(outside, false);
+	await registerAgentWorkspace(harness.pi, outside);
+	assert.equal(harness.tools.size, 0);
+	assert.ok(harness.handlers.has("tool_call"), "capture hook remains installed");
 });
