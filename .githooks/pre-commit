@@ -15,3 +15,30 @@ if ! cargo fmt --check >/dev/null 2>&1; then
 	cargo fmt --check 2>&1 | sed 's/^/  /' >&2
 	exit 1
 fi
+
+# Reject commits whose Pi extension TypeScript is not Biome-clean.
+#
+# Same rationale as the Rust gate above, one layer over: an edit-time formatter
+# (or a session running a different formatter) can otherwise land byte-noise in
+# the .ts adapter that stales downstream workspace claims for no semantic reason.
+# Canonical is defined by .pi/extensions/agent-workspace/biome.json and the
+# Biome version is pinned via that package's lockfile, so every environment
+# produces identical output. Biome discovers its config from the working
+# directory, so the check runs with that directory as cwd (mirrors how the npm
+# `format:check` script is invoked). Directory-form check, so a brand-new .ts
+# file is covered the moment it exists — no module-wiring blind spot.
+#
+# If the pinned Biome is absent (a clone that has not run `npm ci` in the
+# extension), skip with a note rather than block unrelated commits — the same
+# pragmatic stance the Rust gate takes toward a missing toolchain.
+ext_dir=.pi/extensions/agent-workspace
+biome_bin="$ext_dir/node_modules/.bin/biome"
+if [ -x "$biome_bin" ]; then
+	if ! ( cd "$ext_dir" && ./node_modules/.bin/biome format . >/dev/null 2>&1 ); then
+		echo "pre-commit: Biome check failed — run 'npm run format' in $ext_dir and re-stage." >&2
+		( cd "$ext_dir" && ./node_modules/.bin/biome format . 2>&1 | sed 's/^/  /' >&2 )
+		exit 1
+	fi
+else
+	echo "pre-commit: note — pinned Biome not found; skipping TS format gate (run 'npm ci' in $ext_dir to enable)." >&2
+fi

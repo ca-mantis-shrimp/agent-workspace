@@ -1,4 +1,9 @@
 ## 2026-09-07
+* **Update**: Linked `decisions/typescript-formatter-gate.md` to `decisions/mcp-centered-tool-surface.md` (Governs the Pi extension whose TypeScript this decision keeps canonical.).
+* **Update**: Updated concept `decisions/typescript-formatter-gate.md`.
+* **Update**: Linked `decisions/typescript-formatter-gate.md` to `research/structural-freshness-without-formatter-coupling.md` (Distinct concern: this formatter enforces source-commit hygiene, not the freshness fingerprinting that research rejected coupling to a formatter.).
+* **Update**: Updated concept `decisions/typescript-formatter-gate.md`.
+* **Creation**: Documented concept `decisions/typescript-formatter-gate.md` (Biome as the canonical TypeScript formatter, enforced at commit).
 
 * **Update**: Linked `evaluations/dogfood-cold-resume.md` to `evaluations/tooling-friction-and-subtraction-review.md` (The later reflection updates the original dogfood findings after MCP consolidation and OKF adoption.).
 * **Update**: Updated concept `evaluations/dogfood-cold-resume.md`.

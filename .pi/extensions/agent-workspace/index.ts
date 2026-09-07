@@ -50,21 +50,24 @@ interface PiMetadata {
 const TOOL_METADATA = {
 	workspace_status: {
 		label: "Workspace Status",
-		promptSnippet: "Workspace orientation: objective, claim freshness, checkpoints.",
+		promptSnippet:
+			"Workspace orientation: objective, claim freshness, checkpoints.",
 		promptGuidelines: [
 			"Call workspace_status when resuming work or before acting on a workspace claim: a stale claim outranks your remembered belief.",
 		],
 	},
 	workspace_delta: {
 		label: "Workspace Delta",
-		promptSnippet: "Workspace resume surface: changes since the last checkpoint.",
+		promptSnippet:
+			"Workspace resume surface: changes since the last checkpoint.",
 		promptGuidelines: [
 			"Call workspace_delta right after workspace_status when resuming.",
 		],
 	},
 	workspace_working_set: {
 		label: "Workspace Working Set",
-		promptSnippet: "Focused locations, uncited candidates, and navigation trail.",
+		promptSnippet:
+			"Focused locations, uncited candidates, and navigation trail.",
 		promptGuidelines: [
 			"Re-read a working-set location reported stale before relying on it.",
 		],
@@ -72,9 +75,7 @@ const TOOL_METADATA = {
 	workspace_findings: {
 		label: "Workspace Findings",
 		promptSnippet: "Outstanding provider findings with freshness.",
-		promptGuidelines: [
-			"Re-verify stale findings before acting on them.",
-		],
+		promptGuidelines: ["Re-verify stale findings before acting on them."],
 	},
 	workspace_transaction_preview: {
 		label: "Workspace Transaction Preview",
@@ -98,17 +99,23 @@ const TOOL_METADATA = {
 	workspace_supersede_claim: {
 		label: "Workspace Supersede Claim",
 		promptSnippet: "Retire an outdated claim onto its recorded replacement.",
-		promptGuidelines: ["Record the replacement belief before superseding the old claim."],
+		promptGuidelines: [
+			"Record the replacement belief before superseding the old claim.",
+		],
 	},
 	workspace_checkpoint: {
 		label: "Workspace Checkpoint",
 		promptSnippet: "Draw a named restart boundary in the workspace log.",
-		promptGuidelines: ["Checkpoint each coherent completed slice before changing objectives."],
+		promptGuidelines: [
+			"Checkpoint each coherent completed slice before changing objectives.",
+		],
 	},
 	workspace_observe_read: {
 		label: "Workspace Observe Read",
 		promptSnippet: "Capture a native read as provenance and freshness support.",
-		promptGuidelines: ["Use through read adapters; surface first-class skip reasons."],
+		promptGuidelines: [
+			"Use through read adapters; surface first-class skip reasons.",
+		],
 	},
 } satisfies Record<string, PiMetadata>;
 
@@ -157,8 +164,10 @@ function readParameters(input: unknown): ReadParameters | undefined {
 	if (!input || typeof input !== "object") return undefined;
 	const value = input as { path?: unknown; offset?: unknown; limit?: unknown };
 	if (typeof value.path !== "string") return undefined;
-	if (value.offset !== undefined && typeof value.offset !== "number") return undefined;
-	if (value.limit !== undefined && typeof value.limit !== "number") return undefined;
+	if (value.offset !== undefined && typeof value.offset !== "number")
+		return undefined;
+	if (value.limit !== undefined && typeof value.limit !== "number")
+		return undefined;
 	return { path: value.path, offset: value.offset, limit: value.limit };
 }
 
@@ -191,10 +200,14 @@ export default async function registerAgentWorkspace(
 		signal?: AbortSignal,
 	): Promise<string | undefined> {
 		if (roots.has(cwd)) return roots.get(cwd) ?? undefined;
-		const git = await pi.exec("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
-			signal,
-			timeout: 5_000,
-		});
+		const git = await pi.exec(
+			"git",
+			["-C", cwd, "rev-parse", "--show-toplevel"],
+			{
+				signal,
+				timeout: 5_000,
+			},
+		);
 		if (git.code !== 0) {
 			roots.set(cwd, null);
 			return undefined;
@@ -221,7 +234,10 @@ export default async function registerAgentWorkspace(
 				cwd: root,
 				stderr: "ignore",
 			});
-			const client = new Client({ name: "agent-workspace-pi", version: "0.1.0" });
+			const client = new Client({
+				name: "agent-workspace-pi",
+				version: "0.1.0",
+			});
 			await client.connect(transport, { signal, timeout: 10_000 });
 			const listed = await client.listTools({}, { signal, timeout: 10_000 });
 			return {
@@ -247,14 +263,16 @@ export default async function registerAgentWorkspace(
 		signal?: AbortSignal,
 	) {
 		const runtime = await runtimeFor(cwd, signal);
-		if (!runtime) throw new Error("No agent-workspace MCP runtime is available here");
+		if (!runtime)
+			throw new Error("No agent-workspace MCP runtime is available here");
 		const result = await runtime.client.callTool(
 			{ name, arguments: arguments_ },
 			undefined,
 			{ signal, timeout: 10_000 },
 		);
 		const rawContent = (result as { content?: unknown }).content;
-		if (!Array.isArray(rawContent)) throw new Error(`${name} returned a task result`);
+		if (!Array.isArray(rawContent))
+			throw new Error(`${name} returned a task result`);
 		const content = rawContent.filter(
 			(block: unknown): block is McpTextContent =>
 				typeof block === "object" &&
@@ -263,7 +281,9 @@ export default async function registerAgentWorkspace(
 				typeof (block as { text?: unknown }).text === "string",
 		);
 		if ((result as { isError?: boolean }).isError) {
-			throw new Error(content.map((block) => block.text).join("\n") || `${name} failed`);
+			throw new Error(
+				content.map((block) => block.text).join("\n") || `${name} failed`,
+			);
 		}
 		return {
 			content,
@@ -281,9 +301,16 @@ export default async function registerAgentWorkspace(
 		if (resultText === undefined) return;
 		const runtime = await runtimeFor(cwd, signal);
 		if (!runtime) return;
-		const canonical = await realpath(resolve(cwd, parameters.path.replace(/^@/, "")));
-		const repositoryPath = repositoryRelativePath(runtime.root, runtime.root, canonical);
-		if (!repositoryPath || repositoryPath.startsWith(".agent-workspace/")) return;
+		const canonical = await realpath(
+			resolve(cwd, parameters.path.replace(/^@/, "")),
+		);
+		const repositoryPath = repositoryRelativePath(
+			runtime.root,
+			runtime.root,
+			canonical,
+		);
+		if (!repositoryPath || repositoryPath.startsWith(".agent-workspace/"))
+			return;
 		await runtime.client.callTool(
 			{
 				name: "workspace_observe_read",
@@ -351,7 +378,9 @@ export default async function registerAgentWorkspace(
 
 	for (const tool of initial.tools) {
 		if (!tool.name.startsWith("workspace_")) continue;
-		const metadata = (TOOL_METADATA as Record<string, PiMetadata>)[tool.name] ?? {
+		const metadata = (TOOL_METADATA as Record<string, PiMetadata>)[
+			tool.name
+		] ?? {
 			label: tool.name,
 			promptSnippet: tool.description ?? tool.name,
 			promptGuidelines: [],
@@ -364,8 +393,15 @@ export default async function registerAgentWorkspace(
 			promptGuidelines: metadata.promptGuidelines,
 			parameters: tool.inputSchema as never,
 			async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-				return callTool(ctx.cwd, tool.name, params as Record<string, unknown>, signal);
+				return callTool(
+					ctx.cwd,
+					tool.name,
+					params as Record<string, unknown>,
+					signal,
+				);
 			},
 		});
 	}
 }
+const z = { q: 9 };
+const z = { q: 9 };

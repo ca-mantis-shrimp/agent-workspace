@@ -56,7 +56,10 @@ const TOOL_NAMES = [
 	"workspace_observe_read",
 ];
 
-async function installFakeMcp(root: string, capturePath: string): Promise<string> {
+async function installFakeMcp(
+	root: string,
+	capturePath: string,
+): Promise<string> {
 	await mkdir(join(root, "target", "debug"), { recursive: true });
 	const binary = join(root, "target", "debug", "agent-workspace");
 	const tools = TOOL_NAMES.map((name) => ({
@@ -172,7 +175,10 @@ test("discovers the complete MCP surface and routes Pi tools through the officia
 test("successful reads preserve model-visible byte accounting through workspace_observe_read", async () => {
 	const root = await mkdtemp(join(tmpdir(), "agent-workspace-mcp-capture-"));
 	await mkdir(join(root, "src"));
-	await writeFile(join(root, "src", "example.txt"), "zero\nαlpha\nbeta\ntail\n");
+	await writeFile(
+		join(root, "src", "example.txt"),
+		"zero\nαlpha\nbeta\ntail\n",
+	);
 	const capturePath = join(root, "calls.jsonl");
 	const binary = await installFakeMcp(root, capturePath);
 	const previousBinary = process.env.AGENT_WORKSPACE_BIN;
@@ -232,5 +238,8 @@ test("absence of a repository is harmless and advertises no broken tools", async
 	const harness = fakeHarness(outside, false);
 	await registerAgentWorkspace(harness.pi, outside);
 	assert.equal(harness.tools.size, 0);
-	assert.ok(harness.handlers.has("tool_call"), "capture hook remains installed");
+	assert.ok(
+		harness.handlers.has("tool_call"),
+		"capture hook remains installed",
+	);
 });

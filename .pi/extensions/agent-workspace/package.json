@@ -4,9 +4,12 @@
   "type": "module",
   "scripts": {
     "test": "node --experimental-strip-types --test *.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "format": "biome format --write .",
+    "format:check": "biome format ."
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.12",
     "@earendil-works/pi-ai": "0.84.4",
     "@earendil-works/pi-coding-agent": "0.84.4",
     "@types/node": "26.4.1",
