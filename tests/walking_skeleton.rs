@@ -2162,6 +2162,23 @@ fn brief_status_caps_claims_and_compact_transport_fits_hook_preview() {
     )
     .unwrap();
 
+    // A bound objective is part of every real wake status and is not truncated
+    // in the brief surface (it is the orientation anchor), so the budget guard
+    // is only honest if it carries one. Use a realistically long intent.
+    invoke(&[
+        "bind-objective",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--intent",
+        "Harden the agent-workspace substrate's last mile — formatter canonicalization, \
+         MCP repository resolution, and fail-loud proprioception — so the write loop is \
+         trustworthy and legible from a live harness, then dogfood it end-to-end.",
+        "--reference",
+        "user-request:harden-substrate",
+    ]);
+
     for index in 0..12 {
         invoke(&[
             "claim",
@@ -2187,12 +2204,59 @@ fn brief_status_caps_claims_and_compact_transport_fits_hook_preview() {
         &ws,
     ]);
     let brief: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(brief["claims"].as_array().unwrap().len(), 8);
-    assert_eq!(brief["claims_omitted"], 4);
+    // Cardinality is the load-bearing bound: five stale-first claims shown, the
+    // rest explicitly omitted, the true active count preserved in the counts.
+    assert_eq!(brief["claims"].as_array().unwrap().len(), 5);
+    assert_eq!(brief["claims_omitted"], 7);
     assert_eq!(brief["counts"]["active_claims"], 12);
+    // The whole point of the slice: the wake status — objective included — fits
+    // the harness inline-preview budget (1800B for status alone).
     assert!(
         output.stdout.len() < 1_800,
         "compact bounded status must fit Claude's inline hook preview: {} bytes",
+        output.stdout.len()
+    );
+}
+
+/// The objective is the one wake-status field a user can make arbitrarily long,
+/// so it is bounded like the claim headlines: a pathologically long intent is
+/// truncated with a trailing ellipsis in the brief surface (full text in
+/// `--full`), and the status still fits the inline-preview budget.
+#[test]
+fn brief_status_bounds_a_pathologically_long_objective() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    let long_intent = "word ".repeat(200); // ~1000 chars, far past the bound
+    invoke(&[
+        "bind-objective",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--intent",
+        &long_intent,
+    ]);
+
+    let output = invoke(&[
+        "status",
+        "--compact",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+    ]);
+    let brief: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let shown = brief["objective"]["intent"].as_str().unwrap();
+    assert!(
+        shown.ends_with('…') && shown.chars().count() < long_intent.chars().count(),
+        "a long objective intent must be truncated in the brief surface: {shown:?}"
+    );
+    assert!(
+        output.stdout.len() < 1_800,
+        "even a pathological objective must not blow the wake budget: {} bytes",
         output.stdout.len()
     );
 }

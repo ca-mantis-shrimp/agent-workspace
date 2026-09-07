@@ -226,8 +226,19 @@ to see read-turn reuse, and flattening it to a bare bool would lose that signal.
 
 This is Slice A of the legibility pass motivated by
 [plot-foreign-dogfood-write-loop.md](../evaluations/plot-foreign-dogfood-write-loop.md)
-finding #5. Still open: tiering `workspace_observe_read`'s capture receipt (a
-different, capture-shaped payload, and not on the Claude adapter's hot path since
-its capture hook uses the CLI), trimming the wake `status` projection to fit the
-harness inline-preview budget (Slice B, the standing open finding), and — as a
-separate feature spike, not a representation change — `amend_claim`.
+finding #5.
+
+Slice B (2026-09-07) closed the companion wake-legibility finding: the brief
+`status` projection now hard-caps the stale-first claim window at five (down from
+eight, where the cap never bit) and bounds the objective anchor at 300 chars, so a
+real wake status — objective included — fits the Claude Code inline-preview budget
+(measured 2127 → 1561 bytes; status-end ~1724 < 1800, combined ~2259 < 3000).
+Cardinality was the unbounded axis the finding named; the objective was the second,
+caught by making the budget test bind an objective it previously omitted. Both live
+in `src/projection.rs` (`BRIEF_CLAIM_LIMIT`, `BRIEF_STATUS_OBJECTIVE_MAX_CHARS`), so
+every adapter's wake surface inherits the bound.
+
+Still open: tiering `workspace_observe_read`'s capture receipt (a different,
+capture-shaped payload, and not on the Claude adapter's hot path since its capture
+hook uses the CLI), and — as a separate feature spike, not a representation change —
+`amend_claim`.

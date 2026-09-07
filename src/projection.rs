@@ -131,7 +131,15 @@ impl WorkspaceStatus {
             })
             .collect();
         BriefStatus {
-            objective: self.objective.clone(),
+            // The objective is the orientation anchor, so it is shown far more
+            // generously than the delta's change-summary headline — but it is
+            // still bounded, because it is the one wake-status field that would
+            // otherwise grow without limit and reopen the inline-preview-budget
+            // finding the claim cap closed. The full intent is one `--full` away.
+            objective: self.objective.as_ref().map(|objective| Objective {
+                intent: claim_headline(&objective.intent, BRIEF_STATUS_OBJECTIVE_MAX_CHARS),
+                external_reference: objective.external_reference.clone(),
+            }),
             claims,
             claims_omitted: self.claims.len().saturating_sub(BRIEF_CLAIM_LIMIT),
             observations_since_last_claim: self.observations_since_last_claim,
@@ -605,8 +613,20 @@ impl WorkspaceStatus {
 
 /// Hard cardinality and per-headline bounds for model-entry orientation. Stale
 /// claims rank first so a cap never preferentially hides invalidated beliefs.
-const BRIEF_CLAIM_LIMIT: usize = 8;
+///
+/// The claim cap is the load-bearing bound: headline length was already capped,
+/// but at eight claims the *cardinality* cap never bit, so a real wake status —
+/// which also carries the bound objective, unlike a bare claim list — ran past
+/// the Claude Code inline-preview budget (status ~2.5KB > 1800B; the imported
+/// wake-legibility finding). Five keeps the stale-first window that actually
+/// needs re-verification within budget with the objective present, and
+/// `claims_omitted` plus `--full` keep the remainder one step away.
+const BRIEF_CLAIM_LIMIT: usize = 5;
 const BRIEF_HEADLINE_MAX_CHARS: usize = 80;
+/// The objective anchor's upper bound in the brief status — generous enough that
+/// a normal two-to-three sentence intent shows whole, but bounded so the wake
+/// status cannot grow past the inline-preview budget on the objective axis.
+const BRIEF_STATUS_OBJECTIVE_MAX_CHARS: usize = 300;
 
 /// Truncate a claim statement to a scannable headline on a word boundary,
 /// marking the cut with a trailing `…`. Statements at or under the budget are
