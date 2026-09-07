@@ -15,7 +15,7 @@ pub use model::*;
 pub use projection::*;
 use projection::{BRIEF_OBJECTIVE_MAX_CHARS, WORKING_SET_UNCITED_CANDIDATE_LIMIT, claim_headline};
 use reconcile::*;
-pub use reconcile::{DriftStatus, DriftView, InputDrift, StaleExplanation};
+pub use reconcile::{DriftStatus, DriftView, InputDrift, RelocationProbe, StaleExplanation};
 
 const EVENT_SCHEMA_VERSION: u32 = 2;
 const MINIMUM_EVENT_SCHEMA_VERSION: u32 = 1;

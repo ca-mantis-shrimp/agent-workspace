@@ -8,12 +8,19 @@ generated: { by: claude-code/opus-4.8, at: 2026-09-07T22:36:15Z }
 
 # Decision — sequence the freshness-cost work; do not adopt the relocation record shape yet
 
-**Status:** agreed 2026-09-07. **Step 1 (diff-on-stale) shipped 2026-09-07** —
-`Workspace::explain_stale`, the `explain-stale` CLI verb, and the
-`workspace_explain_stale` MCP tool return a selector-scoped `git diff HEAD` per
-drifted input, degrading to current content when git has no baseline (untracked,
-or drift already committed). Reachable from a live harness, not just the CLI.
-Steps 2–3 not started.
+**Status:** agreed 2026-09-07. **Steps 1 & 2 shipped 2026-09-07; step 3 gated on
+the data step 2 now collects.**
+- **Step 1 (diff-on-stale):** `Workspace::explain_stale`, the `explain-stale` CLI
+  verb, and the `workspace_explain_stale` MCP tool return a selector-scoped git
+  diff per drifted input. Reachable from a live harness, not just the CLI.
+- **Step 2a (capture revision):** each supporting input records the git revision
+  it was captured at, and explain-stale diffs against *that* baseline — so
+  committed drift is a real before/after, not a degrade to current content.
+- **Step 2b (relocation probe):** for a changed byte-range unit, explain-stale
+  reports whether the exact observed bytes survived elsewhere in the file
+  (`relocated{occurrences}`) or were rewritten. This is the coordinate-drift
+  frequency measurement that gates step 3 — no relocation engine is built until
+  dogfooding shows `relocated` (especially unique, `occurrences: 1`) is common.
 **Date:** 2026-09-07
 **Participants:** user + assistant, reacting to the pi/gpt-5.4 proposal.
 

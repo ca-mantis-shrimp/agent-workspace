@@ -2,8 +2,8 @@ use agent_workspace::{
     Belief, BeliefSupport, Claim, ClaimInputSource, ClaimLifecycle, DeltaStatus, DriftStatus,
     DriftView, Evidence, Finding, FindingDisposition, FindingSeverity, FreshnessWithinScope,
     Normalizer, Objective, Observation, ObservationCapture, ObservationCaptureOptions,
-    ObservationSelector, RevealedFinding, RevealedObservation, ScopeCompleteness, ScopeSource,
-    Transaction, TransactionState, Workspace, WorkspaceStatus,
+    ObservationSelector, RelocationProbe, RevealedFinding, RevealedObservation, ScopeCompleteness,
+    ScopeSource, Transaction, TransactionState, Workspace, WorkspaceStatus,
 };
 use serde_json::Value;
 use std::fs;
@@ -5624,6 +5624,87 @@ fn explain_stale_falls_back_to_current_content_for_an_untracked_file() {
         }
         other => panic!("expected the current-content fallback, got {other:?}"),
     }
+}
+
+// The relocation probe is the drift-frequency measurement: for a changed
+// byte-range unit, did the exact observed bytes merely move (coordinate drift a
+// relocatable selector could follow) or were they genuinely rewritten?
+
+#[test]
+fn explain_stale_probes_a_moved_unit_as_relocated() {
+    let source = "fn a() {}\nfn target() -> i32 { 7 }\n";
+    let fixture = GitFixture::with_task_source(source);
+    let workspace = fixture.root.path().join("workspace-state");
+    let handle = Workspace::open(&fixture.repository, &workspace).unwrap();
+
+    let start = source.find("fn target").unwrap();
+    let end = source.find("{ 7 }").unwrap() + "{ 7 }".len();
+    let observation = handle
+        .capture_file_observation(
+            "src/task.rs",
+            "test",
+            ObservationCaptureOptions {
+                selector: ObservationSelector::ByteRange { start, end },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let claim = handle
+        .record_claim("target returns seven", &[observation.observation.id], &[])
+        .unwrap();
+
+    // Prepend two functions: the observed unit's exact bytes survive intact but
+    // shift, so the positional selector reads stale while the bytes still exist.
+    fs::write(
+        fixture.repository.join("src/task.rs"),
+        format!("fn zero() {{}}\nfn one() {{}}\n{source}"),
+    )
+    .unwrap();
+
+    let explanation = handle.explain_stale(claim.id).unwrap();
+    assert_eq!(explanation.inputs[0].status, DriftStatus::Changed);
+    assert_eq!(
+        explanation.inputs[0].relocation,
+        Some(RelocationProbe::Relocated { occurrences: 1 })
+    );
+}
+
+#[test]
+fn explain_stale_probes_an_edited_unit_as_rewritten() {
+    let source = "fn a() {}\nfn target() -> i32 { 7 }\n";
+    let fixture = GitFixture::with_task_source(source);
+    let workspace = fixture.root.path().join("workspace-state");
+    let handle = Workspace::open(&fixture.repository, &workspace).unwrap();
+
+    let start = source.find("fn target").unwrap();
+    let end = source.find("{ 7 }").unwrap() + "{ 7 }".len();
+    let observation = handle
+        .capture_file_observation(
+            "src/task.rs",
+            "test",
+            ObservationCaptureOptions {
+                selector: ObservationSelector::ByteRange { start, end },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let claim = handle
+        .record_claim("target returns seven", &[observation.observation.id], &[])
+        .unwrap();
+
+    // Change the unit's own bytes: the exact observed text now occurs nowhere.
+    fs::write(
+        fixture.repository.join("src/task.rs"),
+        source.replace("{ 7 }", "{ 8 }"),
+    )
+    .unwrap();
+
+    let explanation = handle.explain_stale(claim.id).unwrap();
+    assert_eq!(explanation.inputs[0].status, DriftStatus::Changed);
+    assert_eq!(
+        explanation.inputs[0].relocation,
+        Some(RelocationProbe::Rewritten)
+    );
 }
 
 #[test]

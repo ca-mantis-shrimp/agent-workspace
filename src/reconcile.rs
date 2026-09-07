@@ -295,6 +295,28 @@ pub struct InputDrift {
     pub status: DriftStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub view: Option<DriftView>,
+    /// For a changed byte-range input, whether the exact observed bytes still
+    /// occur in the current file. Distinguishes coordinate drift (the unit merely
+    /// moved) from a genuine rewrite — the signal that measures whether
+    /// relocatable selectors would pay off. `None` when the probe does not apply
+    /// (whole-file selector, no retrievable capture baseline, unchanged input).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relocation: Option<RelocationProbe>,
+}
+
+/// Whether a changed unit's exact observed bytes survived elsewhere in the file.
+/// A diagnostic only — it never affects a freshness verdict; it exists to measure
+/// how often a stale verdict is pure coordinate drift.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RelocationProbe {
+    /// The exact observed bytes still occur in the current file — the unit likely
+    /// just moved. `occurrences` separates a unique relocation from an ambiguous
+    /// one (a relocatable selector could only safely follow a unique match).
+    Relocated { occurrences: usize },
+    /// The exact observed bytes occur nowhere now — a genuine rewrite, which no
+    /// amount of relocation could have saved.
+    Rewritten,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -331,9 +353,9 @@ pub(crate) fn explain_claim_inputs(
                 input.recorded_raw_fingerprint.as_deref(),
                 &input.recorded_input_fingerprint,
             );
-            let (status, view) = match assessed {
+            let (status, view, relocation) = match assessed {
                 Ok((fingerprint, _)) if fingerprint == input.recorded_input_fingerprint => {
-                    (DriftStatus::Unchanged, None)
+                    (DriftStatus::Unchanged, None, None)
                 }
                 Ok(_) => (
                     DriftStatus::Changed,
@@ -344,9 +366,15 @@ pub(crate) fn explain_claim_inputs(
                         input.recorded_at_revision.as_deref(),
                         max_bytes,
                     )),
+                    probe_relocation(
+                        repository_root,
+                        &input.path,
+                        &input.selector,
+                        input.recorded_at_revision.as_deref(),
+                    ),
                 ),
                 Err(WorkspaceError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                    (DriftStatus::Unavailable, Some(DriftView::Missing))
+                    (DriftStatus::Unavailable, Some(DriftView::Missing), None)
                 }
                 Err(_) => (
                     DriftStatus::Unverifiable,
@@ -357,6 +385,7 @@ pub(crate) fn explain_claim_inputs(
                         input.recorded_at_revision.as_deref(),
                         max_bytes,
                     )),
+                    None,
                 ),
             };
             InputDrift {
@@ -364,6 +393,7 @@ pub(crate) fn explain_claim_inputs(
                 selector: input.selector.clone(),
                 status,
                 view,
+                relocation,
             }
         })
         .collect()
@@ -402,6 +432,53 @@ pub(crate) fn investigate_drift(
 
     let (text, truncated) = cap_text(selector_window(&text, selector), max_bytes);
     DriftView::CurrentContent { text, truncated }
+}
+
+/// Measure whether a changed unit's *exact observed bytes* still occur in the
+/// current file. Fetches the unit from its capture revision (the only place the
+/// observed bytes are retained — the kernel keeps no native payload for source
+/// reads) and scans the current file for it. Only meaningful for a byte-range
+/// unit against a retrievable baseline; `None` otherwise, and never consulted by
+/// any freshness verdict.
+fn probe_relocation(
+    repository_root: &Path,
+    path: &Path,
+    selector: &ObservationSelector,
+    revision: Option<&str>,
+) -> Option<RelocationProbe> {
+    // A whole-file unit cannot "relocate" — searching a whole old file inside the
+    // new one answers nothing about coordinate drift.
+    if matches!(selector, ObservationSelector::WholeFile) {
+        return None;
+    }
+    let old_container = git_file_at_revision(repository_root, revision?, path).ok()?;
+    let old_unit = select_observation_unit(&old_container, selector).ok()?;
+    if old_unit.is_empty() {
+        return None;
+    }
+    let current = fs::read(repository_root.join(path)).ok()?;
+    match count_subslice(&current, old_unit) {
+        0 => Some(RelocationProbe::Rewritten),
+        occurrences => Some(RelocationProbe::Relocated { occurrences }),
+    }
+}
+
+/// Count non-overlapping occurrences of `needle` in `haystack`.
+fn count_subslice(haystack: &[u8], needle: &[u8]) -> usize {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return 0;
+    }
+    let mut count = 0;
+    let mut index = 0;
+    while index + needle.len() <= haystack.len() {
+        if &haystack[index..index + needle.len()] == needle {
+            count += 1;
+            index += needle.len();
+        } else {
+            index += 1;
+        }
+    }
+    count
 }
 
 /// One-indexed inclusive line span the selector covers in `text`. `WholeFile`
@@ -957,6 +1034,16 @@ mod drift_tests {
             selector_line_span(text, &ObservationSelector::WholeFile),
             None
         );
+    }
+
+    #[test]
+    fn count_subslice_counts_non_overlapping_matches() {
+        assert_eq!(count_subslice(b"abcabcabc", b"abc"), 3);
+        assert_eq!(count_subslice(b"aaaa", b"aa"), 2); // non-overlapping
+        assert_eq!(count_subslice(b"hello world", b"xyz"), 0);
+        assert_eq!(count_subslice(b"", b"a"), 0);
+        assert_eq!(count_subslice(b"a", b""), 0);
+        assert_eq!(count_subslice(b"short", b"longer needle"), 0);
     }
 
     #[test]
