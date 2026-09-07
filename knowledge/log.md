@@ -1,4 +1,5 @@
 ## 2026-09-07
+* **Update**: Recorded in `design/semantic-write-api.md` that brief-default write receipts shipped (Slice A of the legibility pass): the MCP write verbs return a compact `{id, freshness, supports}`/`{id, lifecycle}` receipt by default, full audit record via `full: true`, ~90% smaller. Resolves the doc's friction #1 and field-report finding #5.
 * **Update**: Linked `evaluations/plot-foreign-dogfood-write-loop.md` to `design/semantic-write-api.md` (Proposes amend_claim (append-only) and tiered receipts as revisions to the semantic write API.).
 * **Update**: Updated concept `evaluations/plot-foreign-dogfood-write-loop.md`.
 * **Update**: Linked `evaluations/plot-foreign-dogfood-write-loop.md` to `research/structural-freshness-without-formatter-coupling.md` (Diff-on-stale and the true-positive reframe of false-stale bear directly on structural freshness.).

@@ -344,6 +344,66 @@ pub struct Belief {
     pub supports: Vec<BeliefSupport>,
 }
 
+/// One cited path in a belief receipt, reduced to what the acting agent reads:
+/// the path and whether its supporting observation was reused (a read-turn
+/// join) or captured fresh. The observation id lives in the full record.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SupportBrief {
+    pub path: PathBuf,
+    pub reused: bool,
+}
+
+/// Compact receipt for a recorded belief. A write returns this by default so it
+/// does not echo the store into the working context: the agent acts on the
+/// claim id, its freshness verdict, and per-path reuse — the fingerprints,
+/// selectors, and reconciliation coverage carried by the full [`Belief`] are
+/// audit detail the store keeps and `full` still surfaces on request.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BeliefBrief {
+    pub id: u64,
+    pub freshness: FreshnessWithinScope,
+    pub supports: Vec<SupportBrief>,
+}
+
+impl Belief {
+    /// Project the full belief onto its compact receipt (see [`BeliefBrief`]).
+    pub fn brief(&self) -> BeliefBrief {
+        BeliefBrief {
+            id: self.claim.id,
+            freshness: self.claim.report.freshness_within_scope.clone(),
+            supports: self
+                .supports
+                .iter()
+                .map(|support| SupportBrief {
+                    path: support.path.clone(),
+                    reused: support.reused,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Compact receipt for a claim lifecycle transition (supersede/retire): the id
+/// and the new disposition. The disposition already names a supersession's
+/// replacement, so no separate field is needed. Drops the claim's inputs,
+/// supporting observations, and operational coverage — audit detail the acting
+/// agent does not need echoed back; `full` still returns the whole [`Claim`].
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ClaimBrief {
+    pub id: u64,
+    pub lifecycle: ClaimLifecycle,
+}
+
+impl Claim {
+    /// Project the claim onto its compact lifecycle receipt (see [`ClaimBrief`]).
+    pub fn brief(&self) -> ClaimBrief {
+        ClaimBrief {
+            id: self.id,
+            lifecycle: self.lifecycle.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Objective {
     pub intent: String,

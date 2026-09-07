@@ -46,6 +46,10 @@ pub struct RecordBeliefParams {
     /// Claim scope: `declared` (default) binds only the cited paths;
     /// `conservative-siblings` also fingerprints their repository siblings.
     pub scope: Option<String>,
+    /// Return the full audit record (fingerprints, selectors, coverage) instead
+    /// of the default compact receipt `{id, freshness, supports:[{path,reused}]}`.
+    #[serde(default)]
+    pub full: bool,
 }
 
 /// Input schema for `workspace_bind_objective`, exposing the CLI
@@ -69,6 +73,10 @@ pub struct SupersedeClaimParams {
     pub replacement_claim_id: u64,
     /// Why the old claim no longer holds. Empty reasons are rejected.
     pub reason: String,
+    /// Return the full superseded claim instead of the default compact receipt
+    /// `{id, lifecycle}` (the disposition already names the replacement).
+    #[serde(default)]
+    pub full: bool,
 }
 
 /// Input schema for `workspace_retire_claim`, exposing the CLI `retire-claim`
@@ -80,6 +88,10 @@ pub struct RetireClaimParams {
     /// Why the belief is no longer maintained (a mistaken record, or one whose
     /// subject work is done). Empty reasons are rejected.
     pub reason: String,
+    /// Return the full retired claim instead of the default compact receipt
+    /// `{id, lifecycle}`.
+    #[serde(default)]
+    pub full: bool,
 }
 
 /// Input schema for `workspace_checkpoint`, exposing the CLI `checkpoint`
@@ -194,7 +206,7 @@ impl WorkspaceServer {
     }
 
     #[tool(
-        description = "Record a belief — the fused write verb: \"I now believe X, and it rests on files Y, Z.\" Replaces the raw-CLI observe-then-claim two-step. For each rests_on path the kernel reuses the freshest current observation (typically your ambient read captures) or else captures the whole file. Citation is mandatory: at least one rests_on path is required — a belief you cannot cite cannot be recorded. Rejections are strict and name the failed inputs; re-read the named file, then re-record. A claim the workspace later reports as stale outranks your remembered belief."
+        description = "Record a belief — the fused write verb: \"I now believe X, and it rests on files Y, Z.\" Replaces the raw-CLI observe-then-claim two-step. For each rests_on path the kernel reuses the freshest current observation (typically your ambient read captures) or else captures the whole file. Citation is mandatory: at least one rests_on path is required — a belief you cannot cite cannot be recorded. Rejections are strict and name the failed inputs; re-read the named file, then re-record. Returns a compact receipt {id, freshness, supports:[{path, reused}]} by default; pass full:true for the whole audit record (fingerprints, selectors, coverage). A claim the workspace later reports as stale outranks your remembered belief."
     )]
     fn workspace_record_belief(
         &self,
@@ -209,7 +221,7 @@ impl WorkspaceServer {
         // The kernel's rejection is the product; surface it verbatim as a
         // tool-level error (never softened), so the agent sees which inputs
         // drifted, not a generic failure.
-        match self.record(params.statement, &rests_on, scope) {
+        match self.record(params.statement, &rests_on, scope, params.full) {
             Ok(json) => Ok(CallToolResult::success(vec![ContentBlock::text(json)])),
             Err(message) => Ok(CallToolResult::error(vec![ContentBlock::text(message)])),
         }
@@ -229,26 +241,31 @@ impl WorkspaceServer {
     }
 
     #[tool(
-        description = "Retire a claim that no longer holds: supersede_claim(claim_id, replacement_claim_id, reason). Record the revised belief first with workspace_record_belief, then retire the old claim citing the replacement. The reason is mandatory; an already-superseded or missing claim id is rejected strictly."
+        description = "Retire a claim that no longer holds: supersede_claim(claim_id, replacement_claim_id, reason). Record the revised belief first with workspace_record_belief, then retire the old claim citing the replacement. The reason is mandatory; an already-superseded or missing claim id is rejected strictly. Returns a compact receipt {id, lifecycle} (the disposition names the replacement) by default; pass full:true for the whole superseded claim."
     )]
     fn workspace_supersede_claim(
         &self,
         Parameters(params): Parameters<SupersedeClaimParams>,
     ) -> Result<CallToolResult, McpError> {
-        match self.supersede(params.claim_id, params.replacement_claim_id, params.reason) {
+        match self.supersede(
+            params.claim_id,
+            params.replacement_claim_id,
+            params.reason,
+            params.full,
+        ) {
             Ok(json) => Ok(CallToolResult::success(vec![ContentBlock::text(json)])),
             Err(message) => Ok(CallToolResult::error(vec![ContentBlock::text(message)])),
         }
     }
 
     #[tool(
-        description = "Retire a claim WITHOUT a replacement: workspace_retire_claim(claim_id, reason). Use when a belief is no longer maintained — a mistaken record, or one whose subject work is simply done — and no successor belief replaces it (that is supersede_claim's job). The claim leaves every active window and reconciliation but stays auditable in the log. Reason mandatory; a missing or already-inactive claim id is rejected strictly."
+        description = "Retire a claim WITHOUT a replacement: workspace_retire_claim(claim_id, reason). Use when a belief is no longer maintained — a mistaken record, or one whose subject work is simply done — and no successor belief replaces it (that is supersede_claim's job). The claim leaves every active window and reconciliation but stays auditable in the log. Reason mandatory; a missing or already-inactive claim id is rejected strictly. Returns a compact receipt {id, lifecycle} by default; pass full:true for the whole retired claim."
     )]
     fn workspace_retire_claim(
         &self,
         Parameters(params): Parameters<RetireClaimParams>,
     ) -> Result<CallToolResult, McpError> {
-        match self.retire(params.claim_id, params.reason) {
+        match self.retire(params.claim_id, params.reason, params.full) {
             Ok(json) => Ok(CallToolResult::success(vec![ContentBlock::text(json)])),
             Err(message) => Ok(CallToolResult::error(vec![ContentBlock::text(message)])),
         }
@@ -366,9 +383,17 @@ impl WorkspaceServer {
         statement: String,
         rests_on: &[PathBuf],
         scope: ClaimScopeStrategy,
+        full: bool,
     ) -> Result<String, String> {
         let rests_on: Vec<PathBuf> = rests_on.to_vec();
-        self.run(move |workspace| workspace.record_belief(statement, &rests_on, scope))
+        self.run(move |workspace| {
+            let belief = workspace.record_belief(statement, &rests_on, scope)?;
+            if full {
+                serde_json::to_value(&belief).map_err(Into::into)
+            } else {
+                serde_json::to_value(belief.brief()).map_err(Into::into)
+            }
+        })
     }
 
     fn bind(&self, intent: String, external_reference: Option<String>) -> Result<String, String> {
@@ -380,12 +405,27 @@ impl WorkspaceServer {
         claim_id: u64,
         replacement_claim_id: u64,
         reason: String,
+        full: bool,
     ) -> Result<String, String> {
-        self.run(move |workspace| workspace.supersede_claim(claim_id, replacement_claim_id, reason))
+        self.run(move |workspace| {
+            let claim = workspace.supersede_claim(claim_id, replacement_claim_id, reason)?;
+            if full {
+                serde_json::to_value(&claim).map_err(Into::into)
+            } else {
+                serde_json::to_value(claim.brief()).map_err(Into::into)
+            }
+        })
     }
 
-    fn retire(&self, claim_id: u64, reason: String) -> Result<String, String> {
-        self.run(move |workspace| workspace.retire_claim(claim_id, reason))
+    fn retire(&self, claim_id: u64, reason: String, full: bool) -> Result<String, String> {
+        self.run(move |workspace| {
+            let claim = workspace.retire_claim(claim_id, reason)?;
+            if full {
+                serde_json::to_value(&claim).map_err(Into::into)
+            } else {
+                serde_json::to_value(claim.brief()).map_err(Into::into)
+            }
+        })
     }
 
     fn checkpoint(&self, label: String, note: Option<String>) -> Result<String, String> {

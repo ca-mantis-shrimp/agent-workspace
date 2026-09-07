@@ -205,3 +205,29 @@ Net assessment: the verb made the correct action feel native, but its read-back
 surface is over-complete and its correction path is unfinished. The next write
 API slice should add atomic supersession and a brief-default receipt before
 adding more semantic verbs.
+
+## Brief-default receipts shipped (2026-09-07)
+
+Friction #1 above is resolved. `workspace_record_belief`, `workspace_supersede_claim`,
+and `workspace_retire_claim` now return a compact receipt by default and the full
+audit record only on `full: true`:
+
+- record → `{id, freshness, supports: [{path, reused}]}`
+- supersede/retire → `{id, lifecycle}` (a supersession's `lifecycle` already names
+  the replacement id, so no separate field is needed)
+
+The projection is kernel-owned — `Belief::brief`/`Claim::brief` returning
+`BeliefBrief`/`ClaimBrief`/`SupportBrief` in `src/model.rs` — mirroring the existing
+`resume_brief_status`/`delta_brief_since` idiom, so the CLI and every MCP adapter
+inherit one representation rather than each trimming its own. Measured payload drop
+on a one-file belief: 1269 → 121 bytes (~90%). The per-support `reused` flag is
+deliberately kept in the brief: it is the diagnostic the first foreign dogfood used
+to see read-turn reuse, and flattening it to a bare bool would lose that signal.
+
+This is Slice A of the legibility pass motivated by
+[plot-foreign-dogfood-write-loop.md](../evaluations/plot-foreign-dogfood-write-loop.md)
+finding #5. Still open: tiering `workspace_observe_read`'s capture receipt (a
+different, capture-shaped payload, and not on the Claude adapter's hot path since
+its capture hook uses the CLI), trimming the wake `status` projection to fit the
+harness inline-preview budget (Slice B, the standing open finding), and — as a
+separate feature spike, not a representation change — `amend_claim`.

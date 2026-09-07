@@ -166,7 +166,7 @@ fn mcp_server_projects_the_complete_read_surface_over_stdio() {
         json!({"statement": "hello.txt contains the fixture greeting",
                "rests_on": ["hello.txt"]}),
     );
-    let claim_id = tool_json(&belief)["claim"]["id"].as_u64().unwrap();
+    let claim_id = tool_json(&belief)["id"].as_u64().unwrap();
     let transaction = run_cli(
         repo.path(),
         state.path(),
@@ -254,10 +254,37 @@ fn mcp_server_records_a_belief_over_stdio() {
         json!(false),
         "record_belief should succeed: {ok}"
     );
+    // The default receipt is compact: the id, the freshness verdict, and
+    // per-path reuse — not the audit-grade claim record. The heavy inputs and
+    // operational coverage must not be echoed into the working context.
     let text = ok["result"]["content"][0]["text"].as_str().unwrap();
+    let brief: Value = serde_json::from_str(text).unwrap();
     assert!(
-        text.contains("\"claim\""),
-        "expected a claim in the result: {text}"
+        brief["id"].is_u64() && brief["freshness"].is_string(),
+        "expected a compact receipt {{id, freshness, supports}}: {text}"
+    );
+    assert_eq!(
+        brief["supports"][0]["path"],
+        json!("hello.txt"),
+        "compact receipt must carry per-path reuse: {text}"
+    );
+    assert!(
+        brief.get("claim").is_none() && !text.contains("recorded_input_fingerprint"),
+        "compact receipt must omit the audit record: {text}"
+    );
+
+    // `full: true` still returns the whole audit record for the rare caller
+    // that wants it.
+    let full = server.call(
+        5,
+        "workspace_record_belief",
+        json!({"statement": "hello.txt greets the world, in full",
+               "rests_on": ["hello.txt"], "full": true}),
+    );
+    let full_text = full["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        full_text.contains("\"claim\"") && full_text.contains("recorded_input_fingerprint"),
+        "full receipt must carry the audit record: {full_text}"
     );
 
     // A belief citing a file that does not exist is rejected strictly, and the
@@ -378,7 +405,7 @@ fn mcp_server_supersedes_a_claim_over_stdio() {
     let claim = |response: &Value| -> u64 {
         let text = response["result"]["content"][0]["text"].as_str().unwrap();
         let belief: Value = serde_json::from_str(text).unwrap();
-        belief["claim"]["id"].as_u64().unwrap()
+        belief["id"].as_u64().unwrap()
     };
     let (id1, id2) = (claim(&first), claim(&second));
 
@@ -394,10 +421,24 @@ fn mcp_server_supersedes_a_claim_over_stdio() {
         json!(false),
         "supersede should succeed: {ok}"
     );
+    // The compact receipt names the id and the new disposition — which for a
+    // supersession already carries the replacement id — and omits the audit
+    // record.
     let text = ok["result"]["content"][0]["text"].as_str().unwrap();
+    let brief: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(
+        brief["id"],
+        json!(id1),
+        "receipt names the superseded id: {text}"
+    );
+    assert_eq!(
+        brief["lifecycle"]["replacement_claim_id"],
+        json!(id2),
+        "compact receipt must name the replacement: {text}"
+    );
     assert!(
-        text.contains("superseded"),
-        "expected a superseded lifecycle: {text}"
+        !text.contains("recorded_input_fingerprint"),
+        "compact receipt must omit the audit record: {text}"
     );
 
     // Re-superseding a retired claim is rejected strictly.
@@ -432,7 +473,7 @@ fn mcp_server_retires_a_claim_without_a_replacement_over_stdio() {
         json!({"statement": "a belief whose work is done", "rests_on": ["hello.txt"]}),
     );
     let text = recorded["result"]["content"][0]["text"].as_str().unwrap();
-    let id = serde_json::from_str::<Value>(text).unwrap()["claim"]["id"]
+    let id = serde_json::from_str::<Value>(text).unwrap()["id"]
         .as_u64()
         .unwrap();
 
@@ -448,9 +489,20 @@ fn mcp_server_retires_a_claim_without_a_replacement_over_stdio() {
         "retire should succeed: {ok}"
     );
     let ok_text = ok["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(
-        ok_text.contains("retired") || ok_text.contains("Retired"),
+    let brief: Value = serde_json::from_str(ok_text).unwrap();
+    assert_eq!(
+        brief["id"],
+        json!(id),
+        "receipt names the retired id: {ok_text}"
+    );
+    assert_eq!(
+        brief["lifecycle"]["state"],
+        json!("retired"),
         "expected a retired lifecycle: {ok_text}"
+    );
+    assert!(
+        !ok_text.contains("recorded_input_fingerprint"),
+        "compact receipt must omit the audit record: {ok_text}"
     );
 
     // Retiring an already-inactive claim is rejected strictly.
