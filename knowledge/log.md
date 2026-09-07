@@ -1,4 +1,7 @@
 ## 2026-09-07
+* **Update**: Linked `research/relocatable-exact-text-selectors.md` to `decisions/freshness-cost-sequencing.md` (Deferred and re-sequenced by this decision; build diff-on-stale and drift instrumentation before any relocation spike.).
+* **Update**: Updated concept `research/relocatable-exact-text-selectors.md`.
+* **Creation**: Documented decision `decisions/freshness-cost-sequencing.md` — defers the relocatable exact-text selector proposal behind diff-on-stale and a pure drift-frequency diagnostic; agreed with user, no implementation started.
 * **Update**: Updated concept `research/relocatable-exact-text-selectors.md`.
 * **Update**: Linked `research/relocatable-exact-text-selectors.md` to `research/structural-freshness-without-formatter-coupling.md` (Preserves the rejected CST experiment's lessons while separating coordinate relocation from relevance identity.).
 * **Update**: Updated concept `research/relocatable-exact-text-selectors.md`.

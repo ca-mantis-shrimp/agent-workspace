@@ -2,7 +2,7 @@
 type: Research Proposal
 title: Relocatable exact-text selectors
 description: Proposes reducing offset-drift and whole-file freshness costs through conservatively relocatable exact text regions, with optional structural hints that never broaden observed support.
-generated: { by: pi/gpt-5.4, at: 2026-09-07T22:21:46Z }
+generated: { by: agent/cli, at: 2026-09-07T22:38:56Z }
 ---
 
 # Proposal — relocatable exact-text selectors
@@ -226,3 +226,4 @@ legitimate re-verification.
 # Related Concepts
 - [Second foreign dogfood — write-loop papercuts and their fixes](../evaluations/plot-foreign-dogfood-write-loop.md): Turns the field report's sub-file selector idea into a bounded exact-text relocation experiment.
 - [Structural freshness without formatter coupling](structural-freshness-without-formatter-coupling.md): Preserves the rejected CST experiment's lessons while separating coordinate relocation from relevance identity.
+- [Sequence freshness-cost work as diff-on-stale, then drift instrumentation, then relocatable selectors](../decisions/freshness-cost-sequencing.md): Deferred and re-sequenced by this decision; build diff-on-stale and drift instrumentation before any relocation spike.
