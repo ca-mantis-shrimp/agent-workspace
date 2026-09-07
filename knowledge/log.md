@@ -1,4 +1,6 @@
 ## 2026-09-07
+* **Update**: Linked `implementation/implementation-notes.md` to `decisions/claim-retirement-disposition.md` (Implementation history records the executable consequences of the claim-retirement disposition.).
+* **Update**: Updated concept `implementation/implementation-notes.md`.
 * **Update**: Linked `decisions/claim-retirement-disposition.md` to `decisions/mcp-repository-resolution.md` (Fixes the missing-retract-verb gap this decision surfaced while dogfooding the MCP door.).
 * **Update**: Updated concept `decisions/claim-retirement-disposition.md`.
 * **Creation**: Documented concept `decisions/claim-retirement-disposition.md` (Claims gain a retirement disposition: retire without a replacement).

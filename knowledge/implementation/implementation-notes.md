@@ -3,7 +3,7 @@ type: Implementation Log
 title: Implementation notes
 description: Records implementation decisions settled by executable walking-skeleton and dogfood evidence.
 tags: [implementation, history, decisions]
-generated: { by: pi/gpt-5.4, at: 2026-09-07T06:10:06Z }
+generated: { by: agent/cli, at: 2026-09-07T07:56:59Z }
 ---
 
 # Implementation Notes
@@ -289,12 +289,13 @@ revised when later scenarios expose a better boundary.
 
 - Claim lifecycle is now orthogonal to freshness. An active claim may be
   `current`, `stale`, or `unknown`; a superseded claim retains its last freshness
-  report but is explicitly retired with a required replacement claim ID and a
-  non-empty human-readable reason. Input drift therefore no longer doubles as a
-  retirement signal.
+  report but is explicitly superseded, carrying a required replacement claim ID
+  and a non-empty human-readable reason. Input drift therefore no longer doubles
+  as a lifecycle signal. (Retirement *without* a replacement is a separate
+  disposition added 2026-09-07 — see that entry.)
 - `supersede-claim --id <old> --claim <replacement> --reason <why>` requires both
   claims to exist and be active, rejects self-replacement and empty reasons, and
-  refuses to retire an acceptance claim belonging to an open transaction.
+  refuses to supersede an acceptance claim belonging to an open transaction.
   Replacement chains are permitted, but cycles are prevented because an already
   superseded claim cannot become a replacement.
 - Resume reconciliation touches both active and superseded claims because
@@ -1510,6 +1511,32 @@ the Agent Workspace operational system.
   check compared every migrated body with its Git predecessor modulo intentional
   path rewrites and one markdown-list spacing fix.
 
+## 2026-09-07 — Substrate hardening: formatter gate, MCP resolution, claim retirement
+
+Three last-mile fixes surfaced by dogfooding the live write loop, each with its
+own decision concept for the rationale.
+
+- **TypeScript formatter gate.** The Pi extension had no canonical format, so an
+  edit-time formatter kept reflowing it into stale-inducing byte noise. Pinned
+  Biome (formatter-only) as the canonical form and extended `.githooks/pre-commit`
+  to reject non-Biome-clean `.ts`, mirroring the rustfmt gate.
+- **MCP repository resolution + proprioception.** The MCP server was launched with
+  an unexpanded `${CLAUDE_PROJECT_DIR}` and died per-call with a bare
+  `No such file or directory`. `.mcp.json` now passes repository-relative paths
+  (`--repository .`, `knowledge`) — `.` resolves to the same git-identity-keyed
+  state store as the absolute path — and `src/mcp.rs` names a missing repository
+  loudly (an `is_dir` guard in `run()` plus a `serve()` startup warning) instead
+  of failing opaquely across the stdio boundary.
+- **Claim retirement disposition.** Added `ClaimRetired { claim_id, reason }` and
+  `ClaimLifecycle::Retired` so a claim can be retired *without* a replacement — the
+  freshness-orthogonal disposition axis findings already had. Every active window
+  and reconciliation path filters on `is_active()`, so a retired claim is excluded
+  with no other call-site change; `status --full` splits `retired_claims` from
+  `superseded_claims` (distinct brief count too). CLI `retire-claim`, MCP
+  `workspace_retire_claim`. Used immediately to curate the live workspace: sixteen
+  archival claims retired so `stale` in the active window now means only
+  "re-verify", not "old news".
+
 # Related Concepts
 
 - [External workspace state and the Clearhead boundary](../decisions/external-workspace-and-clearhead-boundary.md): Implementation history records the executable consequences and follow-up evidence for this concept.
@@ -1518,3 +1545,4 @@ the Agent Workspace operational system.
 - [S7 bounded perception](../design/s7-bounded-perception.md): Implementation history records the executable consequences and follow-up evidence for this concept.
 - [Dogfooding the workspace on a cold resume](../evaluations/dogfood-cold-resume.md): Implementation history records the executable consequences and follow-up evidence for this concept.
 - [First foreign dogfood of the semantic write API](../evaluations/plot-foreign-dogfood.md): Implementation history records the executable consequences and follow-up evidence for this concept.
+- [Claims gain a retirement disposition: retire without a replacement](../decisions/claim-retirement-disposition.md): Implementation history records the executable consequences of the claim-retirement disposition.
