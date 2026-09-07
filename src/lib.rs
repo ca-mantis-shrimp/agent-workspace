@@ -173,6 +173,10 @@ enum Event {
         replacement_claim_id: u64,
         reason: String,
     },
+    ClaimRetired {
+        claim_id: u64,
+        reason: String,
+    },
     TransactionBegan {
         transaction_id: u64,
         #[serde(default)]
@@ -494,10 +498,16 @@ impl Workspace {
     }
 
     fn status_from_projection(projection: Projection) -> WorkspaceStatus {
-        let (claims, superseded_claims) = projection
-            .claims
-            .into_values()
-            .partition(|claim| claim.lifecycle.is_active());
+        let mut claims = Vec::new();
+        let mut superseded_claims = Vec::new();
+        let mut retired_claims = Vec::new();
+        for claim in projection.claims.into_values() {
+            match claim.lifecycle {
+                ClaimLifecycle::Active => claims.push(claim),
+                ClaimLifecycle::Superseded { .. } => superseded_claims.push(claim),
+                ClaimLifecycle::Retired { .. } => retired_claims.push(claim),
+            }
+        }
         WorkspaceStatus {
             objective: projection.objective,
             working_set: projection.working_set.into_values().collect(),
@@ -505,6 +515,7 @@ impl Workspace {
             observations: projection.observations.into_values().collect(),
             claims,
             superseded_claims,
+            retired_claims,
             evidence: projection.evidence.into_values().collect(),
             findings: projection.findings.into_values().collect(),
             transactions: projection.transactions.into_values().collect(),
@@ -1617,6 +1628,49 @@ impl Workspace {
             .ok_or(WorkspaceError::ClaimNotFound(claim_id))
     }
 
+    /// Retire a claim without a replacement: mark the belief as no longer
+    /// maintained — a mistaken record, or one whose subject work is simply
+    /// done. Sibling to `supersede_claim` minus the successor. The claim leaves
+    /// every active window and reconciliation but stays in the append-only log.
+    /// Freshness is deliberately not reconciled first: retirement is a
+    /// disposition, orthogonal to whether the claim was still true.
+    pub fn retire_claim(
+        &self,
+        claim_id: u64,
+        reason: impl Into<String>,
+    ) -> Result<Claim, WorkspaceError> {
+        let reason = reason.into();
+        if reason.trim().is_empty() {
+            return Err(WorkspaceError::InvalidClaim(
+                "retirement reason must not be empty".to_owned(),
+            ));
+        }
+        let projection = self.project()?;
+        let claim = projection
+            .claims
+            .get(&claim_id)
+            .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
+        if !claim.lifecycle.is_active() {
+            return Err(WorkspaceError::InvalidClaim(format!(
+                "claim {claim_id} is not active"
+            )));
+        }
+        if projection.transactions.values().any(|transaction| {
+            transaction.state == TransactionState::Open
+                && transaction.acceptance_claim_ids.contains(&claim_id)
+        }) {
+            return Err(WorkspaceError::InvalidClaim(format!(
+                "claim {claim_id} belongs to an open transaction"
+            )));
+        }
+
+        self.append(Event::ClaimRetired { claim_id, reason })?;
+        self.project()?
+            .claims
+            .remove(&claim_id)
+            .ok_or(WorkspaceError::ClaimNotFound(claim_id))
+    }
+
     pub fn begin_transaction(
         &self,
         intent: impl Into<String>,
@@ -2401,6 +2455,31 @@ impl Projection {
                     replacement_claim_id,
                     reason,
                 };
+            }
+            Event::ClaimRetired { claim_id, reason } => {
+                if reason.trim().is_empty() {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "claim {claim_id} has an empty retirement reason"
+                    )));
+                }
+                if self.transactions.values().any(|transaction| {
+                    transaction.state == TransactionState::Open
+                        && transaction.acceptance_claim_ids.contains(&claim_id)
+                }) {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "retired claim {claim_id} belongs to an open transaction"
+                    )));
+                }
+                let claim = self
+                    .claims
+                    .get_mut(&claim_id)
+                    .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
+                if !claim.lifecycle.is_active() {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "claim {claim_id} is not active"
+                    )));
+                }
+                claim.lifecycle = ClaimLifecycle::Retired { reason };
             }
             Event::TransactionBegan {
                 transaction_id,

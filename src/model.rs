@@ -297,6 +297,13 @@ pub enum ClaimLifecycle {
         replacement_claim_id: u64,
         reason: String,
     },
+    /// Retired without a replacement: the belief is no longer maintained (a
+    /// mistaken record, or one whose subject work is simply done). Unlike
+    /// `Superseded` it names no successor — it is the disposition axis claims
+    /// lacked, so "stale" stops meaning both "re-verify" and "obsolete". Retired
+    /// claims stay in the append-only log (auditable) but leave every active
+    /// window and reconciliation, because those filter on `is_active`.
+    Retired { reason: String },
 }
 
 impl ClaimLifecycle {

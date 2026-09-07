@@ -71,6 +71,17 @@ pub struct SupersedeClaimParams {
     pub reason: String,
 }
 
+/// Input schema for `workspace_retire_claim`, exposing the CLI `retire-claim`
+/// verb: retirement without a replacement.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RetireClaimParams {
+    /// Id of the active claim to retire.
+    pub claim_id: u64,
+    /// Why the belief is no longer maintained (a mistaken record, or one whose
+    /// subject work is done). Empty reasons are rejected.
+    pub reason: String,
+}
+
 /// Input schema for `workspace_checkpoint`, exposing the CLI `checkpoint`
 /// verb over the same thin transport.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -231,6 +242,19 @@ impl WorkspaceServer {
     }
 
     #[tool(
+        description = "Retire a claim WITHOUT a replacement: workspace_retire_claim(claim_id, reason). Use when a belief is no longer maintained — a mistaken record, or one whose subject work is simply done — and no successor belief replaces it (that is supersede_claim's job). The claim leaves every active window and reconciliation but stays auditable in the log. Reason mandatory; a missing or already-inactive claim id is rejected strictly."
+    )]
+    fn workspace_retire_claim(
+        &self,
+        Parameters(params): Parameters<RetireClaimParams>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.retire(params.claim_id, params.reason) {
+            Ok(json) => Ok(CallToolResult::success(vec![ContentBlock::text(json)])),
+            Err(message) => Ok(CallToolResult::error(vec![ContentBlock::text(message)])),
+        }
+    }
+
+    #[tool(
         description = "Draw a named line in the workspace log: reconcile all active claims to current truth, then record a checkpoint that a future session's delta diffs against. Labels must be unique. Use it to close a coherent slice of work."
     )]
     fn workspace_checkpoint(
@@ -358,6 +382,10 @@ impl WorkspaceServer {
         reason: String,
     ) -> Result<String, String> {
         self.run(move |workspace| workspace.supersede_claim(claim_id, replacement_claim_id, reason))
+    }
+
+    fn retire(&self, claim_id: u64, reason: String) -> Result<String, String> {
+        self.run(move |workspace| workspace.retire_claim(claim_id, reason))
     }
 
     fn checkpoint(&self, label: String, note: Option<String>) -> Result<String, String> {

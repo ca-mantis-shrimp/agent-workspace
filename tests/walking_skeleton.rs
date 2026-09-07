@@ -1293,6 +1293,114 @@ fn claim_supersession_distinguishes_retired_beliefs_from_active_drift() {
 }
 
 #[test]
+fn claim_retirement_leaves_the_active_window_without_a_replacement() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let observation = invoke(&[
+        "observe",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "src/lib.rs",
+    ]);
+    let observation: Observation = serde_json::from_slice(&observation.stdout).unwrap();
+
+    let record_claim = |statement: &str| {
+        let observation_id = observation.id.to_string();
+        let output = invoke(&[
+            "claim",
+            "--repository",
+            fixture.repository.to_str().unwrap(),
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--statement",
+            statement,
+            "--observation",
+            &observation_id,
+        ]);
+        serde_json::from_slice::<Claim>(&output.stdout).unwrap()
+    };
+    let obsolete = record_claim("this belief's subject work is done");
+    let kept = record_claim("this belief is still maintained");
+
+    // Retire the obsolete belief without naming any replacement.
+    let retired = invoke(&[
+        "retire-claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &obsolete.id.to_string(),
+        "--reason",
+        "subject work completed; archiving",
+    ]);
+    let retired: Claim = serde_json::from_slice(&retired.stdout).unwrap();
+    assert_eq!(
+        retired.lifecycle,
+        ClaimLifecycle::Retired {
+            reason: "subject work completed; archiving".to_owned(),
+        }
+    );
+
+    // It leaves the active window, lands in `retired_claims` (never conflated
+    // with `superseded_claims`), and the audit view still keeps it.
+    let status = invoke(&[
+        "status",
+        "--full",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+    ]);
+    let status: WorkspaceStatus = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(
+        status
+            .claims
+            .iter()
+            .map(|claim| claim.id)
+            .collect::<Vec<_>>(),
+        vec![kept.id],
+        "only the maintained claim stays active"
+    );
+    assert_eq!(status.retired_claims, vec![retired]);
+    assert!(
+        status.superseded_claims.is_empty(),
+        "a retired claim is not a superseded one"
+    );
+
+    // Retiring an already-inactive claim is rejected.
+    let already = invoke_failure(&[
+        "retire-claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &obsolete.id.to_string(),
+        "--reason",
+        "again",
+    ]);
+    assert!(String::from_utf8_lossy(&already.stderr).contains("not active"));
+
+    // An empty reason is rejected, same discipline as supersession.
+    let empty = invoke_failure(&[
+        "retire-claim",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &kept.id.to_string(),
+        "--reason",
+        "   ",
+    ]);
+    assert!(String::from_utf8_lossy(&empty.stderr).contains("reason must not be empty"));
+}
+
+#[test]
 fn claim_supersession_rejects_unsafe_lifecycle_transitions_and_replay() {
     let fixture = GitFixture::new();
     let workspace = fixture.root.path().join("workspace-state");

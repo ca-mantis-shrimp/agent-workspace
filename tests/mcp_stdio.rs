@@ -414,6 +414,59 @@ fn mcp_server_supersedes_a_claim_over_stdio() {
 }
 
 #[test]
+fn mcp_server_retires_a_claim_without_a_replacement_over_stdio() {
+    let repo = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    make_repo(repo.path());
+    let mut server = start(repo.path(), state.path());
+
+    let names = server.handshake();
+    assert!(
+        names.contains(&"workspace_retire_claim".to_owned()),
+        "retire tool not routed; got {names:?}"
+    );
+
+    let recorded = server.call(
+        3,
+        "workspace_record_belief",
+        json!({"statement": "a belief whose work is done", "rests_on": ["hello.txt"]}),
+    );
+    let text = recorded["result"]["content"][0]["text"].as_str().unwrap();
+    let id = serde_json::from_str::<Value>(text).unwrap()["claim"]["id"]
+        .as_u64()
+        .unwrap();
+
+    // Retirement lands with no replacement id, and reports the retired lifecycle.
+    let ok = server.call(
+        4,
+        "workspace_retire_claim",
+        json!({"claim_id": id, "reason": "subject work completed"}),
+    );
+    assert_eq!(
+        ok["result"]["isError"],
+        json!(false),
+        "retire should succeed: {ok}"
+    );
+    let ok_text = ok["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        ok_text.contains("retired") || ok_text.contains("Retired"),
+        "expected a retired lifecycle: {ok_text}"
+    );
+
+    // Retiring an already-inactive claim is rejected strictly.
+    let bad = server.call(
+        5,
+        "workspace_retire_claim",
+        json!({"claim_id": id, "reason": "again"}),
+    );
+    assert_eq!(
+        bad["result"]["isError"],
+        json!(true),
+        "double retire must be an error: {bad}"
+    );
+}
+
+#[test]
 fn mcp_server_checkpoints_and_captures_reads_over_stdio() {
     let repo = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();

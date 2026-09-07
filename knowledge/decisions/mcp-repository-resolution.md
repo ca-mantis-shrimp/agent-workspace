@@ -69,10 +69,12 @@ error gave the agent no proprioception about which of "repository", "state", or
 - **Restart-snapshot tax remains.** Claude Code freezes the MCP tool set at session
   start, so shipping a new verb or fixing the server needs a client restart to take
   effect in-session. Develop against Pi's lighter reload, promote to MCP once stable.
-- **Surfaced, not fixed here:** there is no discard/retract verb — `supersede-claim`
-  requires a replacement claim, so a junk/probe claim cannot be cleanly retired
-  without corrupting the supersession graph. Sibling to the deferred
-  transaction-discard door; worth a first-class recovery verb later.
+- **Surfaced here, fixed 2026-09-07:** there was no discard/retract verb —
+  `supersede-claim` requires a replacement claim, so a junk/probe claim could not
+  be cleanly retired without corrupting the supersession graph. Resolved by the
+  [claim-retirement-disposition](claim-retirement-disposition.md) decision
+  (`retire-claim` / `workspace_retire_claim`). The transaction-discard door
+  remains a deferred sibling gap.
 
 ## Alternatives rejected
 

@@ -1,4 +1,7 @@
 ## 2026-09-07
+* **Update**: Linked `decisions/claim-retirement-disposition.md` to `decisions/mcp-repository-resolution.md` (Fixes the missing-retract-verb gap this decision surfaced while dogfooding the MCP door.).
+* **Update**: Updated concept `decisions/claim-retirement-disposition.md`.
+* **Creation**: Documented concept `decisions/claim-retirement-disposition.md` (Claims gain a retirement disposition: retire without a replacement).
 * **Update**: Linked `decisions/mcp-repository-resolution.md` to `decisions/mcp-centered-tool-surface.md` (Operational hardening of the MCP surface this decision established: how the server learns its repository and fails legibly.).
 * **Update**: Updated concept `decisions/mcp-repository-resolution.md`.
 * **Creation**: Documented concept `decisions/mcp-repository-resolution.md` (MCP servers resolve their repository from the launch directory and fail loud when it is wrong).

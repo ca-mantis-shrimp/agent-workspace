@@ -20,6 +20,11 @@ pub struct WorkspaceStatus {
     pub claims: Vec<Claim>,
     #[serde(default)]
     pub superseded_claims: Vec<Claim>,
+    /// Claims retired without a replacement (mistaken, or subject work done).
+    /// Kept distinct from `superseded_claims` so the audit view never conflates
+    /// "replaced by a better belief" with "no longer maintained".
+    #[serde(default)]
+    pub retired_claims: Vec<Claim>,
     pub evidence: Vec<Evidence>,
     #[serde(default)]
     pub findings: Vec<Finding>,
@@ -78,6 +83,8 @@ pub struct FreshnessHistogram {
 pub struct BriefCounts {
     pub active_claims: usize,
     pub superseded_claims: usize,
+    #[serde(default)]
+    pub retired_claims: usize,
     pub observations: usize,
     pub open_findings: usize,
     pub open_transactions: usize,
@@ -131,6 +138,7 @@ impl WorkspaceStatus {
             counts: BriefCounts {
                 active_claims: self.claims.len(),
                 superseded_claims: self.superseded_claims.len(),
+                retired_claims: self.retired_claims.len(),
                 observations: self.observations.len(),
                 open_findings: self
                     .findings

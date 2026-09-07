@@ -299,6 +299,15 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 .ok_or_else(|| CliError::Usage("supersede-claim requires --reason".to_owned()))?;
             print_json(&workspace.supersede_claim(id, replacement_claim_id, reason)?)?;
         }
+        "retire-claim" => {
+            let id = options
+                .id
+                .ok_or_else(|| CliError::Usage("retire-claim requires --id".to_owned()))?;
+            let reason = options
+                .reason
+                .ok_or_else(|| CliError::Usage("retire-claim requires --reason".to_owned()))?;
+            print_json(&workspace.retire_claim(id, reason)?)?;
+        }
         "begin-transaction" => {
             let intent = options
                 .intent
