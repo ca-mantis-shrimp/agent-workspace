@@ -271,7 +271,7 @@ pub struct ClaimInput {
     pub source: ClaimInputSource,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaimScopeStrategy {
     #[default]
@@ -322,6 +322,13 @@ pub struct Claim {
     #[serde(default)]
     pub lifecycle: ClaimLifecycle,
     pub report: FreshnessReport,
+    /// How many times this belief has been revised in place via `amend_claim`.
+    /// Zero for a freshly recorded claim; each amendment increments it. The
+    /// prior revisions are not stored here — they live in the append-only event
+    /// log — but the count is the visible signal that this claim has a history
+    /// worth expanding with `--full`/the log.
+    #[serde(default)]
+    pub revision: u32,
 }
 
 /// One `rests-on` path of a recorded belief: which observation carries it, and

@@ -455,6 +455,87 @@ fn mcp_server_supersedes_a_claim_over_stdio() {
 }
 
 #[test]
+fn mcp_server_amends_a_claim_in_place_over_stdio() {
+    let repo = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    make_repo(repo.path());
+    let mut server = start(repo.path(), state.path());
+
+    let names = server.handshake();
+    assert!(
+        names.contains(&"workspace_amend_claim".to_owned()),
+        "amend tool not routed; got {names:?}"
+    );
+
+    let recorded = server.call(
+        3,
+        "workspace_record_belief",
+        json!({"statement": "hello greets", "rests_on": ["hello.txt"]}),
+    );
+    let id = {
+        let text = recorded["result"]["content"][0]["text"].as_str().unwrap();
+        serde_json::from_str::<Value>(text).unwrap()["id"]
+            .as_u64()
+            .unwrap()
+    };
+
+    // Amending keeps the id and returns the same compact receipt shape as
+    // record_belief.
+    let ok = server.call(
+        4,
+        "workspace_amend_claim",
+        json!({"claim_id": id, "statement": "hello greets the whole world",
+               "rests_on": ["hello.txt"]}),
+    );
+    assert_eq!(
+        ok["result"]["isError"],
+        json!(false),
+        "amend should succeed: {ok}"
+    );
+    let text = ok["result"]["content"][0]["text"].as_str().unwrap();
+    let brief: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(brief["id"], json!(id), "amend preserves the id: {text}");
+    assert!(
+        brief["freshness"].is_string() && brief["supports"][0]["path"] == json!("hello.txt"),
+        "amend returns the compact belief receipt: {text}"
+    );
+    assert!(
+        brief.get("claim").is_none() && !text.contains("recorded_input_fingerprint"),
+        "amend receipt is compact by default: {text}"
+    );
+
+    // full: true reveals the revised claim, its bumped revision, and the new
+    // statement.
+    let full = server.call(
+        5,
+        "workspace_amend_claim",
+        json!({"claim_id": id, "statement": "hello greets, revised again",
+               "rests_on": ["hello.txt"], "full": true}),
+    );
+    let full_text = full["result"]["content"][0]["text"].as_str().unwrap();
+    let claim: Value = serde_json::from_str(full_text).unwrap();
+    assert_eq!(claim["claim"]["id"], json!(id));
+    assert_eq!(
+        claim["claim"]["revision"],
+        json!(2),
+        "two amendments: {full_text}"
+    );
+    assert_eq!(claim["claim"]["statement"], "hello greets, revised again");
+
+    // A missing claim id is rejected strictly.
+    let missing = server.call(
+        6,
+        "workspace_amend_claim",
+        json!({"claim_id": id + 999, "statement": "ghost", "rests_on": ["hello.txt"]}),
+    );
+    assert_eq!(
+        missing["result"]["isError"],
+        json!(true),
+        "amending a missing claim must be an error: {missing}"
+    );
+}
+
+#[test]
 fn mcp_server_retires_a_claim_without_a_replacement_over_stdio() {
     let repo = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();

@@ -110,6 +110,18 @@ struct EventRecord {
     event: Event,
 }
 
+/// The freshness-assessed core of a claim, shared by recording a new claim and
+/// amending an existing one. Both paths compute identical inputs, fingerprints,
+/// and freshness; they differ only in which event carries the result and which
+/// claim id it names.
+struct AssembledClaim {
+    statement: String,
+    inputs: Vec<ClaimInput>,
+    freshness: FreshnessWithinScope,
+    reason: String,
+    reconciliation_fingerprint: String,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Event {
@@ -176,6 +188,22 @@ enum Event {
     ClaimRetired {
         claim_id: u64,
         reason: String,
+    },
+    /// Revise a claim's statement and citations in place, keeping its id and
+    /// lifecycle. Structurally mirrors `ClaimRecorded` but targets an existing
+    /// active claim: the append-only log retains every prior revision (the
+    /// integrity contract — a belief's history must never be overwritten), while
+    /// the projection presents the latest and counts the revisions.
+    ClaimAmended {
+        claim_id: u64,
+        statement: String,
+        supporting_observation_ids: Vec<u64>,
+        #[serde(default)]
+        scope_strategy: ClaimScopeStrategy,
+        inputs: Vec<ClaimInput>,
+        freshness: FreshnessWithinScope,
+        reason: String,
+        reconciliation_fingerprint: String,
     },
     TransactionBegan {
         transaction_id: u64,
@@ -1356,6 +1384,43 @@ impl Workspace {
         declared_dependencies: &[PathBuf],
         scope_strategy: ClaimScopeStrategy,
     ) -> Result<Claim, WorkspaceError> {
+        let assembled = self.assemble_claim(
+            statement,
+            supporting_observation_ids,
+            declared_dependencies,
+            scope_strategy,
+        )?;
+        let claim_id = self.project()?.next_claim_id;
+
+        self.append(Event::ClaimRecorded {
+            claim_id,
+            statement: assembled.statement,
+            supporting_observation_ids: supporting_observation_ids.to_vec(),
+            scope_strategy,
+            inputs: assembled.inputs,
+            freshness: assembled.freshness,
+            reason: assembled.reason,
+            reconciliation_fingerprint: assembled.reconciliation_fingerprint,
+        })?;
+
+        self.project()?
+            .claims
+            .remove(&claim_id)
+            .ok_or(WorkspaceError::ClaimNotFound(claim_id))
+    }
+
+    /// Assemble the freshness-assessed inputs for a claim from its supporting
+    /// observations, declared dependencies, and scope strategy — the shared
+    /// core of recording a new claim and amending an existing one, so the two
+    /// paths compute identical inputs, fingerprints, and freshness and only
+    /// differ in which event they append.
+    fn assemble_claim(
+        &self,
+        statement: impl Into<String>,
+        supporting_observation_ids: &[u64],
+        declared_dependencies: &[PathBuf],
+        scope_strategy: ClaimScopeStrategy,
+    ) -> Result<AssembledClaim, WorkspaceError> {
         let statement = statement.into();
         if statement.trim().is_empty() {
             return Err(WorkspaceError::InvalidClaim(
@@ -1426,23 +1491,14 @@ impl Workspace {
             assess_claim_inputs(&self.repository_root, &inputs);
         let reconciliation_fingerprint =
             scoped_reconciliation_fingerprint(&self.repository_root, &fingerprint_inputs)?;
-        let claim_id = projection.next_claim_id;
 
-        self.append(Event::ClaimRecorded {
-            claim_id,
+        Ok(AssembledClaim {
             statement,
-            supporting_observation_ids: supporting_observation_ids.to_vec(),
-            scope_strategy,
             inputs,
             freshness,
             reason,
             reconciliation_fingerprint,
-        })?;
-
-        self.project()?
-            .claims
-            .remove(&claim_id)
-            .ok_or(WorkspaceError::ClaimNotFound(claim_id))
+        })
     }
 
     /// Record a belief: the agent's cognitive act of "I now believe X, and it
@@ -1476,8 +1532,95 @@ impl Workspace {
             ));
         }
 
-        // Duplicate paths collapse onto one support: citing the same file twice
-        // is one citation, not two observations.
+        let (supports, supporting_observation_ids) = self.capture_supports(&statement, rests_on)?;
+        let claim = self.record_claim_with_scope(
+            statement,
+            &supporting_observation_ids,
+            &[],
+            scope_strategy,
+        )?;
+        Ok(Belief { claim, supports })
+    }
+
+    /// Revise an existing active belief in place: the cognitive act of "I still
+    /// hold claim N, but here is its statement and citations as they are now."
+    /// Keeps the claim's id and lifecycle and re-anchors its freshness to the
+    /// cited files as they stand — so a broad belief partially overtaken by an
+    /// edit can be *moved* rather than retired whole and re-narrated. The prior
+    /// revision is never lost: it stays in the append-only log (the projection
+    /// counts revisions), which is the integrity line an amend must not cross.
+    ///
+    /// Only an active claim can be amended — a superseded or retired belief is
+    /// re-recorded, not revised — and, like supersession, a claim owned by an
+    /// open transaction is frozen until the transaction resolves. Citation and
+    /// non-empty statement rules match `record_belief`.
+    pub fn amend_claim(
+        &self,
+        claim_id: u64,
+        statement: impl Into<String>,
+        rests_on: &[PathBuf],
+        scope_strategy: ClaimScopeStrategy,
+    ) -> Result<Belief, WorkspaceError> {
+        let statement = statement.into();
+        if statement.trim().is_empty() {
+            return Err(WorkspaceError::InvalidClaim(
+                "statement must not be empty".to_owned(),
+            ));
+        }
+        if rests_on.is_empty() {
+            return Err(WorkspaceError::InvalidClaim(
+                "a belief must rest on at least one cited path".to_owned(),
+            ));
+        }
+        // Guard before capturing anything: an amend that cannot land should not
+        // leave orphaned observations behind. The projection re-checks these
+        // invariants when it applies the event (fail-closed on a corrupt log).
+        let claim = self
+            .project()?
+            .claims
+            .get(&claim_id)
+            .ok_or(WorkspaceError::ClaimNotFound(claim_id))?
+            .clone();
+        if !claim.lifecycle.is_active() {
+            return Err(WorkspaceError::InvalidClaim(format!(
+                "claim {claim_id} is not active and cannot be amended; record a new belief instead"
+            )));
+        }
+
+        let (supports, supporting_observation_ids) = self.capture_supports(&statement, rests_on)?;
+        let assembled =
+            self.assemble_claim(statement, &supporting_observation_ids, &[], scope_strategy)?;
+
+        self.append(Event::ClaimAmended {
+            claim_id,
+            statement: assembled.statement,
+            supporting_observation_ids,
+            scope_strategy,
+            inputs: assembled.inputs,
+            freshness: assembled.freshness,
+            reason: assembled.reason,
+            reconciliation_fingerprint: assembled.reconciliation_fingerprint,
+        })?;
+
+        let claim = self
+            .project()?
+            .claims
+            .remove(&claim_id)
+            .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
+        Ok(Belief { claim, supports })
+    }
+
+    /// Capture (or reuse) and focus the supporting observation for each cited
+    /// path, returning the per-path reuse accounting and the observation ids.
+    /// Shared by [`record_belief`](Self::record_belief) and
+    /// [`amend_claim`](Self::amend_claim) so both join the ambient capture
+    /// ledger identically. Duplicate paths collapse onto one support: citing the
+    /// same file twice is one citation, not two observations.
+    fn capture_supports(
+        &self,
+        statement: &str,
+        rests_on: &[PathBuf],
+    ) -> Result<(Vec<BeliefSupport>, Vec<u64>), WorkspaceError> {
         let mut seen = BTreeSet::new();
         let mut supports = Vec::new();
         let mut supporting_observation_ids = Vec::new();
@@ -1501,7 +1644,7 @@ impl Workspace {
                     (capture.observation.id, false)
                 }
             };
-            self.focus_observation(observation_id, statement.clone())?;
+            self.focus_observation(observation_id, statement.to_owned())?;
             supporting_observation_ids.push(observation_id);
             supports.push(BeliefSupport {
                 path,
@@ -1509,14 +1652,7 @@ impl Workspace {
                 reused,
             });
         }
-
-        let claim = self.record_claim_with_scope(
-            statement,
-            &supporting_observation_ids,
-            &[],
-            scope_strategy,
-        )?;
-        Ok(Belief { claim, supports })
+        Ok((supports, supporting_observation_ids))
     }
 
     /// The newest observation recorded for `path`, if any. Reconcile decides
@@ -2391,8 +2527,77 @@ impl Projection {
                             },
                             reason,
                         },
+                        revision: 0,
                     },
                 );
+                self.observations_since_last_claim = 0;
+            }
+            Event::ClaimAmended {
+                claim_id,
+                statement,
+                supporting_observation_ids,
+                scope_strategy,
+                inputs,
+                freshness,
+                reason,
+                reconciliation_fingerprint,
+            } => {
+                if let Some(missing) = supporting_observation_ids
+                    .iter()
+                    .find(|id| !self.observations.contains_key(id))
+                {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "amended claim {claim_id} references missing observation {missing}"
+                    )));
+                }
+                if self.transactions.values().any(|transaction| {
+                    transaction.state == TransactionState::Open
+                        && transaction.acceptance_claim_ids.contains(&claim_id)
+                }) {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "amended claim {claim_id} belongs to an open transaction"
+                    )));
+                }
+                let mediated_paths = inputs.iter().map(|input| input.path.clone()).collect();
+                let mediated_units = inputs
+                    .iter()
+                    .map(|input| MediatedUnit {
+                        path: input.path.clone(),
+                        selector: input.selector.clone(),
+                    })
+                    .collect();
+                let assurance_source = scope_strategy.assurance_source();
+                let claim = self
+                    .claims
+                    .get_mut(&claim_id)
+                    .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
+                if !claim.lifecycle.is_active() {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "claim {claim_id} is not active and cannot be amended"
+                    )));
+                }
+                // In-place revision: id and lifecycle are preserved, content and
+                // freshness are replaced, and the revision counter records that a
+                // prior version exists in the log. Not resetting the counter is
+                // the whole point — the history must remain legible.
+                claim.statement = statement;
+                claim.supporting_observation_ids = supporting_observation_ids;
+                claim.scope_strategy = scope_strategy;
+                claim.inputs = inputs;
+                claim.report = FreshnessReport {
+                    freshness_within_scope: freshness,
+                    scope_assurance: ScopeAssurance {
+                        source: assurance_source,
+                        completeness: ScopeCompleteness::NotAsserted,
+                    },
+                    operational_coverage: OperationalCoverage {
+                        mediated_paths,
+                        mediated_units,
+                        reconciliation_fingerprint,
+                    },
+                    reason,
+                };
+                claim.revision += 1;
                 self.observations_since_last_claim = 0;
             }
             Event::ClaimReconciled {

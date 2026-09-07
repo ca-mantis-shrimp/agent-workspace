@@ -2261,6 +2261,146 @@ fn brief_status_bounds_a_pathologically_long_objective() {
     );
 }
 
+/// The point of amend: a belief partially overtaken by an edit is revised in
+/// place — same id, freshness re-anchored to the file as it now stands, the
+/// revision counter recording that a prior version exists in the log, and no
+/// new claim minted.
+#[test]
+fn amend_claim_revises_in_place_and_reanchors_freshness() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    let recorded = invoke(&[
+        "record-belief",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--statement",
+        "foo returns 1",
+        "--rests-on",
+        "src/lib.rs",
+    ]);
+    let belief: Value = serde_json::from_slice(&recorded.stdout).unwrap();
+    let id = belief["claim"]["id"].as_u64().unwrap();
+    assert_eq!(belief["claim"]["revision"], 0);
+
+    // An edit under the cited file makes the belief stale.
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 { 2 }\n",
+    )
+    .unwrap();
+    let status = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let brief: Value = serde_json::from_slice(&status.stdout).unwrap();
+    let freshness_of = |brief: &Value, id: u64| {
+        brief["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|claim| claim["id"].as_u64() == Some(id))
+            .map(|claim| claim["freshness"].clone())
+    };
+    assert_eq!(freshness_of(&brief, id), Some(serde_json::json!("stale")));
+
+    // Amending with the file as it now stands re-anchors the belief: same id,
+    // revision incremented, freshness current again.
+    let amended = invoke(&[
+        "amend-claim",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--id",
+        &id.to_string(),
+        "--statement",
+        "foo returns 2",
+        "--rests-on",
+        "src/lib.rs",
+    ]);
+    let belief: Value = serde_json::from_slice(&amended.stdout).unwrap();
+    assert_eq!(
+        belief["claim"]["id"].as_u64(),
+        Some(id),
+        "amend preserves the claim id"
+    );
+    assert_eq!(belief["claim"]["revision"], 1, "amend records a revision");
+    assert_eq!(belief["claim"]["statement"], "foo returns 2");
+    assert_eq!(
+        belief["claim"]["report"]["freshness_within_scope"],
+        "current"
+    );
+
+    // The active set shows it current and is still one claim — amend revised the
+    // belief, it did not mint a successor.
+    let status = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
+    let brief: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(
+        brief["counts"]["active_claims"], 1,
+        "amend must not create a new claim"
+    );
+    assert_eq!(freshness_of(&brief, id), Some(serde_json::json!("current")));
+}
+
+/// Amend is for *active* beliefs only: a retired (or superseded) claim is a
+/// closed chapter, re-recorded rather than revised. The strict rejection keeps
+/// the disposition axis meaningful.
+#[test]
+fn amend_claim_rejects_an_inactive_claim() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    let recorded = invoke(&[
+        "record-belief",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--statement",
+        "foo returns 1",
+        "--rests-on",
+        "src/lib.rs",
+    ]);
+    let id = serde_json::from_slice::<Value>(&recorded.stdout).unwrap()["claim"]["id"]
+        .as_u64()
+        .unwrap();
+
+    invoke(&[
+        "retire-claim",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--id",
+        &id.to_string(),
+        "--reason",
+        "no longer maintained",
+    ]);
+
+    let amend = invoke_failure(&[
+        "amend-claim",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--id",
+        &id.to_string(),
+        "--statement",
+        "foo returns 2",
+        "--rests-on",
+        "src/lib.rs",
+    ]);
+    let stderr = String::from_utf8_lossy(&amend.stderr);
+    assert!(
+        stderr.contains("not active") && stderr.contains(&id.to_string()),
+        "amending a retired claim must be a strict, named error: {stderr}"
+    );
+}
+
 /// Teeth for the single-pass I/O guarantee itself: a settled `status` reads the
 /// event log a small constant number of times, NOT once per entity. Built with
 /// many observations + claims so the old per-entity-`project()` design would

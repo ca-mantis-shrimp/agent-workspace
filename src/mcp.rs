@@ -52,6 +52,26 @@ pub struct RecordBeliefParams {
     pub full: bool,
 }
 
+/// Input schema for `workspace_amend_claim`, exposing the CLI `amend-claim`
+/// verb: revise an existing active belief in place.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct AmendClaimParams {
+    /// Id of the active claim to revise. Its id and lifecycle are preserved.
+    pub claim_id: u64,
+    /// The revised belief, thesis-first: the assertion as it stands now.
+    pub statement: String,
+    /// Cited supporting paths for the revision (required, non-empty), each
+    /// repository-relative. Freshness is re-anchored to these as they are now.
+    pub rests_on: Vec<String>,
+    /// Claim scope: `declared` (default) binds only the cited paths;
+    /// `conservative-siblings` also fingerprints their repository siblings.
+    pub scope: Option<String>,
+    /// Return the full audit record instead of the default compact receipt
+    /// `{id, freshness, supports:[{path, reused}]}`.
+    #[serde(default)]
+    pub full: bool,
+}
+
 /// Input schema for `workspace_bind_objective`, exposing the CLI
 /// `bind-objective` verb over the same thin transport.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -228,6 +248,30 @@ impl WorkspaceServer {
     }
 
     #[tool(
+        description = "Revise an existing active belief in place: amend_claim(claim_id, statement, rests_on, scope?). Use when an edit has partially overtaken a claim you still hold — revise its statement and re-cite the files as they are now, keeping the claim's id and re-anchoring its freshness, instead of superseding it whole and re-narrating what stayed true. Only active claims can be amended (a superseded/retired belief is re-recorded); the prior revision stays in the append-only log. Citation is mandatory and rejections are strict, exactly like record_belief. Returns a compact receipt {id, freshness, supports:[{path, reused}]} by default; pass full:true for the whole audit record."
+    )]
+    fn workspace_amend_claim(
+        &self,
+        Parameters(params): Parameters<AmendClaimParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let scope = match params.scope.as_deref() {
+            Some("conservative-siblings") => ClaimScopeStrategy::ConservativeSiblingFiles,
+            _ => ClaimScopeStrategy::Declared,
+        };
+        let rests_on: Vec<PathBuf> = params.rests_on.iter().map(PathBuf::from).collect();
+        match self.amend(
+            params.claim_id,
+            params.statement,
+            &rests_on,
+            scope,
+            params.full,
+        ) {
+            Ok(json) => Ok(CallToolResult::success(vec![ContentBlock::text(json)])),
+            Err(message) => Ok(CallToolResult::error(vec![ContentBlock::text(message)])),
+        }
+    }
+
+    #[tool(
         description = "Bind (or rebind) the workspace objective: declare why the current work exists, with an optional reference to an external authority such as a Clearhead action. This records an ObjectiveBound event; a future status/delta will surface the intent and the transition."
     )]
     fn workspace_bind_objective(
@@ -388,6 +432,25 @@ impl WorkspaceServer {
         let rests_on: Vec<PathBuf> = rests_on.to_vec();
         self.run(move |workspace| {
             let belief = workspace.record_belief(statement, &rests_on, scope)?;
+            if full {
+                serde_json::to_value(&belief).map_err(Into::into)
+            } else {
+                serde_json::to_value(belief.brief()).map_err(Into::into)
+            }
+        })
+    }
+
+    fn amend(
+        &self,
+        claim_id: u64,
+        statement: String,
+        rests_on: &[PathBuf],
+        scope: ClaimScopeStrategy,
+        full: bool,
+    ) -> Result<String, String> {
+        let rests_on: Vec<PathBuf> = rests_on.to_vec();
+        self.run(move |workspace| {
+            let belief = workspace.amend_claim(claim_id, statement, &rests_on, scope)?;
             if full {
                 serde_json::to_value(&belief).map_err(Into::into)
             } else {

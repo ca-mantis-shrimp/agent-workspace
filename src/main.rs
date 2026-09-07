@@ -281,6 +281,25 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 options.scope_strategy,
             )?)?;
         }
+        "amend-claim" => {
+            let id = options
+                .id
+                .ok_or_else(|| CliError::Usage("amend-claim requires --id".to_owned()))?;
+            let statement = options
+                .statement
+                .ok_or_else(|| CliError::Usage("amend-claim requires --statement".to_owned()))?;
+            if options.rests_on.is_empty() {
+                return Err(CliError::Usage(
+                    "amend-claim requires at least one --rests-on path".to_owned(),
+                ));
+            }
+            print_json(&workspace.amend_claim(
+                id,
+                statement,
+                &options.rests_on,
+                options.scope_strategy,
+            )?)?;
+        }
         "reconcile-claim" => {
             let id = options
                 .id

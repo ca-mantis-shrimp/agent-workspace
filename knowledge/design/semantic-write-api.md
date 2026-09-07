@@ -238,7 +238,34 @@ caught by making the budget test bind an objective it previously omitted. Both l
 in `src/projection.rs` (`BRIEF_CLAIM_LIMIT`, `BRIEF_STATUS_OBJECTIVE_MAX_CHARS`), so
 every adapter's wake surface inherits the bound.
 
+## amend_claim shipped (2026-09-07)
+
+The field report's highest-leverage proposal — a verb to revise a belief in place
+rather than supersede-whole-and-re-narrate — is implemented as `amend_claim(claim_id,
+statement, rests_on, scope)`, MCP verb `workspace_amend_claim` and CLI `amend-claim`.
+
+The design deliberately did **not** unify amend with supersede, despite the earlier
+"amend is supersede that keeps the id" framing. Supersede is a relationship between
+two distinct claim ids (the projection rejects a claim superseding itself as a
+corrupt log); amend is the evolution of one id. Forcing them together would special-
+case away that invariant. What they legitimately share is the append-only discipline,
+and that is already provided by the event log — so amend is its own `ClaimAmended`
+event, but it reuses the *assembly* machinery (`assemble_claim`) and the support-
+capture loop (`capture_supports`) that recording uses, so record and amend compute
+identical inputs, fingerprints, and freshness and differ only in which event they
+append and which id it names.
+
+Semantics: only an **active** claim can be amended (a superseded/retired belief is
+re-recorded, not revised); the id and lifecycle are preserved; freshness is
+re-anchored to the cited files as they now stand (the value prop — a claim stale
+because its file moved becomes current again); a `revision` counter on the claim
+records that prior versions exist in the append-only log (the integrity nod — history
+is never overwritten, and `revision` is the visible signal it exists); an
+open-transaction claim is frozen, same guard as supersede. The receipt reuses Slice
+A's compact `Belief` shape. This dissolves the report's finding #2 (whole-claim-only
+supersede forced a broad-vs-narrow dilemma).
+
 Still open: tiering `workspace_observe_read`'s capture receipt (a different,
 capture-shaped payload, and not on the Claude adapter's hot path since its capture
-hook uses the CLI), and — as a separate feature spike, not a representation change —
-`amend_claim`.
+hook uses the CLI); and a projection that surfaces a claim's *prior* revision text
+(the log has it; only the `revision` count is projected today).
