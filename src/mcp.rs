@@ -274,6 +274,21 @@ impl WorkspaceServer {
         F: FnOnce(&Workspace) -> Result<T, agent_workspace::WorkspaceError>,
         T: serde::Serialize,
     {
+        // Fail with proprioception, not a bare os error. When the client starts
+        // the server with a `--repository` that never resolved (e.g. an
+        // unexpanded `${CLAUDE_PROJECT_DIR}` literal), every kernel call would
+        // otherwise die as "No such file or directory" with no hint at the
+        // cause. Name the path and the usual culprit before touching the store.
+        if !self.repository.is_dir() {
+            return Err(format!(
+                "workspace repository path '{}' does not exist or is not a \
+                 directory. The MCP server was started with this --repository; \
+                 if your client substitutes a variable like ${{CLAUDE_PROJECT_DIR}}, \
+                 confirm it expanded to a real path — an unexpanded literal is \
+                 the usual cause.",
+                self.repository.display()
+            ));
+        }
         let root =
             resolve_state_root(&self.repository, None, None).map_err(|error| error.to_string())?;
         let workspace =
@@ -409,6 +424,17 @@ impl ServerHandler for WorkspaceServer {
 /// Serve the workspace over stdio. Builds a contained current-thread runtime so
 /// the rest of the binary stays synchronous; blocks until the client hangs up.
 pub fn serve(repository: PathBuf) -> Result<(), std::io::Error> {
+    // Surface a misconfigured repository in the client's MCP server log at
+    // startup, not only per-call. Non-fatal: the server still serves so tools
+    // list and each call returns the same named error to the agent.
+    if !repository.is_dir() {
+        eprintln!(
+            "agent-workspace mcp: warning — repository path '{}' does not exist \
+             or is not a directory; every workspace call will fail until it is \
+             corrected (an unexpanded --repository variable is the usual cause).",
+            repository.display()
+        );
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()

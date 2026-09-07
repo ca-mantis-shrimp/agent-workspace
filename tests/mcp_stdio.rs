@@ -276,6 +276,42 @@ fn mcp_server_records_a_belief_over_stdio() {
 }
 
 #[test]
+fn mcp_server_names_a_missing_repository_instead_of_a_bare_io_error() {
+    // Simulate the client starting the server with a `--repository` that never
+    // resolved (e.g. an unexpanded `${CLAUDE_PROJECT_DIR}` literal): the parent
+    // exists but the target path does not. The agent must get a named,
+    // actionable error, not a context-free "No such file or directory".
+    let parent = tempfile::tempdir().unwrap();
+    let missing = parent.path().join("unexpanded-project-dir");
+    let state = tempfile::tempdir().unwrap();
+    let mut server = start(&missing, state.path());
+
+    // Startup is intentionally non-fatal, so tools still list and the per-call
+    // error is what reaches the agent.
+    let names = server.handshake();
+    assert!(
+        names.contains(&"workspace_record_belief".to_owned()),
+        "tools should still list with a bad repository; got {names:?}"
+    );
+
+    let bad = server.call(
+        3,
+        "workspace_record_belief",
+        json!({"statement": "anything", "rests_on": ["src/lib.rs"]}),
+    );
+    assert_eq!(
+        bad["result"]["isError"],
+        json!(true),
+        "a missing repository must surface as an error: {bad}"
+    );
+    let text = bad["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("does not exist") && text.contains("unexpanded-project-dir"),
+        "error must name the bad path and its cause, got: {text}"
+    );
+}
+
+#[test]
 fn mcp_server_binds_an_objective_over_stdio() {
     let repo = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
