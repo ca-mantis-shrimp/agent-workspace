@@ -172,6 +172,14 @@ pub struct TransactionPreviewParams {
     pub transaction: u64,
 }
 
+/// Input schema for `workspace_explain_stale`, exposing the CLI `explain-stale`
+/// verb: make a stale verdict cheap to investigate.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ExplainStaleParams {
+    /// Id of the claim to investigate.
+    pub claim_id: u64,
+}
+
 #[tool_router]
 impl WorkspaceServer {
     pub fn new(repository: PathBuf) -> Self {
@@ -223,6 +231,16 @@ impl WorkspaceServer {
         Parameters(params): Parameters<TransactionPreviewParams>,
     ) -> Result<CallToolResult, McpError> {
         self.tool_result(self.transaction_preview(params.transaction))
+    }
+
+    #[tool(
+        description = "Investigate why a claim reads stale: explain_stale(claim_id). Returns the claim-level freshness and reason plus, per supporting input, whether it drifted and what it looks like now — a git diff of the file (last commit vs working tree) scoped to the observed region, degrading to the current bytes when git has no baseline (an untracked file, or drift already committed). Read-only: it runs after reconciliation and cannot change any verdict. Use it when status reports a claim stale and you need to see the change before re-reading or re-recording."
+    )]
+    fn workspace_explain_stale(
+        &self,
+        Parameters(params): Parameters<ExplainStaleParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.tool_result(self.explain(params.claim_id))
     }
 
     #[tool(
@@ -420,6 +438,10 @@ impl WorkspaceServer {
                 agent_workspace::WorkspaceError::TransactionNotFound(transaction_id),
             )
         })
+    }
+
+    fn explain(&self, claim_id: u64) -> Result<String, String> {
+        self.run(move |workspace| workspace.explain_stale(claim_id))
     }
 
     fn record(

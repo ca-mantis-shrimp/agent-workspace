@@ -668,3 +668,38 @@ fn mcp_server_checkpoints_and_captures_reads_over_stdio() {
         "duplicate label must be an error: {bad}"
     );
 }
+
+#[test]
+fn mcp_server_explains_a_stale_claim_over_stdio() {
+    let repo = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    make_repo(repo.path());
+    let mut server = start(repo.path(), state.path());
+
+    let names = server.handshake();
+    assert!(
+        names.contains(&"workspace_explain_stale".to_owned()),
+        "explain-stale not routed; got {names:?}"
+    );
+
+    let belief = server.call(
+        3,
+        "workspace_record_belief",
+        json!({"statement": "hello.txt greets the world", "rests_on": ["hello.txt"]}),
+    );
+    let claim_id = tool_json(&belief)["id"].as_u64().unwrap();
+
+    // Drift the cited file out from under the claim, uncommitted, so git still
+    // holds the observed bytes and can show exactly what moved.
+    std::fs::write(repo.path().join("hello.txt"), "goodbye world\n").unwrap();
+
+    let explanation =
+        tool_json(&server.call(4, "workspace_explain_stale", json!({"claim_id": claim_id})));
+    assert_eq!(explanation["freshness"], "stale");
+    assert_eq!(explanation["inputs"][0]["status"], "changed");
+    let view = &explanation["inputs"][0]["view"];
+    assert_eq!(view["kind"], "diff");
+    let diff = view["text"].as_str().unwrap();
+    assert!(diff.contains("-hello world"), "old line: {diff}");
+    assert!(diff.contains("+goodbye world"), "new line: {diff}");
+}

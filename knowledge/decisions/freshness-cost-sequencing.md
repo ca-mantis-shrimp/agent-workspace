@@ -9,9 +9,11 @@ generated: { by: claude-code/opus-4.8, at: 2026-09-07T22:36:15Z }
 # Decision — sequence the freshness-cost work; do not adopt the relocation record shape yet
 
 **Status:** agreed 2026-09-07. **Step 1 (diff-on-stale) shipped 2026-09-07** —
-`Workspace::explain_stale` + the `explain-stale` CLI verb return a selector-scoped
-`git diff HEAD` per drifted input, degrading to current content when git has no
-baseline (untracked, or drift already committed). Steps 2–3 not started.
+`Workspace::explain_stale`, the `explain-stale` CLI verb, and the
+`workspace_explain_stale` MCP tool return a selector-scoped `git diff HEAD` per
+drifted input, degrading to current content when git has no baseline (untracked,
+or drift already committed). Reachable from a live harness, not just the CLI.
+Steps 2–3 not started.
 **Date:** 2026-09-07
 **Participants:** user + assistant, reacting to the pi/gpt-5.4 proposal.
 
