@@ -1,4 +1,12 @@
 ## 2026-09-07
+* **Update**: Linked `evaluations/plot-foreign-dogfood-write-loop.md` to `design/semantic-write-api.md` (Proposes amend_claim (append-only) and tiered receipts as revisions to the semantic write API.).
+* **Update**: Updated concept `evaluations/plot-foreign-dogfood-write-loop.md`.
+* **Update**: Linked `evaluations/plot-foreign-dogfood-write-loop.md` to `research/structural-freshness-without-formatter-coupling.md` (Diff-on-stale and the true-positive reframe of false-stale bear directly on structural freshness.).
+* **Update**: Updated concept `evaluations/plot-foreign-dogfood-write-loop.md`.
+* **Update**: Linked `evaluations/plot-foreign-dogfood-write-loop.md` to `evaluations/plot-foreign-dogfood.md` (Follows and extends the first foreign dogfood: supplies the in-anger staleness and heavy-supersede evidence its 'did not test' section left open.).
+* **Update**: Updated concept `evaluations/plot-foreign-dogfood-write-loop.md`.
+* **Update**: Updated concept `evaluations/plot-foreign-dogfood-write-loop.md`.
+* **Creation**: Documented concept `evaluations/plot-foreign-dogfood-write-loop.md` (plot-foreign-dogfood-write-loop).
 * **Update**: Linked `implementation/implementation-notes.md` to `decisions/claim-retirement-disposition.md` (Implementation history records the executable consequences of the claim-retirement disposition.).
 * **Update**: Updated concept `implementation/implementation-notes.md`.
 * **Update**: Linked `decisions/claim-retirement-disposition.md` to `decisions/mcp-repository-resolution.md` (Fixes the missing-retract-verb gap this decision surfaced while dogfooding the MCP door.).

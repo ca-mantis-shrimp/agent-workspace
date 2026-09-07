@@ -7,3 +7,4 @@
 * [S1 implementation review](review-s1-implementation.md) - Reviews the first observation-staleness implementation against the executable contract.
 * [S6 implementation review](review-s6-implementation.md) - Reviews clean-base transaction rollback against ownership and safety invariants.
 * [Tooling friction and the case for subtraction](tooling-friction-and-subtraction-review.md) - Assesses which workspace and memory tools an agent would choose voluntarily and recommends simplifying the operating protocol before adding capabilities.
+* [Second foreign dogfood — write-loop papercuts and their fixes](plot-foreign-dogfood-write-loop.md) - Reports the second foreign-repository session in plot, the first to observe claims going stale in-anger and to exercise supersede heavily, and proposes amend_claim and diff-on-stale.
