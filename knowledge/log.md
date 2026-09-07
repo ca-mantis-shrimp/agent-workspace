@@ -1,4 +1,7 @@
 ## 2026-09-07
+* **Update**: Linked `decisions/mcp-repository-resolution.md` to `decisions/mcp-centered-tool-surface.md` (Operational hardening of the MCP surface this decision established: how the server learns its repository and fails legibly.).
+* **Update**: Updated concept `decisions/mcp-repository-resolution.md`.
+* **Creation**: Documented concept `decisions/mcp-repository-resolution.md` (MCP servers resolve their repository from the launch directory and fail loud when it is wrong).
 * **Update**: Linked `decisions/typescript-formatter-gate.md` to `decisions/mcp-centered-tool-surface.md` (Governs the Pi extension whose TypeScript this decision keeps canonical.).
 * **Update**: Updated concept `decisions/typescript-formatter-gate.md`.
 * **Update**: Linked `decisions/typescript-formatter-gate.md` to `research/structural-freshness-without-formatter-coupling.md` (Distinct concern: this formatter enforces source-commit hygiene, not the freshness fingerprinting that research rejected coupling to a formatter.).
