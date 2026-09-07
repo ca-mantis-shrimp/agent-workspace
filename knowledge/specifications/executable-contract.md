@@ -1,8 +1,16 @@
+---
+type: Specification
+title: Executable contract for the Agent Workspace MVP
+description: Defines normative vocabulary, invariants, failure modes, and executable acceptance scenarios.
+tags: [contract, invariants, acceptance]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+---
+
 # Executable Contract — Agent Workspace MVP (rev. 2, 2026-09-01)
 
 *Revision 2 closes the design phase. It folds in both critiques
-([response-to-agent-perspective](response-to-agent-perspective.md),
-[response-to-executable-contract](response-to-executable-contract.md)) and is the doc of
+([response-to-agent-perspective](../evaluations/response-to-agent-perspective.md),
+[response-to-executable-contract](../evaluations/response-to-executable-contract.md)) and is the doc of
 record from which the walking skeleton begins. Infrastructure-agnostic: it precedes the choice
 of storage/language. Every scenario is a concrete, checkable behavior; every failure-model item
 must **never** be observed. Further doc-only refinement is explicitly out of scope — open

@@ -1,0 +1,40 @@
+## 2026-09-07
+
+* **Update**: Updated concept `implementation/implementation-notes.md`.
+
+* **Update**: Linked `decisions/external-workspace-and-clearhead-boundary.md` to `decisions/okf-curated-knowledge-layer.md` (Extends the authority boundary with a separate Git-native curated knowledge plane.).
+* **Update**: Updated concept `decisions/external-workspace-and-clearhead-boundary.md`.
+
+* **Creation**: Documented concept `decisions/okf-curated-knowledge-layer.md` (Use OKF for curated project knowledge).
+
+* **Update**: Linked `implementation/implementation-notes.md` to `evaluations/plot-foreign-dogfood.md` (Implementation history records the executable consequences and follow-up evidence for this concept.).
+* **Update**: Updated concept `implementation/implementation-notes.md`.
+* **Update**: Linked `implementation/implementation-notes.md` to `evaluations/dogfood-cold-resume.md` (Implementation history records the executable consequences and follow-up evidence for this concept.).
+* **Update**: Updated concept `implementation/implementation-notes.md`.
+* **Update**: Linked `implementation/implementation-notes.md` to `design/s7-bounded-perception.md` (Implementation history records the executable consequences and follow-up evidence for this concept.).
+* **Update**: Updated concept `implementation/implementation-notes.md`.
+* **Update**: Linked `implementation/implementation-notes.md` to `design/semantic-write-api.md` (Implementation history records the executable consequences and follow-up evidence for this concept.).
+* **Update**: Updated concept `implementation/implementation-notes.md`.
+* **Update**: Linked `implementation/implementation-notes.md` to `decisions/mcp-centered-tool-surface.md` (Implementation history records the executable consequences and follow-up evidence for this concept.).
+* **Update**: Updated concept `implementation/implementation-notes.md`.
+* **Update**: Linked `implementation/implementation-notes.md` to `decisions/external-workspace-and-clearhead-boundary.md` (Implementation history records the executable consequences and follow-up evidence for this concept.).
+* **Update**: Updated concept `implementation/implementation-notes.md`.
+
+* **Creation**: Documented concept `implementation/implementation-notes.md` (Implementation notes).
+* **Creation**: Documented concept `research/structural-freshness-without-formatter-coupling.md` (Structural freshness without formatter coupling).
+* **Creation**: Documented concept `evaluations/review-s6-implementation.md` (S6 implementation review).
+* **Creation**: Documented concept `evaluations/review-s1-implementation.md` (S1 implementation review).
+* **Creation**: Documented concept `evaluations/response-to-executable-contract.md` (Response to the revised perspective and executable contract).
+* **Creation**: Documented concept `evaluations/response-to-agent-perspective.md` (Response to the agent's perspective).
+* **Creation**: Documented concept `evaluations/dogfood-cold-resume.md` (Dogfooding the workspace on a cold resume).
+* **Creation**: Documented concept `evaluations/plot-foreign-dogfood.md` (First foreign dogfood of the semantic write API).
+* **Creation**: Documented concept `specifications/executable-contract.md` (Executable contract for the Agent Workspace MVP).
+* **Creation**: Documented concept `design/initial-design.md` (Initial design outline).
+* **Creation**: Documented concept `design/semantic-write-api.md` (Semantic write API).
+* **Creation**: Documented concept `design/s7-bounded-perception.md` (S7 bounded perception).
+* **Creation**: Documented concept `design/configurable-normalizers.md` (Configurable normalizers).
+* **Creation**: Documented concept `design/agent-perspective.md` (The agent's perspective).
+* **Creation**: Documented concept `decisions/mcp-centered-tool-surface.md` (Center the tool surface on MCP).
+* **Creation**: Documented concept `decisions/external-workspace-and-clearhead-boundary.md` (External workspace state and the Clearhead boundary).
+
+* **Creation**: Initialized OKF v0.2 project memory.

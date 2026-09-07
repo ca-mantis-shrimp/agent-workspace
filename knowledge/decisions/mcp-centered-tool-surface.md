@@ -1,3 +1,11 @@
+---
+type: Decision
+title: Center the tool surface on MCP
+description: Makes MCP the canonical workspace tool surface and Pi a thin MCP client plus read-capture hook.
+tags: [architecture, mcp, pi]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+---
+
 # Decision — Center the tool surface on MCP
 
 **Status:** implemented 2026-09-06. The MCP server owns all ten workspace tool schemas; the Pi extension is an official SDK client plus capture hook, and the parallel TypeScript tool implementations are removed.

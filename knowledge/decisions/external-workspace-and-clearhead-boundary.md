@@ -1,3 +1,11 @@
+---
+type: Decision
+title: External workspace state and the Clearhead boundary
+description: Keeps dynamic workspace state external and defines Clearhead and Agent Workspace as sibling authorities.
+tags: [architecture, storage, clearhead]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:09:45Z }
+---
+
 # Decision — External workspace state and the Clearhead boundary
 
 **Status:** Accepted direction; implementation and foreign-repository dogfood pending
@@ -107,3 +115,7 @@ concept: installed-kernel discovery, external project-scoped state, global Pi
 projection, and worktree/session attribution. It must be followed immediately by
 a real multi-session task in a foreign repository. Subsequent features should be
 pulled by failures observed there rather than by further self-hosting alone.
+
+# Related Concepts
+
+- [Use OKF for curated project knowledge](okf-curated-knowledge-layer.md): Extends the authority boundary with a separate Git-native curated knowledge plane.

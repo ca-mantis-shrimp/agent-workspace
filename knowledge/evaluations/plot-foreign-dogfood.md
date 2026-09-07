@@ -1,3 +1,11 @@
+---
+type: Field Report
+title: First foreign dogfood of the semantic write API
+description: Reports the first foreign-repository trial of the semantic write API and its measured behavior.
+tags: [evaluation, dogfood, foreign-repository]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+---
+
 # Field report — first foreign dogfood of the semantic write API
 
 *Written by the working agent after a session in the `plot` repo (the foreign

@@ -52,7 +52,7 @@ thin Neovim projection.
 4. **Adapters** — narrow integrations for Git plus one structural provider and one validation provider.
 5. **Projections** — a harness-agnostic MCP surface (Claude Code, Cursor, …) and the Pi tool surface, then a thin Neovim projection of the same state.
 
-See [the initial design outline](docs/initial-design.md) and [the active MVP charter](.clearhead/charters/workspace-mvp.md).
+See [the initial design outline](knowledge/design/initial-design.md) and [the active MVP charter](.clearhead/charters/workspace-mvp.md).
 
 ## Project state
 
@@ -65,7 +65,7 @@ clearhead query index unscheduled
 ```
 
 The executable contract is recorded in the
-[executable contract](docs/executable-contract.md). The walking skeleton and its
+[executable contract](knowledge/specifications/executable-contract.md). The walking skeleton and its
 agent-facing MVP are complete: revision-aware observations and claims, bounded
 working sets, persistent findings, evidence-gated reversible transactions,
 checkpoint/delta recovery, and the MCP, Pi, and Claude Code surfaces all share
@@ -79,12 +79,13 @@ reconstructing it, and that the fused `record_belief` write verb lands first-try
 The write loop is now reachable as a native tool — over MCP for any client, and
 as a Pi custom tool — instead of raw CLI. The storage, ownership, and Clearhead
 authority boundaries are in the
-[external-workspace decision](docs/decision-external-workspace-and-clearhead-boundary.md);
+[external-workspace decision](knowledge/decisions/external-workspace-and-clearhead-boundary.md);
 measurements are in the
-[self-hosted field report](docs/reflection-dogfood-cold-resume.md) and the
-[foreign-repo write-API field report](docs/field-report-plot-foreign-dogfood.md);
-implementation choices settled by running code are in
-[`docs/implementation-notes.md`](docs/implementation-notes.md).
+[self-hosted field report](knowledge/evaluations/dogfood-cold-resume.md) and the
+[foreign-repo write-API field report](knowledge/evaluations/plot-foreign-dogfood.md);
+implementation choices settled by running code are in the
+[OKF knowledge bundle](knowledge/index.md), especially the
+[implementation notes](knowledge/implementation/implementation-notes.md).
 
 A residual surfaced while writing these docs: with the active-claim set grown,
 the Claude Code `SessionStart` wake status now exceeds the harness's inline

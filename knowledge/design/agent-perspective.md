@@ -1,3 +1,11 @@
+---
+type: Design Note
+title: The agent's perspective
+description: Examines the workspace design from the operating agent perspective and identifies required corrections.
+tags: [design, agent-experience]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+---
+
 # Design Note — The Agent's Perspective (2026-09-01)
 
 *A first-person position paper from the intended user of this tool (a coding agent),
@@ -6,7 +14,8 @@ distilled from a design conversation. It is deliberately opinionated and is mean
 point. The final section lists where I most want to be attacked.*
 
 This note does **not** restate the mechanics already in
-[`initial-design.md`](initial-design.md) and [`workspace-mvp.md`](../.clearhead/charters/workspace-mvp.md)
+[`initial-design.md`](initial-design.md) and the Clearhead charter at
+`.clearhead/charters/workspace-mvp.md`
 — those already contain freshness, semantic-location fingerprints, evidence invalidation,
 restart recovery, and progressive disclosure. It records the **why** those documents omit,
 and a shift in what should sit at the center.
@@ -132,9 +141,9 @@ treating everything else as unearned until then.*
 ## Revised after critique (2026-09-01)
 
 A second model reviewed this note; its critique is in
-[`response-to-agent-perspective.md`](response-to-agent-perspective.md). The following positions
+[`response-to-agent-perspective.md`](../evaluations/response-to-agent-perspective.md). The following positions
 in this note were **corrected or sharpened** and should be read as superseded on these points.
-The [`executable-contract.md`](executable-contract.md) encodes the resolved version.
+The [`executable-contract.md`](../specifications/executable-contract.md) encodes the resolved version.
 
 - **"Memory that knows when it is lying" overreaches.** A span fingerprint proves the *bytes
   under an observation* changed — not the *dependencies of an inference*. Superseded by a

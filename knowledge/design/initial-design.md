@@ -1,3 +1,11 @@
+---
+type: Design Hypothesis
+title: Initial design outline
+description: Records the original workspace architecture hypothesis that later executable evidence revised.
+tags: [design, history, hypothesis]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+---
+
 # Initial Design Outline
 
 This document is a starting hypothesis, not an implementation contract. The `contract` action should turn it into explicit invariants and executable scenarios.

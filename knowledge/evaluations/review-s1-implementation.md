@@ -1,8 +1,16 @@
+---
+type: Implementation Review
+title: S1 implementation review
+description: Reviews the first observation-staleness implementation against the executable contract.
+tags: [review, implementation, freshness]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+---
+
 # Review — S1 Implementation (2026-09-01)
 
 *Commentary on the first walking-skeleton slice (`src/lib.rs`, `src/main.rs`,
 `tests/s1_observation_staleness.rs`, commit `dee05a8`). Reviewed against
-[`executable-contract.md`](executable-contract.md) rev. 2. This is commentary, not a patch:
+[`executable-contract.md`](../specifications/executable-contract.md) rev. 2. This is commentary, not a patch:
 finding #1 is a design decision that belongs to the implementer, not something a reviewer
 should quietly impose.*
 

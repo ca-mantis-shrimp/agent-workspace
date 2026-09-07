@@ -1,8 +1,16 @@
+---
+type: Implementation Review
+title: S6 implementation review
+description: Reviews clean-base transaction rollback against ownership and safety invariants.
+tags: [review, implementation, transactions]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+---
+
 # Review — S6 Implementation (2026-09-01)
 
 *Commentary on the clean-base transaction rollback slice (`src/lib.rs`
 `apply_file_mutation` / `revert_transaction`, `tests/walking_skeleton.rs`,
-commit `562f5b9`). Reviewed against [`executable-contract.md`](executable-contract.md)
+commit `562f5b9`). Reviewed against [`executable-contract.md`](../specifications/executable-contract.md)
 invariant I10 and failure-model item F8 (destructive revert), and the S9/S10 scenarios.
 Verified: `cargo test` 12 green, clippy clean, code read end-to-end.*
 

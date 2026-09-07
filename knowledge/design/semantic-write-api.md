@@ -1,3 +1,11 @@
+---
+type: Design Note
+title: Semantic write API
+description: Designs belief-centered write operations that join ambient observations to deliberate claims.
+tags: [design, api, claims]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+---
+
 # Design note — semantic write API (plan, not yet built)
 
 > **Status update 2026-09-03:** the first cut has shipped — `record-belief`

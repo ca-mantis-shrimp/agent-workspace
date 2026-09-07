@@ -1,3 +1,11 @@
+---
+type: Implementation Log
+title: Implementation notes
+description: Records implementation decisions settled by executable walking-skeleton and dogfood evidence.
+tags: [implementation, history, decisions]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:10:06Z }
+---
+
 # Implementation Notes
 
 This document records choices settled by walking-skeleton evidence. The
@@ -1043,7 +1051,7 @@ trusted that path verbatim. That is fine while the workspace only ever observes
 its own repository, but foreign dogfood needs an installed kernel that resolves
 *one logical workspace per project* under an external, XDG-style local state
 root — dynamic state must not travel implicitly inside the observed repo's Git
-tree (see `docs/decision-external-workspace-and-clearhead-boundary.md`).
+tree (see `knowledge/decisions/external-workspace-and-clearhead-boundary.md`).
 
 This is the first, deliberately thin cut: location only. Registry, global Pi
 projection, and workstream/worktree/session partitioning are follow-up slices,
@@ -1193,7 +1201,7 @@ dynamic, working.
 
 ## 2026-09-03 — The fused write verb: `record-belief` (write-API slice 1)
 
-The semantic write API plan (`docs/design-note-semantic-write-api.md`) diagnosed
+The semantic write API plan (`knowledge/design/semantic-write-api.md`) diagnosed
 claim starvation: the read side is first-class in both adapters, but the write
 loop was raw CLI behind prose, so observations accumulated ambiently while
 claims almost never landed (plot sat at ~22 observations to 1 claim). This slice
@@ -1247,7 +1255,7 @@ ships the plan's thinnest falsifiable cut.
 A user challenge exposed that the configurable-normalizer direction was still
 making formatting infrastructure part of freshness. A two-advisor council then
 converged on a narrower target architecture, recorded in
-[`research-structural-freshness-without-formatter-coupling.md`](research-structural-freshness-without-formatter-coupling.md).
+[`research-structural-freshness-without-formatter-coupling.md`](../research/structural-freshness-without-formatter-coupling.md).
 
 - **Four identities, not one overloaded fingerprint.** Exact capture identity
   proves what the model saw; structural location identity relocates code;
@@ -1281,7 +1289,7 @@ converged on a narrower target architecture, recorded in
 
 The structural direction above was **built as a spike and then declined.** The
 full account is in
-[`research-structural-freshness-without-formatter-coupling.md`](research-structural-freshness-without-formatter-coupling.md)
+[`research-structural-freshness-without-formatter-coupling.md`](../research/structural-freshness-without-formatter-coupling.md)
 §14; the short version: a `TreeSitterCstV1` projection nearly shipped a
 false-current collision (comment bodies live in inter-child gaps, not leaves),
 and a usefulness bake-off measured it recovering only 3/5 formatting reflows
@@ -1366,7 +1374,7 @@ projected `Objective` as pretty-printed JSON.
 
 ## 2026-09-04 — MCP write loop completed: supersede-claim, checkpoint, observe-read
 
-Per the migration plan in `docs/decision-mcp-centered-tool-surface.md`, the three
+Per the migration plan in `knowledge/decisions/mcp-centered-tool-surface.md`, the three
 remaining write-loop verbs are now MCP tools, completing steps 1–2 (stabilize
 verbs, expose `workspace_observe_read`) before the Pi extension refactor.
 
@@ -1478,3 +1486,35 @@ The MCP-centered decision is now implemented end to end.
   transaction preview, and strict not-found rejection. Pi tests use a fake MCP
   server to prove discovery, input forwarding, strict tool errors, client
   shutdown, harmless absence, and exact Unicode/model-visible byte accounting.
+
+## 2026-09-07 — Curated documentation migrated to OKF
+
+The user installed OKF Agent Memory and chose it as the representation for the
+repository's curated knowledge layer — replacing the ad hoc `docs/` corpus, not
+the Agent Workspace operational system.
+
+- **One corpus, no mirrored copy.** Sixteen existing documents moved into the
+  `knowledge/` OKF v0.2 bundle under decisions, design, specifications, research,
+  evaluations, and implementation. Their bodies were preserved; links and
+  repository entry points now target stable concept paths.
+- **Authority boundaries stay explicit.** Clearhead still owns work lifecycle;
+  external Agent Workspace state still owns observations, claims, findings,
+  evidence, checkpoints, and transactions; OKF owns durable, Git-reviewed
+  project knowledge. A new decision concept records this boundary.
+- **Progressive disclosure is executable.** Root and category indexes expose the
+  corpus shape, BM25 search retrieves the MCP decision and foreign-dogfood
+  evidence directly, and `.mcp.json` advertises the OKF server alongside Agent
+  Workspace.
+- **Validation.** `okf validate knowledge --strict --drift` reports seventeen
+  conformant concepts, no warnings, broken links, or orphans. A preservation
+  check compared every migrated body with its Git predecessor modulo intentional
+  path rewrites and one markdown-list spacing fix.
+
+# Related Concepts
+
+- [External workspace state and the Clearhead boundary](../decisions/external-workspace-and-clearhead-boundary.md): Implementation history records the executable consequences and follow-up evidence for this concept.
+- [Center the tool surface on MCP](../decisions/mcp-centered-tool-surface.md): Implementation history records the executable consequences and follow-up evidence for this concept.
+- [Semantic write API](../design/semantic-write-api.md): Implementation history records the executable consequences and follow-up evidence for this concept.
+- [S7 bounded perception](../design/s7-bounded-perception.md): Implementation history records the executable consequences and follow-up evidence for this concept.
+- [Dogfooding the workspace on a cold resume](../evaluations/dogfood-cold-resume.md): Implementation history records the executable consequences and follow-up evidence for this concept.
+- [First foreign dogfood of the semantic write API](../evaluations/plot-foreign-dogfood.md): Implementation history records the executable consequences and follow-up evidence for this concept.

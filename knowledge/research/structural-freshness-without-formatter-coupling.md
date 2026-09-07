@@ -1,3 +1,11 @@
+---
+type: Research
+title: Structural freshness without formatter coupling
+description: Tests structural freshness approaches against false-current safety and useful reflow tolerance.
+tags: [research, freshness, tree-sitter]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+---
+
 # Structural freshness without formatter coupling
 
 > **Decision (2026-09-04): investigated, and declined.** A kernel-only spike
@@ -450,11 +458,11 @@ in adapters and freshness, and require the falsifiable structural experiment.
 
 ## References
 
-- [`executable-contract.md`](executable-contract.md), especially invariants 1–3,
+- [`executable-contract.md`](../specifications/executable-contract.md), especially invariants 1–3,
   8–11 and failures F1, F2, F4, and F9.
-- [`design-note-configurable-normalizers.md`](design-note-configurable-normalizers.md),
+- [`design-note-configurable-normalizers.md`](../design/configurable-normalizers.md),
   documenting the formatter-based path and its determinism problem.
-- [`implementation-notes.md`](implementation-notes.md), sections “Normalized
+- [`implementation-notes.md`](../implementation/implementation-notes.md), sections “Normalized
   fingerprinting,” “Auto-normalize default,” and “Candidate-state evidence.”
 - [`../src/reconcile.rs`](../src/reconcile.rs), current capture,
   normalization, and reconciliation primitives.
@@ -507,4 +515,4 @@ a plausible hypothesis into a measured, rejected one. Formatter-normalization,
 computed kernel-side over a lockfile-pinned binary, is the simpler mechanism that
 better serves the actual pain (agents re-reading — or worse, reverting format
 commits — over reflow-induced false-stale). See
-[`implementation-notes.md`](implementation-notes.md) “Prettier normalization.”
+[`implementation-notes.md`](../implementation/implementation-notes.md) “Prettier normalization.”

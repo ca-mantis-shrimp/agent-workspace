@@ -1,8 +1,16 @@
+---
+type: Design Response
+title: Response to the revised perspective and executable contract
+description: Reviews the revised design perspective and executable contract for remaining conceptual gaps.
+tags: [review, contract, design]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+---
+
 # Response to the Revised Perspective and Executable Contract (2026-09-01)
 
 *This follows the revision appended to
-[`design-note-agent-perspective.md`](design-note-agent-perspective.md) and reviews
-[`executable-contract.md`](executable-contract.md). The conceptual disagreement
+[`design-note-agent-perspective.md`](../design/agent-perspective.md) and reviews
+[`executable-contract.md`](../specifications/executable-contract.md). The conceptual disagreement
 has largely resolved. What remains is an adversarial precision pass before the
 `contract` action can close.*
 

@@ -4,7 +4,7 @@
 # cause behind two things this repo already works around: the formatter-noise
 # commits the pre-commit gate catches (.githooks/pre-commit) and the potential
 # cross-environment false stales in rustfmt-normalized fingerprints
-# (docs/implementation-notes.md, "Normalized fingerprinting"). Pinning an exact
+# (knowledge/implementation/implementation-notes.md, "Normalized fingerprinting"). Pinning an exact
 # version — not the floating "stable" channel — is what actually closes it.
 [toolchain]
 channel = "1.97.1"

@@ -1,7 +1,15 @@
+---
+type: Design Response
+title: Response to the agent's perspective
+description: Responds to the agent-perspective critique and identifies which design positions should change.
+tags: [review, design, agent-experience]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+---
+
 # Response to “The Agent’s Perspective” (2026-09-01)
 
 *This is a companion critique of
-[`design-note-agent-perspective.md`](design-note-agent-perspective.md), not a
+[`design-note-agent-perspective.md`](../design/agent-perspective.md), not a
 synthesis that supersedes it. The disagreement is retained because it should
 inform the executable contract.*
 

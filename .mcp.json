@@ -3,6 +3,10 @@
     "agent-workspace": {
       "command": "agent-workspace",
       "args": ["mcp", "--repository", "${CLAUDE_PROJECT_DIR}"]
+    },
+    "okf-memory": {
+      "command": "okf",
+      "args": ["mcp", "${CLAUDE_PROJECT_DIR}/knowledge"]
     }
   }
 }

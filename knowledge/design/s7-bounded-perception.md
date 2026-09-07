@@ -1,3 +1,11 @@
+---
+type: Design Note
+title: S7 bounded perception
+description: Develops the bounded-perception scenario and its byte-accounting and provenance constraints.
+tags: [design, perception, provenance]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+---
+
 # Design note — S7 bounded perception (commentary, not spec)
 
 *Written while dogfooding the workspace on a cold resume. Assesses how to make S7
@@ -8,6 +16,7 @@ falsifiable with the thinnest possible kernel change. Anchored to
 ## S7 restated
 
 Fixed repo task, run **raw** vs **workspace-assisted**. Pass requires **all** of:
+
 1. both arms complete the task (mechanically checkable — a test passes);
 2. the assisted arm **ingests fewer bytes/tokens** under a *defined accounting boundary*;
 3. full provider detail stays **retrievable on demand**.

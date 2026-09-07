@@ -1,3 +1,11 @@
+---
+type: Field Report
+title: Dogfooding the workspace on a cold resume
+description: Synthesizes multi-session self-dogfood evidence about recovery, trust, friction, and next steps.
+tags: [evaluation, dogfood, resume]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+---
+
 # Reflection — dogfooding the workspace on a cold resume
 
 *Written by the reviewing agent after a session whose stated purpose was to test

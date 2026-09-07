@@ -1,9 +1,17 @@
+---
+type: Design Note
+title: Configurable normalizers
+description: Explores configuration-driven formatter normalization and records the limits that redirected freshness research.
+tags: [design, freshness, normalization]
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+---
+
 # Design note — configurable normalizers
 
 > **Status 2026-09-04:** slice 1 shipped, then this direction was superseded
 > before slice 2. Do not add Prettier, Black, or another formatter integration.
 > The formatter seam remains a historical compatibility path while
-> [`research-structural-freshness-without-formatter-coupling.md`](research-structural-freshness-without-formatter-coupling.md)
+> [`research-structural-freshness-without-formatter-coupling.md`](../research/structural-freshness-without-formatter-coupling.md)
 > tests a versioned tree-sitter relevance identity. This note remains the record
 > of the implemented slice and the formatter-coupling problem it exposed.
 >
