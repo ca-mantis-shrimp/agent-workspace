@@ -6,3 +6,4 @@
 * [Response to the revised perspective and executable contract](response-to-executable-contract.md) - Reviews the revised design perspective and executable contract for remaining conceptual gaps.
 * [S1 implementation review](review-s1-implementation.md) - Reviews the first observation-staleness implementation against the executable contract.
 * [S6 implementation review](review-s6-implementation.md) - Reviews clean-base transaction rollback against ownership and safety invariants.
+* [Tooling friction and the case for subtraction](tooling-friction-and-subtraction-review.md) - Assesses which workspace and memory tools an agent would choose voluntarily and recommends simplifying the operating protocol before adding capabilities.

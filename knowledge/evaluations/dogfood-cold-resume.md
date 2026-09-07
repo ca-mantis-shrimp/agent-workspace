@@ -3,7 +3,7 @@ type: Field Report
 title: Dogfooding the workspace on a cold resume
 description: Synthesizes multi-session self-dogfood evidence about recovery, trust, friction, and next steps.
 tags: [evaluation, dogfood, resume]
-generated: { by: pi/gpt-5.4, at: 2026-09-07T06:05:54Z }
+generated: { by: pi/gpt-5.4, at: 2026-09-07T06:25:32Z }
 ---
 
 # Reflection — dogfooding the workspace on a cold resume
@@ -722,3 +722,7 @@ Residual from this run: transaction 1 on plot was accepted with zero recorded
 mutations (edits predated the transaction), resting on claims and evidence alone.
 The kernel allowed it; whether accept should require ≥1 mutation on a
 code-change transaction is an open design question.
+
+# Related Concepts
+
+- [Tooling friction and the case for subtraction](tooling-friction-and-subtraction-review.md): The later reflection updates the original dogfood findings after MCP consolidation and OKF adoption.

@@ -1,5 +1,9 @@
 ## 2026-09-07
 
+* **Update**: Linked `evaluations/dogfood-cold-resume.md` to `evaluations/tooling-friction-and-subtraction-review.md` (The later reflection updates the original dogfood findings after MCP consolidation and OKF adoption.).
+* **Update**: Updated concept `evaluations/dogfood-cold-resume.md`.
+* **Creation**: Documented concept `evaluations/tooling-friction-and-subtraction-review.md` (Tooling friction and the case for subtraction).
+
 * **Update**: Updated concept `implementation/implementation-notes.md`.
 
 * **Update**: Linked `decisions/external-workspace-and-clearhead-boundary.md` to `decisions/okf-curated-knowledge-layer.md` (Extends the authority boundary with a separate Git-native curated knowledge plane.).
