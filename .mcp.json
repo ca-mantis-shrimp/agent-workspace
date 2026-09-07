@@ -2,11 +2,11 @@
   "mcpServers": {
     "agent-workspace": {
       "command": "agent-workspace",
-      "args": ["mcp", "--repository", "${CLAUDE_PROJECT_DIR}"]
+      "args": ["mcp", "--repository", "."]
     },
     "okf-memory": {
       "command": "okf",
-      "args": ["mcp", "${CLAUDE_PROJECT_DIR}/knowledge"]
+      "args": ["mcp", "knowledge"]
     }
   }
 }
