@@ -403,5 +403,3 @@ export default async function registerAgentWorkspace(
 		});
 	}
 }
-const z = { q: 9 };
-const z = { q: 9 };
