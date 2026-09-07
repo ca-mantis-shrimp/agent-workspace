@@ -306,6 +306,12 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 .ok_or_else(|| CliError::Usage("reconcile-claim requires --id".to_owned()))?;
             print_json(&workspace.reconcile_claim(id)?)?;
         }
+        "explain-stale" => {
+            let id = options
+                .id
+                .ok_or_else(|| CliError::Usage("explain-stale requires --id".to_owned()))?;
+            print_json(&workspace.explain_stale(id)?)?;
+        }
         "supersede-claim" => {
             let id = options
                 .id

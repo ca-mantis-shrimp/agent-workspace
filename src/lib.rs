@@ -15,12 +15,16 @@ pub use model::*;
 pub use projection::*;
 use projection::{BRIEF_OBJECTIVE_MAX_CHARS, WORKING_SET_UNCITED_CANDIDATE_LIMIT, claim_headline};
 use reconcile::*;
+pub use reconcile::{DriftStatus, DriftView, InputDrift, StaleExplanation};
 
 const EVENT_SCHEMA_VERSION: u32 = 2;
 const MINIMUM_EVENT_SCHEMA_VERSION: u32 = 1;
 const EVENT_LOG_NAME: &str = "events.jsonl";
 const LOCK_FILE_NAME: &str = "events.lock";
 const MAX_RETAINED_PAYLOAD_BYTES: usize = 1024 * 1024;
+/// Byte cap per drift view in a stale explanation, so investigating a claim that
+/// rests on a large file never blows the projection budget.
+const STALE_VIEW_MAX_BYTES: usize = 4000;
 type FingerprintInput = (PathBuf, ObservationSelector, Option<String>);
 type ClaimAssessment = (FreshnessWithinScope, String, Vec<FingerprintInput>);
 
@@ -1705,6 +1709,29 @@ impl Workspace {
                     .ok_or(WorkspaceError::ClaimNotFound(claim_id))
             }
         }
+    }
+
+    /// Make a stale verdict cheap to investigate: for the claim's supporting
+    /// inputs, report which drifted and what each looks like now (a selector-
+    /// scoped `git diff HEAD`, degrading to current content). Read-only and
+    /// derived — it runs *after* reconciliation and cannot move any verdict, so
+    /// it stays off the trust-critical accept path by construction.
+    pub fn explain_stale(&self, claim_id: u64) -> Result<StaleExplanation, WorkspaceError> {
+        let projection = self.project()?;
+        let claim = projection
+            .claims
+            .get(&claim_id)
+            .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
+        let (freshness, reason, _) = assess_claim_inputs(&self.repository_root, &claim.inputs);
+        let inputs =
+            explain_claim_inputs(&self.repository_root, &claim.inputs, STALE_VIEW_MAX_BYTES);
+        Ok(StaleExplanation {
+            claim_id,
+            statement: claim.statement.clone(),
+            freshness,
+            reason,
+            inputs,
+        })
     }
 
     pub fn supersede_claim(

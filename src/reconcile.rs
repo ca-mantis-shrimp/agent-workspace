@@ -3,6 +3,7 @@
 //! read-capture helpers that requires. Extracted verbatim from `lib.rs`; this is
 //! a leaf layer — nothing here references `Workspace` or `Projection`.
 
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -251,6 +252,239 @@ pub(crate) fn read_observation_fingerprints(
         _ => hex_digest(&normalize_unit(unit, normalizer, repository_root, path)),
     };
     Ok((unit_fingerprint, hex_digest(&container)))
+}
+
+/// What a supporting file looks like now that a claim resting on it reads stale,
+/// scoped to the observed region. This is an *investigation aid*, never a
+/// freshness verdict — it is derived read-only after reconciliation has already
+/// spoken, so it cannot influence the trust-critical accept path.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DriftView {
+    /// A unified diff of the supporting file — its last committed form (`HEAD`)
+    /// versus the working tree — filtered to the hunks overlapping the observed
+    /// region. This is the case that hurts: committed code edited under a claim
+    /// before the edit itself is committed.
+    Diff { text: String, truncated: bool },
+    /// No committed baseline diff is available to show — the file is untracked,
+    /// or the drift was already committed so `HEAD` equals the working tree.
+    /// Falls back to the current bytes at the observed selector, so the agent at
+    /// least re-reads exactly its observation site without hunting for it.
+    CurrentContent { text: String, truncated: bool },
+    /// The supporting file no longer exists.
+    Missing,
+}
+
+/// A claim's stale verdict made legible: the claim-level freshness and reason,
+/// plus a per-input drift breakdown. The assembly a `explain-stale` invocation
+/// returns.
+#[derive(Clone, Debug, Serialize)]
+pub struct StaleExplanation {
+    pub claim_id: u64,
+    pub statement: String,
+    pub freshness: FreshnessWithinScope,
+    pub reason: String,
+    pub inputs: Vec<InputDrift>,
+}
+
+/// Whether one supporting input drifted, and (when it did) what it looks like now.
+#[derive(Clone, Debug, Serialize)]
+pub struct InputDrift {
+    pub path: PathBuf,
+    pub selector: ObservationSelector,
+    pub status: DriftStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<DriftView>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DriftStatus {
+    /// The recorded input fingerprint still stands — not a culprit.
+    Unchanged,
+    /// The observed unit's canonical form changed.
+    Changed,
+    /// The supporting file is gone.
+    Unavailable,
+    /// The unit could not be re-read to a fingerprint (non-NotFound error).
+    Unverifiable,
+}
+
+/// Explain, per supporting input, why a claim may read stale. Reuses the exact
+/// reconcile fingerprint reader so "changed" here means precisely what "stale"
+/// means to the verdict — no second, drifting definition of change. Only culprits
+/// (changed / unavailable / unverifiable) carry a [`DriftView`]; unchanged inputs
+/// are reported without one to keep the explanation focused.
+pub(crate) fn explain_claim_inputs(
+    repository_root: &Path,
+    inputs: &[ClaimInput],
+    max_bytes: usize,
+) -> Vec<InputDrift> {
+    inputs
+        .iter()
+        .map(|input| {
+            let assessed = read_observation_fingerprints(
+                repository_root,
+                &input.path,
+                &input.selector,
+                input.normalizer,
+                input.recorded_raw_fingerprint.as_deref(),
+                &input.recorded_input_fingerprint,
+            );
+            let (status, view) = match assessed {
+                Ok((fingerprint, _)) if fingerprint == input.recorded_input_fingerprint => {
+                    (DriftStatus::Unchanged, None)
+                }
+                Ok(_) => (
+                    DriftStatus::Changed,
+                    Some(investigate_drift(
+                        repository_root,
+                        &input.path,
+                        &input.selector,
+                        max_bytes,
+                    )),
+                ),
+                Err(WorkspaceError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                    (DriftStatus::Unavailable, Some(DriftView::Missing))
+                }
+                Err(_) => (
+                    DriftStatus::Unverifiable,
+                    Some(investigate_drift(
+                        repository_root,
+                        &input.path,
+                        &input.selector,
+                        max_bytes,
+                    )),
+                ),
+            };
+            InputDrift {
+                path: input.path.clone(),
+                selector: input.selector.clone(),
+                status,
+                view,
+            }
+        })
+        .collect()
+}
+
+/// Produce a bounded, selector-scoped view of a drifted supporting file. Prefers
+/// a `git diff HEAD` scoped to the observed region; degrades to the current bytes
+/// at the selector when git has no baseline diff to show. Byte-capped so a huge
+/// file never blows the projection budget.
+pub(crate) fn investigate_drift(
+    repository_root: &Path,
+    path: &Path,
+    selector: &ObservationSelector,
+    max_bytes: usize,
+) -> DriftView {
+    let Ok(bytes) = fs::read(repository_root.join(path)) else {
+        return DriftView::Missing;
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let span = selector_line_span(&text, selector);
+
+    if let Some(path) = path.to_str() {
+        if let Ok(raw) = git_bytes(repository_root, &["diff", "--no-color", "HEAD", "--", path]) {
+            let diff = String::from_utf8_lossy(&raw);
+            let scoped = scope_diff_to_span(&diff, span);
+            if !scoped.trim().is_empty() {
+                let (text, truncated) = cap_text(&scoped, max_bytes);
+                return DriftView::Diff { text, truncated };
+            }
+        }
+    }
+
+    let (text, truncated) = cap_text(selector_window(&text, selector), max_bytes);
+    DriftView::CurrentContent { text, truncated }
+}
+
+/// One-indexed inclusive line span the selector covers in `text`. `WholeFile`
+/// returns `None` — no hunk scoping, show the whole diff.
+fn selector_line_span(text: &str, selector: &ObservationSelector) -> Option<(usize, usize)> {
+    match selector {
+        ObservationSelector::WholeFile => None,
+        ObservationSelector::ByteRange { start, end } => {
+            let line_at = |byte: usize| {
+                let byte = byte.min(text.len());
+                text.as_bytes()[..byte]
+                    .iter()
+                    .filter(|b| **b == b'\n')
+                    .count()
+                    + 1
+            };
+            Some((line_at(*start), line_at(*end)))
+        }
+    }
+}
+
+/// The current bytes at the selector, boundary-safe. Falls back to the whole file
+/// if the recorded byte range is not on UTF-8 boundaries (it should be, but this
+/// is an investigation aid and must never panic).
+fn selector_window<'a>(text: &'a str, selector: &ObservationSelector) -> &'a str {
+    match selector {
+        ObservationSelector::WholeFile => text,
+        ObservationSelector::ByteRange { start, end } => {
+            text.get(*start..(*end).max(*start)).unwrap_or(text)
+        }
+    }
+}
+
+/// Keep only the unified-diff hunks whose new-file line span overlaps `span`,
+/// preserving the pre-hunk header. `None` keeps everything.
+fn scope_diff_to_span(diff: &str, span: Option<(usize, usize)>) -> String {
+    let Some((lo, hi)) = span else {
+        return diff.to_owned();
+    };
+    let mut out = String::new();
+    let mut in_hunk = false;
+    let mut keep_hunk = false;
+    for line in diff.split_inclusive('\n') {
+        if line.starts_with("@@") {
+            in_hunk = true;
+            keep_hunk = hunk_overlaps_new_span(line, lo, hi);
+        } else if !in_hunk {
+            out.push_str(line);
+            continue;
+        }
+        if keep_hunk {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// Does a `@@ -a,b +c,d @@` hunk's new-file line span `[c, c+d)` overlap the
+/// inclusive one-indexed `[lo, hi]`? Unparseable headers are kept (fail open on
+/// display only — this cannot affect a verdict).
+fn hunk_overlaps_new_span(header: &str, lo: usize, hi: usize) -> bool {
+    let Some(plus) = header
+        .split_whitespace()
+        .find(|token| token.starts_with('+'))
+    else {
+        return true;
+    };
+    let mut numbers = plus[1..].split(',');
+    let Some(start) = numbers.next().and_then(|value| value.parse::<usize>().ok()) else {
+        return true;
+    };
+    let count = numbers
+        .next()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1);
+    let hunk_hi = start + count.saturating_sub(1);
+    start <= hi && lo <= hunk_hi
+}
+
+/// Truncate on a UTF-8 boundary, reporting whether anything was cut.
+fn cap_text(text: &str, max_bytes: usize) -> (String, bool) {
+    if text.len() <= max_bytes {
+        return (text.to_owned(), false);
+    }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (text[..end].to_owned(), true)
 }
 
 /// Canonicalize an observed unit before fingerprinting. `None` returns the bytes
@@ -671,4 +905,67 @@ pub(crate) fn is_sha256_hex(value: &str) -> bool {
 pub(crate) fn hex_digest(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod drift_tests {
+    use super::*;
+
+    const TWO_HUNK_DIFF: &str = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n@@ -20,3 +20,3 @@\n x\n-y\n+Y\n z\n";
+
+    #[test]
+    fn scope_keeps_only_hunks_overlapping_the_selector_lines() {
+        let early = scope_diff_to_span(TWO_HUNK_DIFF, Some((1, 3)));
+        assert!(early.contains("+B"), "first hunk kept: {early}");
+        assert!(!early.contains("+Y"), "second hunk dropped: {early}");
+        assert!(early.contains("+++ b/x"), "header preserved: {early}");
+
+        let late = scope_diff_to_span(TWO_HUNK_DIFF, Some((20, 22)));
+        assert!(late.contains("+Y"), "second hunk kept: {late}");
+        assert!(!late.contains("+B"), "first hunk dropped: {late}");
+    }
+
+    #[test]
+    fn whole_file_selector_keeps_the_entire_diff() {
+        assert_eq!(scope_diff_to_span(TWO_HUNK_DIFF, None), TWO_HUNK_DIFF);
+    }
+
+    #[test]
+    fn hunk_overlap_handles_zero_count_and_unparseable_headers() {
+        // Fail open on display: an unreadable header is kept, never silently lost.
+        assert!(hunk_overlaps_new_span("@@ garbage @@", 1, 1));
+        // `+5,0` is a pure deletion anchored at new line 5.
+        assert!(hunk_overlaps_new_span("@@ -5,2 +5,0 @@", 5, 5));
+        assert!(!hunk_overlaps_new_span("@@ -5,2 +5,0 @@", 1, 3));
+    }
+
+    #[test]
+    fn selector_line_span_counts_newlines() {
+        let text = "one\ntwo\nthree\n";
+        // Bytes 4..7 are "two" — the second line.
+        assert_eq!(
+            selector_line_span(text, &ObservationSelector::ByteRange { start: 4, end: 7 }),
+            Some((2, 2))
+        );
+        assert_eq!(
+            selector_line_span(text, &ObservationSelector::WholeFile),
+            None
+        );
+    }
+
+    #[test]
+    fn cap_text_truncates_on_a_char_boundary() {
+        let (text, truncated) = cap_text("abcdef", 3);
+        assert_eq!(text, "abc");
+        assert!(truncated);
+
+        let (text, truncated) = cap_text("abc", 10);
+        assert_eq!(text, "abc");
+        assert!(!truncated);
+
+        // A cap landing mid-multibyte-char backs off to the boundary below it.
+        let (text, truncated) = cap_text("aé", 2);
+        assert_eq!(text, "a");
+        assert!(truncated);
+    }
 }

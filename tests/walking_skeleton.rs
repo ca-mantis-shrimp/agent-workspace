@@ -1,9 +1,9 @@
 use agent_workspace::{
-    Belief, BeliefSupport, Claim, ClaimInputSource, ClaimLifecycle, DeltaStatus, Evidence, Finding,
-    FindingDisposition, FindingSeverity, FreshnessWithinScope, Normalizer, Objective, Observation,
-    ObservationCapture, ObservationCaptureOptions, ObservationSelector, RevealedFinding,
-    RevealedObservation, ScopeCompleteness, ScopeSource, Transaction, TransactionState, Workspace,
-    WorkspaceStatus,
+    Belief, BeliefSupport, Claim, ClaimInputSource, ClaimLifecycle, DeltaStatus, DriftStatus,
+    DriftView, Evidence, Finding, FindingDisposition, FindingSeverity, FreshnessWithinScope,
+    Normalizer, Objective, Observation, ObservationCapture, ObservationCaptureOptions,
+    ObservationSelector, RevealedFinding, RevealedObservation, ScopeCompleteness, ScopeSource,
+    Transaction, TransactionState, Workspace, WorkspaceStatus,
 };
 use serde_json::Value;
 use std::fs;
@@ -5491,4 +5491,116 @@ fn git(repository: &Path, arguments: &[&str]) {
         "git failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+// diff-on-stale: a stale verdict is cheap to investigate. The three cases are
+// the whole substance of the feature — a real diff when the drift is
+// uncommitted, an honest fallback when git has no baseline to show, and a clear
+// "gone" when the support vanished.
+
+#[test]
+fn explain_stale_shows_a_git_diff_for_uncommitted_drift() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let handle = Workspace::open(&fixture.repository, &workspace).unwrap();
+
+    let belief = handle
+        .record_belief(
+            "foo returns one",
+            &["src/lib.rs".into()],
+            agent_workspace::ClaimScopeStrategy::Declared,
+        )
+        .unwrap();
+
+    // Edit but do not commit: HEAD still holds the observed bytes, so git can
+    // show exactly what moved under the claim.
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 { 2 }\n",
+    )
+    .unwrap();
+
+    let explanation = handle.explain_stale(belief.claim.id).unwrap();
+    assert_eq!(explanation.freshness, FreshnessWithinScope::Stale);
+    assert_eq!(explanation.inputs.len(), 1);
+    assert_eq!(explanation.inputs[0].status, DriftStatus::Changed);
+    match &explanation.inputs[0].view {
+        Some(DriftView::Diff { text, truncated }) => {
+            assert!(!truncated);
+            assert!(
+                text.contains("-pub fn foo() -> i32 { 1 }"),
+                "expected the old line, got: {text}"
+            );
+            assert!(
+                text.contains("+pub fn foo() -> i32 { 2 }"),
+                "expected the new line, got: {text}"
+            );
+        }
+        other => panic!("expected a git diff, got {other:?}"),
+    }
+}
+
+#[test]
+fn explain_stale_falls_back_to_current_content_when_drift_is_committed() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let handle = Workspace::open(&fixture.repository, &workspace).unwrap();
+
+    let belief = handle
+        .record_belief(
+            "foo returns one",
+            &["src/lib.rs".into()],
+            agent_workspace::ClaimScopeStrategy::Declared,
+        )
+        .unwrap();
+
+    // Commit the drift too: HEAD now equals the working tree, so `git diff HEAD`
+    // is empty and the explanation must degrade to the current bytes — no
+    // baseline to diff against without a per-observation revision (the v2 seam).
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 { 2 }\n",
+    )
+    .unwrap();
+    git(
+        &fixture.repository,
+        &["commit", "--quiet", "-am", "edit foo"],
+    );
+
+    let explanation = handle.explain_stale(belief.claim.id).unwrap();
+    assert_eq!(explanation.freshness, FreshnessWithinScope::Stale);
+    assert_eq!(explanation.inputs[0].status, DriftStatus::Changed);
+    match &explanation.inputs[0].view {
+        Some(DriftView::CurrentContent { text, .. }) => {
+            assert!(
+                text.contains("pub fn foo() -> i32 { 2 }"),
+                "expected the current bytes, got: {text}"
+            );
+        }
+        other => panic!("expected the current-content fallback, got {other:?}"),
+    }
+}
+
+#[test]
+fn explain_stale_reports_a_missing_supporting_file() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let handle = Workspace::open(&fixture.repository, &workspace).unwrap();
+
+    let belief = handle
+        .record_belief(
+            "foo returns one",
+            &["src/lib.rs".into()],
+            agent_workspace::ClaimScopeStrategy::Declared,
+        )
+        .unwrap();
+
+    fs::remove_file(fixture.repository.join("src/lib.rs")).unwrap();
+
+    let explanation = handle.explain_stale(belief.claim.id).unwrap();
+    assert_eq!(explanation.inputs[0].status, DriftStatus::Unavailable);
+    assert!(matches!(
+        explanation.inputs[0].view,
+        Some(DriftView::Missing)
+    ));
 }

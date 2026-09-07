@@ -8,7 +8,10 @@ generated: { by: claude-code/opus-4.8, at: 2026-09-07T22:36:15Z }
 
 # Decision — sequence the freshness-cost work; do not adopt the relocation record shape yet
 
-**Status:** agreed 2026-09-07; no implementation started.
+**Status:** agreed 2026-09-07. **Step 1 (diff-on-stale) shipped 2026-09-07** —
+`Workspace::explain_stale` + the `explain-stale` CLI verb return a selector-scoped
+`git diff HEAD` per drifted input, degrading to current content when git has no
+baseline (untracked, or drift already committed). Steps 2–3 not started.
 **Date:** 2026-09-07
 **Participants:** user + assistant, reacting to the pi/gpt-5.4 proposal.
 
@@ -63,6 +66,12 @@ preserving.
 - The committed relocation proposal is **not** the roadmap; this record is the
   counter-signal a cold agent must read alongside it.
 - The proposal's safety invariants stay on the shelf, to be reused if step 3 runs.
+- **Known limitation (the v2 seam):** diff-on-stale diffs `HEAD` vs the working
+  tree, so it only reconstructs a true before/after for *uncommitted* drift. Once
+  the drift is committed, `HEAD` equals the working tree and the view degrades to
+  current content. Closing that gap needs a per-observation git revision recorded
+  at capture — the same record that step 3's relocation would want — so it is the
+  natural next increment, and step 2's drift diagnostic can be built to record it.
 
 # Related Concepts
 - [Relocatable exact-text selectors](../research/relocatable-exact-text-selectors.md): The proposal this decision defers and re-sequences.
