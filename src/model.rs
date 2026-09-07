@@ -268,6 +268,15 @@ pub struct ClaimInput {
     /// path as `Observation::observed_raw_fingerprint`.
     #[serde(default)]
     pub recorded_raw_fingerprint: Option<String>,
+    /// The git revision in force when this input was captured — `HEAD` at
+    /// observation time for a supporting observation, or at record time for a
+    /// declared/conservative dependency. It is the baseline `explain-stale`
+    /// diffs against, so a drift that has since been committed is still shown as
+    /// a real before/after rather than degrading to current content. `None` on
+    /// records written before this existed, or when the repository had no commit
+    /// yet; absence simply falls back to `HEAD`.
+    #[serde(default)]
+    pub recorded_at_revision: Option<String>,
     pub source: ClaimInputSource,
 }
 

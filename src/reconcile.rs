@@ -341,6 +341,7 @@ pub(crate) fn explain_claim_inputs(
                         repository_root,
                         &input.path,
                         &input.selector,
+                        input.recorded_at_revision.as_deref(),
                         max_bytes,
                     )),
                 ),
@@ -353,6 +354,7 @@ pub(crate) fn explain_claim_inputs(
                         repository_root,
                         &input.path,
                         &input.selector,
+                        input.recorded_at_revision.as_deref(),
                         max_bytes,
                     )),
                 ),
@@ -367,14 +369,17 @@ pub(crate) fn explain_claim_inputs(
         .collect()
 }
 
-/// Produce a bounded, selector-scoped view of a drifted supporting file. Prefers
-/// a `git diff HEAD` scoped to the observed region; degrades to the current bytes
-/// at the selector when git has no baseline diff to show. Byte-capped so a huge
-/// file never blows the projection budget.
+/// Produce a bounded, selector-scoped view of a drifted supporting file. Diffs
+/// the working tree against `revision` (the git baseline the input was captured
+/// at; `HEAD` when `None`) and scopes the result to the observed region; degrades
+/// to the current bytes at the selector when git has no baseline diff to show —
+/// an untracked file, or a revision the file did not change against. Byte-capped
+/// so a huge file never blows the projection budget.
 pub(crate) fn investigate_drift(
     repository_root: &Path,
     path: &Path,
     selector: &ObservationSelector,
+    revision: Option<&str>,
     max_bytes: usize,
 ) -> DriftView {
     let Ok(bytes) = fs::read(repository_root.join(path)) else {
@@ -384,7 +389,8 @@ pub(crate) fn investigate_drift(
     let span = selector_line_span(&text, selector);
 
     if let Some(path) = path.to_str() {
-        if let Ok(raw) = git_bytes(repository_root, &["diff", "--no-color", "HEAD", "--", path]) {
+        let base = revision.unwrap_or("HEAD");
+        if let Ok(raw) = git_bytes(repository_root, &["diff", "--no-color", base, "--", path]) {
             let diff = String::from_utf8_lossy(&raw);
             let scoped = scope_diff_to_span(&diff, span);
             if !scoped.trim().is_empty() {

@@ -5541,7 +5541,7 @@ fn explain_stale_shows_a_git_diff_for_uncommitted_drift() {
 }
 
 #[test]
-fn explain_stale_falls_back_to_current_content_when_drift_is_committed() {
+fn explain_stale_diffs_committed_drift_against_the_capture_revision() {
     let fixture = GitFixture::new();
     let workspace = fixture.root.path().join("workspace-state");
     let handle = Workspace::open(&fixture.repository, &workspace).unwrap();
@@ -5554,9 +5554,10 @@ fn explain_stale_falls_back_to_current_content_when_drift_is_committed() {
         )
         .unwrap();
 
-    // Commit the drift too: HEAD now equals the working tree, so `git diff HEAD`
-    // is empty and the explanation must degrade to the current bytes — no
-    // baseline to diff against without a per-observation revision (the v2 seam).
+    // Commit the drift: HEAD now equals the working tree, so a plain `git diff
+    // HEAD` would be empty. Because the input recorded the revision it was
+    // captured at, the explanation still diffs against *that* baseline and shows
+    // the change — the whole point of the capture-revision accretion.
     fs::write(
         fixture.repository.join("src/lib.rs"),
         "pub fn foo() -> i32 { 2 }\n",
@@ -5571,9 +5572,53 @@ fn explain_stale_falls_back_to_current_content_when_drift_is_committed() {
     assert_eq!(explanation.freshness, FreshnessWithinScope::Stale);
     assert_eq!(explanation.inputs[0].status, DriftStatus::Changed);
     match &explanation.inputs[0].view {
+        Some(DriftView::Diff { text, .. }) => {
+            assert!(
+                text.contains("-pub fn foo() -> i32 { 1 }"),
+                "expected the old line, got: {text}"
+            );
+            assert!(
+                text.contains("+pub fn foo() -> i32 { 2 }"),
+                "expected the new line, got: {text}"
+            );
+        }
+        other => panic!("expected a git diff against the capture revision, got {other:?}"),
+    }
+}
+
+#[test]
+fn explain_stale_falls_back_to_current_content_for_an_untracked_file() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let handle = Workspace::open(&fixture.repository, &workspace).unwrap();
+
+    // An untracked file has no git baseline in any revision, so there is nothing
+    // to diff against — the explanation must degrade honestly to current content.
+    fs::write(
+        fixture.repository.join("src/scratch.rs"),
+        "pub fn scratch() -> i32 { 1 }\n",
+    )
+    .unwrap();
+    let belief = handle
+        .record_belief(
+            "scratch returns one",
+            &["src/scratch.rs".into()],
+            agent_workspace::ClaimScopeStrategy::Declared,
+        )
+        .unwrap();
+
+    fs::write(
+        fixture.repository.join("src/scratch.rs"),
+        "pub fn scratch() -> i32 { 2 }\n",
+    )
+    .unwrap();
+
+    let explanation = handle.explain_stale(belief.claim.id).unwrap();
+    assert_eq!(explanation.inputs[0].status, DriftStatus::Changed);
+    match &explanation.inputs[0].view {
         Some(DriftView::CurrentContent { text, .. }) => {
             assert!(
-                text.contains("pub fn foo() -> i32 { 2 }"),
+                text.contains("pub fn scratch() -> i32 { 2 }"),
                 "expected the current bytes, got: {text}"
             );
         }

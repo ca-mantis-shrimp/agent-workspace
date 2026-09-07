@@ -1440,6 +1440,11 @@ impl Workspace {
         let projection = self.project()?;
         let mut inputs = BTreeMap::new();
         let mut supporting_paths = Vec::new();
+        // A dependency is fingerprinted against the working tree at record time,
+        // so the revision to diff it against later is HEAD now. Resolved once and
+        // left `None` when the repository has no commit yet (absence falls back
+        // to HEAD at explain time).
+        let head_revision = git_output(&self.repository_root, &["rev-parse", "HEAD"]).ok();
         for observation_id in supporting_observation_ids {
             let observation = projection
                 .observations
@@ -1454,6 +1459,7 @@ impl Workspace {
                     normalizer: observation.normalizer,
                     recorded_input_fingerprint: observation.observed_input_fingerprint.clone(),
                     recorded_raw_fingerprint: observation.observed_raw_fingerprint.clone(),
+                    recorded_at_revision: Some(observation.observed_revision.clone()),
                     source: ClaimInputSource::SupportingObservation,
                 },
             );
@@ -1470,6 +1476,7 @@ impl Workspace {
                     normalizer,
                     recorded_input_fingerprint: input_fingerprint,
                     recorded_raw_fingerprint: raw_fingerprint,
+                    recorded_at_revision: head_revision.clone(),
                     source: ClaimInputSource::DeclaredDependency,
                 });
         }
@@ -1486,6 +1493,7 @@ impl Workspace {
                         normalizer,
                         recorded_input_fingerprint: input_fingerprint,
                         recorded_raw_fingerprint: raw_fingerprint,
+                        recorded_at_revision: head_revision.clone(),
                         source: ClaimInputSource::ConservativeDependency,
                     });
             }
