@@ -1,4 +1,10 @@
 ## 2026-09-07
+* **Update**: Updated concept `research/relocatable-exact-text-selectors.md`.
+* **Update**: Linked `research/relocatable-exact-text-selectors.md` to `research/structural-freshness-without-formatter-coupling.md` (Preserves the rejected CST experiment's lessons while separating coordinate relocation from relevance identity.).
+* **Update**: Updated concept `research/relocatable-exact-text-selectors.md`.
+* **Update**: Linked `research/relocatable-exact-text-selectors.md` to `evaluations/plot-foreign-dogfood-write-loop.md` (Turns the field report's sub-file selector idea into a bounded exact-text relocation experiment.).
+* **Update**: Updated concept `research/relocatable-exact-text-selectors.md`.
+* **Creation**: Documented concept `research/relocatable-exact-text-selectors.md` (Relocatable exact-text selectors).
 * **Update**: Recorded in `design/semantic-write-api.md` that `amend_claim` shipped: revise an active belief in place (same id, freshness re-anchored, revision counter, prior versions kept in the append-only log) via MCP `workspace_amend_claim` + CLI `amend-claim`. Its own `ClaimAmended` event reusing record's assembly/capture — not unified with supersede. Dissolves field-report finding #2.
 * **Update**: Recorded in `design/semantic-write-api.md` that the wake-status trim shipped (Slice B of the legibility pass): the brief `status` projection hard-caps active claims at 5 and bounds the objective anchor at 300 chars, so a real wake status fits the Claude Code inline-preview budget (2127→1561 bytes). Closes the imported wake-legibility finding.
 * **Update**: Recorded in `design/semantic-write-api.md` that brief-default write receipts shipped (Slice A of the legibility pass): the MCP write verbs return a compact `{id, freshness, supports}`/`{id, lifecycle}` receipt by default, full audit record via `full: true`, ~90% smaller. Resolves the doc's friction #1 and field-report finding #5.
