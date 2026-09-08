@@ -815,10 +815,7 @@ impl Workspace {
         }
 
         Ok(BriefDeltaStatus {
-            checkpoint: BriefCheckpoint {
-                label: checkpoint.label,
-                sequence: checkpoint.sequence,
-            },
+            checkpoint: BriefCheckpoint::from_marker(&checkpoint),
             objective_change,
             claims_recorded,
             claims_superseded,

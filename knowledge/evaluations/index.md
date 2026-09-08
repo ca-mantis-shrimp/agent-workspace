@@ -8,3 +8,4 @@
 * [S6 implementation review](review-s6-implementation.md) - Reviews clean-base transaction rollback against ownership and safety invariants.
 * [Tooling friction and the case for subtraction](tooling-friction-and-subtraction-review.md) - Assesses which workspace and memory tools an agent would choose voluntarily and recommends simplifying the operating protocol before adding capabilities.
 * [Second foreign dogfood — write-loop papercuts and their fixes](plot-foreign-dogfood-write-loop.md) - Reports the second foreign-repository session in plot, the first to observe claims going stale in-anger and to exercise supersede heavily, and proposes amend_claim and diff-on-stale.
+* [From change explanation to continuation insight](plot-continuation-insight.md) - Reports the post-diff plot dogfood: stable claim amendment and why-rich staleness feel trustworthy, while the compact wake projection still omits decision-bearing checkpoint context needed for correct continuation.

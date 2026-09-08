@@ -1,4 +1,13 @@
+## 2026-09-08
+* **Update**: Linked `evaluations/plot-continuation-insight.md` to `design/s7-bounded-perception.md` (Extends bounded perception from cardinality control toward a decision-bearing continuation capsule with progressive disclosure.).
+* **Update**: Updated concept `evaluations/plot-continuation-insight.md`.
+* **Update**: Linked `evaluations/plot-continuation-insight.md` to `evaluations/plot-foreign-dogfood-write-loop.md` (Follows the write-loop report after amend_claim and diff-on-stale shipped, evaluating what those fixes solve and what the compact resume projection still omits.).
+* **Update**: Updated concept `evaluations/plot-continuation-insight.md`.
+* **Creation**: Documented concept `evaluations/plot-continuation-insight.md` (From change explanation to continuation insight).
+
 ## 2026-09-07
+* **Update**: Shipped the checkpoint-note excerpt (cheap fix from `evaluations/plot-continuation-insight.md`): brief `status`/`delta` now surface `latest_checkpoint.note`, a 200-char word-boundary excerpt via `BriefCheckpoint::from_marker`, so a decision recorded in a checkpoint note reaches the wake surface instead of only `--full`. Regression + budget tests added; 75 tests pass. Recorded in `decisions/durable-constraints-portable-intent-entity.md`.
+* **Creation**: Documented decision `decisions/durable-constraints-portable-intent-entity.md` — models constraints/decisions as a repo-scoped, freshness-exempt intent entity above the objective, held natively as a thin headline (+ optional detail, optional references) so it stays portable into a bare repo; defers Clearhead/OKF to optional enrichment. Agreed with user, no implementation started; cheap prerequisite (checkpoint-note excerpt in brief status) to ship separately first.
 * **Update**: Linked `research/relocatable-exact-text-selectors.md` to `decisions/freshness-cost-sequencing.md` (Deferred and re-sequenced by this decision; build diff-on-stale and drift instrumentation before any relocation spike.).
 * **Update**: Updated concept `research/relocatable-exact-text-selectors.md`.
 * **Creation**: Documented decision `decisions/freshness-cost-sequencing.md` — defers the relocatable exact-text selector proposal behind diff-on-stale and a pure drift-frequency diagnostic; agreed with user, no implementation started.

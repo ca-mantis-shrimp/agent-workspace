@@ -92,10 +92,36 @@ pub struct BriefCounts {
     pub freshness: FreshnessHistogram,
 }
 
+/// The latest checkpoint as an orientation anchor: its label and sequence, plus
+/// a bounded excerpt of its note. The note excerpt is the cheap fix for the
+/// salience miss the `plot` continuation-insight dogfood exposed — a decision
+/// recorded in a checkpoint note ("axis = SI suffixes") was retained but never
+/// promoted into the wake surface, so a resuming agent re-derived it wrong. The
+/// full note is one `--full` away (it rides `CheckpointMarker` verbatim).
 #[derive(Clone, Debug, Serialize)]
 pub struct BriefCheckpoint {
     pub label: String,
     pub sequence: u64,
+    /// A word-boundary excerpt of the checkpoint note, or `None` when the
+    /// checkpoint carried no note. Bounded so it cannot reopen the
+    /// inline-preview-budget finding on the checkpoint axis.
+    pub note: Option<String>,
+}
+
+impl BriefCheckpoint {
+    /// Project a stored [`CheckpointMarker`] onto the brief anchor, applying the
+    /// note-excerpt budget. The one home for that policy, so every surface that
+    /// shows a checkpoint (status and delta) bounds the note identically.
+    pub(crate) fn from_marker(marker: &CheckpointMarker) -> Self {
+        Self {
+            label: marker.label.clone(),
+            sequence: marker.sequence,
+            note: marker
+                .note
+                .as_deref()
+                .map(|note| claim_headline(note, BRIEF_CHECKPOINT_NOTE_MAX_CHARS)),
+        }
+    }
 }
 
 impl WorkspaceStatus {
@@ -161,10 +187,7 @@ impl WorkspaceStatus {
                 checkpoints: self.checkpoints.len(),
                 freshness,
             },
-            latest_checkpoint: self.checkpoints.last().map(|marker| BriefCheckpoint {
-                label: marker.label.clone(),
-                sequence: marker.sequence,
-            }),
+            latest_checkpoint: self.checkpoints.last().map(BriefCheckpoint::from_marker),
         }
     }
 }
@@ -627,6 +650,11 @@ const BRIEF_HEADLINE_MAX_CHARS: usize = 80;
 /// a normal two-to-three sentence intent shows whole, but bounded so the wake
 /// status cannot grow past the inline-preview budget on the objective axis.
 const BRIEF_STATUS_OBJECTIVE_MAX_CHARS: usize = 300;
+/// The latest checkpoint note's excerpt bound in the brief status. Sized to carry
+/// a decision or two ("axis = SI suffixes, agreed as the slice after bar") whole,
+/// but bounded so a long durable-prose note cannot grow the wake status past the
+/// inline-preview budget. The full note rides `--full`.
+const BRIEF_CHECKPOINT_NOTE_MAX_CHARS: usize = 200;
 
 /// Truncate a claim statement to a scannable headline on a word boundary,
 /// marking the cut with a trailing `…`. Statements at or under the budget are
@@ -715,10 +743,7 @@ impl BriefIdSet {
 impl DeltaStatus {
     pub fn brief(&self) -> BriefDeltaStatus {
         BriefDeltaStatus {
-            checkpoint: BriefCheckpoint {
-                label: self.checkpoint.label.clone(),
-                sequence: self.checkpoint.sequence,
-            },
+            checkpoint: BriefCheckpoint::from_marker(&self.checkpoint),
             objective_change: self
                 .objective_change
                 .as_ref()

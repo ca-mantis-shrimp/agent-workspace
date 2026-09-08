@@ -2261,6 +2261,89 @@ fn brief_status_bounds_a_pathologically_long_objective() {
     );
 }
 
+/// The cheap fix for the `plot` continuation-insight salience miss: a decision
+/// recorded in a checkpoint note is promoted into the brief wake surface, not
+/// just retained in `--full`. Guards the exact failure — the note existed the
+/// whole time but never reached the surface a resuming agent reads.
+#[test]
+fn brief_status_surfaces_the_latest_checkpoint_note() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    let note = "axis label formatting = SI suffixes (1.2k, 3.4M), agreed as the slice after bar";
+    invoke(&[
+        "checkpoint",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--label",
+        "bar-mark-shipped",
+        "--note",
+        note,
+    ]);
+
+    let output = invoke(&[
+        "status",
+        "--compact",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+    ]);
+    let brief: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(brief["latest_checkpoint"]["label"], "bar-mark-shipped");
+    // Under the budget, the decision reaches the wake surface whole — this is the
+    // sentence whose absence made the agent re-derive SI as generic notation.
+    assert_eq!(brief["latest_checkpoint"]["note"], note);
+}
+
+/// The note excerpt is bounded like every other brief field: a checkpoint note
+/// can carry arbitrary durable prose, so a pathological one is truncated with an
+/// ellipsis and cannot reopen the inline-preview-budget finding.
+#[test]
+fn brief_status_bounds_a_pathologically_long_checkpoint_note() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap().to_owned();
+    let ws = workspace.to_str().unwrap().to_owned();
+
+    let long_note = "decision ".repeat(200); // ~1800 chars, far past the bound
+    invoke(&[
+        "checkpoint",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+        "--label",
+        "verbose",
+        "--note",
+        &long_note,
+    ]);
+
+    let output = invoke(&[
+        "status",
+        "--compact",
+        "--repository",
+        &repo,
+        "--workspace",
+        &ws,
+    ]);
+    let brief: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let shown = brief["latest_checkpoint"]["note"].as_str().unwrap();
+    assert!(
+        shown.ends_with('…') && shown.chars().count() < long_note.chars().count(),
+        "a long checkpoint note must be truncated in the brief surface: {shown:?}"
+    );
+    assert!(
+        output.stdout.len() < 1_800,
+        "even a pathological checkpoint note must not blow the wake budget: {} bytes",
+        output.stdout.len()
+    );
+}
+
 /// The point of amend: a belief partially overtaken by an edit is revised in
 /// place — same id, freshness re-anchored to the file as it now stands, the
 /// revision counter recording that a prior version exists in the log, and no
