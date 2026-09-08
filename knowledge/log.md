@@ -1,4 +1,6 @@
 ## 2026-09-08
+* **Creation**: Documented concept `evaluations/plot-checkpoint-summary-follow-up.md` (Checkpoint summary follow-up — sufficient content, inconclusive transport).
+* **Update**: Linked `evaluations/plot-checkpoint-summary-follow-up.md` to `evaluations/plot-continuation-insight.md`, `decisions/durable-constraints-portable-intent-entity.md`, `evaluations/plot-foreign-dogfood-write-loop.md`, and `design/s7-bounded-perception.md`.
 * **Update**: Linked `evaluations/plot-continuation-insight.md` to `design/s7-bounded-perception.md` (Extends bounded perception from cardinality control toward a decision-bearing continuation capsule with progressive disclosure.).
 * **Update**: Updated concept `evaluations/plot-continuation-insight.md`.
 * **Update**: Linked `evaluations/plot-continuation-insight.md` to `evaluations/plot-foreign-dogfood-write-loop.md` (Follows the write-loop report after amend_claim and diff-on-stale shipped, evaluating what those fixes solve and what the compact resume projection still omits.).
