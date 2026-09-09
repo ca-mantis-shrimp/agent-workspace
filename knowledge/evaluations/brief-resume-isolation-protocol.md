@@ -9,8 +9,7 @@ generated: { by: muse-spark, at: 2026-09-08T00:00:00Z }
 # Protocol — brief-only resume with placement control and objective-drift detection
 
 *Follows [Checkpoint summary follow-up](plot-checkpoint-summary-follow-up.md) and the
-[checkpoint-capsule disambiguation thread](../../threads/checkpoint-capsule-disambiguation.md),
-whose resolution this protocol implements. Motivated in part by the
+checkpoint-capsule disambiguation thread, whose resolution this protocol implements. Motivated in part by the
 categorical-all-marks `plot` session (belief 14, checkpoint
 `plot-categorical-all-marks`), in which brief orientation succeeded but the
 workspace objective described already-finished work.*
