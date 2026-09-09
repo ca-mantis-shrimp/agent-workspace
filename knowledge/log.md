@@ -1,3 +1,11 @@
+## 2026-09-09
+* **Amendment**: Corrected `evaluations/platform-superproject-dogfood.md` — the "boundary is narrower than feared" headline held only for the freshness verdict; the real gap was the S6 transaction clean-base gate (inoperable on submodule files). Implemented the owning-repo resolution across the git-dependent periphery (clean-base gate via `ls-tree`→submodule `show`; provenance/drift/relocation via owning repo) and added two submodule tests. Cross-submodule atomicity left as git's boundary.
+* **Update**: Linked `evaluations/platform-superproject-dogfood.md` to `research/relocatable-exact-text-selectors.md` (The relocation probe (git_file_at_revision / probe_relocation) silently fails for submodule files because git show <rev>:<path> cannot resolve into a submodule tree; relocatable-selector work must run in the owning repo.).
+* **Update**: Updated concept `evaluations/platform-superproject-dogfood.md`.
+* **Update**: Linked `evaluations/platform-superproject-dogfood.md` to `decisions/freshness-cost-sequencing.md` (Superproject dogfood shows the diff-on-stale and relocation machinery this decision sequences both degrade for submodule files (git run in the wrong repo); the scoped owning-repo fix keeps them meaningful across the boundary.).
+* **Update**: Updated concept `evaluations/platform-superproject-dogfood.md`.
+* **Creation**: Documented concept `evaluations/platform-superproject-dogfood.md` (First superproject dogfood — proves freshness crosses the submodule boundary via content fingerprinting; isolates the one narrow degradation, where the observation's superproject-HEAD `observed_revision` drives three git renderings run in the wrong repo for submodule files; specifies a scoped owning-repo fix + submodule test to implement next session).
+
 ## 2026-09-08
 * **Creation**: Documented concept `evaluations/plot-checkpoint-summary-follow-up.md` (Checkpoint summary follow-up — sufficient content, inconclusive transport).
 * **Update**: Linked `evaluations/plot-checkpoint-summary-follow-up.md` to `evaluations/plot-continuation-insight.md`, `decisions/durable-constraints-portable-intent-entity.md`, `evaluations/plot-foreign-dogfood-write-loop.md`, and `design/s7-bounded-perception.md`.

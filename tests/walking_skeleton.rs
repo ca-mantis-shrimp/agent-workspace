@@ -562,6 +562,99 @@ fn s4_stale_evidence_cannot_accept_transaction() {
 }
 
 #[test]
+fn s6_clean_base_mutation_resolves_through_a_submodule_gitlink() {
+    // A superproject sees a submodule as one opaque gitlink, so the S6 clean-base
+    // gate — which reconstructs the base file via `git show <base>:<path>` — used
+    // to fatal-error for any file *inside* a submodule, making the whole
+    // transaction subsystem unusable on the exact files a superproject exists to
+    // coordinate. The gate must instead recover the submodule's pinned commit from
+    // the gitlink and show the file from the submodule's own history.
+    let (root, repository) = superproject_with_submodule();
+    let workspace = root.path().join("workspace-state");
+    let submodule_file = "lib-sub/api.rs";
+
+    // Cite the submodule file, then open a transaction gated on that belief.
+    let observation = invoke(&[
+        "observe",
+        "--repository",
+        repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        submodule_file,
+    ]);
+    let observation: Observation = serde_json::from_slice(&observation.stdout).unwrap();
+    let claim = invoke(&[
+        "claim",
+        "--repository",
+        repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--statement",
+        "api returns one",
+        "--observation",
+        &observation.id.to_string(),
+    ]);
+    let claim: Claim = serde_json::from_slice(&claim.stdout).unwrap();
+    let transaction = invoke(&[
+        "begin-transaction",
+        "--intent",
+        "edit the submodule file",
+        "--repository",
+        repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--claim",
+        &claim.id.to_string(),
+    ]);
+    let transaction: Transaction = serde_json::from_slice(&transaction.stdout).unwrap();
+
+    // The mutation that used to fail closed: a clean-base edit to a file inside the
+    // submodule. `invoke` asserts a zero exit, so a regression to the old
+    // `git show <super-base>:<submodule-path>` fatal would resurface right here.
+    let applied = invoke(&[
+        "apply",
+        "--repository",
+        repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &transaction.id.to_string(),
+        "--path",
+        submodule_file,
+        "--content",
+        "pub fn api() -> i32 { 2 }\n",
+    ]);
+    let applied: Transaction = serde_json::from_slice(&applied.stdout).unwrap();
+    assert_eq!(applied.mutations.len(), 1);
+    assert_eq!(
+        applied.mutations[0].path.as_path(),
+        Path::new(submodule_file)
+    );
+    assert_eq!(
+        fs::read_to_string(repository.join(submodule_file)).unwrap(),
+        "pub fn api() -> i32 { 2 }\n"
+    );
+
+    // Revert exercises the second clean-base call site and must restore the base
+    // bytes fetched from the submodule's own history.
+    let reverted = invoke(&[
+        "revert-transaction",
+        "--repository",
+        repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--id",
+        &transaction.id.to_string(),
+    ]);
+    let _: Transaction = serde_json::from_slice(&reverted.stdout).unwrap();
+    assert_eq!(
+        fs::read_to_string(repository.join(submodule_file)).unwrap(),
+        "pub fn api() -> i32 { 1 }\n"
+    );
+}
+
+#[test]
 fn current_passing_evidence_accepts_transaction() {
     let fixture = GitFixture::new();
     let workspace = fixture.root.path().join("workspace-state");
@@ -5573,6 +5666,63 @@ fn git(repository: &Path, arguments: &[&str]) {
     );
 }
 
+/// A superproject that pins a standalone one-file repo as a submodule at
+/// `lib-sub/`, tracking `lib-sub/api.rs`. Returns the live `TempDir` (keep it in
+/// scope for the duration of the test) and the superproject repository path.
+fn superproject_with_submodule() -> (TempDir, std::path::PathBuf) {
+    let root = TempDir::new().unwrap();
+
+    // A standalone repo that will be pinned as a submodule.
+    let submodule_origin = root.path().join("lib-origin");
+    fs::create_dir_all(&submodule_origin).unwrap();
+    git(&submodule_origin, &["init", "--quiet"]);
+    git(
+        &submodule_origin,
+        &["config", "user.email", "fixture@example.invalid"],
+    );
+    git(&submodule_origin, &["config", "user.name", "Fixture"]);
+    fs::write(
+        submodule_origin.join("api.rs"),
+        "pub fn api() -> i32 { 1 }\n",
+    )
+    .unwrap();
+    git(&submodule_origin, &["add", "api.rs"]);
+    git(
+        &submodule_origin,
+        &["commit", "--quiet", "-m", "submodule init"],
+    );
+
+    // The superproject that pins it at `lib-sub/`.
+    let repository = root.path().join("superproject");
+    fs::create_dir_all(&repository).unwrap();
+    git(&repository, &["init", "--quiet"]);
+    git(
+        &repository,
+        &["config", "user.email", "fixture@example.invalid"],
+    );
+    git(&repository, &["config", "user.name", "Fixture"]);
+    fs::write(repository.join("top.rs"), "pub fn top() -> i32 { 0 }\n").unwrap();
+    git(&repository, &["add", "top.rs"]);
+    // Modern git blocks file transport for local submodules unless opted in.
+    git(
+        &repository,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            submodule_origin.to_str().unwrap(),
+            "lib-sub",
+        ],
+    );
+    git(
+        &repository,
+        &["commit", "--quiet", "-m", "superproject with submodule"],
+    );
+
+    (root, repository)
+}
+
 // diff-on-stale: a stale verdict is cheap to investigate. The three cases are
 // the whole substance of the feature — a real diff when the drift is
 // uncommitted, an honest fallback when git has no baseline to show, and a clear
@@ -5617,6 +5767,52 @@ fn explain_stale_shows_a_git_diff_for_uncommitted_drift() {
             );
         }
         other => panic!("expected a git diff, got {other:?}"),
+    }
+}
+
+#[test]
+fn explain_stale_shows_a_scoped_git_diff_for_a_submodule_file() {
+    // The superproject sees a submodule as an opaque gitlink, so drift explanation
+    // used to degrade to a whole-file `current_content` dump for submodule files —
+    // it could not name *what* changed. Recording the owning submodule's HEAD as
+    // the capture revision and running the diff inside the submodule restores a
+    // real, file-granular git diff across the boundary.
+    let (root, repository) = superproject_with_submodule();
+    let workspace = root.path().join("workspace-state");
+    let handle = Workspace::open(&repository, &workspace).unwrap();
+
+    let belief = handle
+        .record_belief(
+            "api returns one",
+            &["lib-sub/api.rs".into()],
+            agent_workspace::ClaimScopeStrategy::Declared,
+        )
+        .unwrap();
+
+    // Uncommitted edit inside the submodule: the submodule HEAD still holds the
+    // observed bytes, so the submodule's own `git diff` can show what moved.
+    fs::write(
+        repository.join("lib-sub/api.rs"),
+        "pub fn api() -> i32 { 2 }\n",
+    )
+    .unwrap();
+
+    let explanation = handle.explain_stale(belief.claim.id).unwrap();
+    assert_eq!(explanation.freshness, FreshnessWithinScope::Stale);
+    assert_eq!(explanation.inputs.len(), 1);
+    assert_eq!(explanation.inputs[0].status, DriftStatus::Changed);
+    match &explanation.inputs[0].view {
+        Some(DriftView::Diff { text, .. }) => {
+            assert!(
+                text.contains("-pub fn api() -> i32 { 1 }"),
+                "expected the old line in a submodule-scoped diff, got: {text}"
+            );
+            assert!(
+                text.contains("+pub fn api() -> i32 { 2 }"),
+                "expected the new line in a submodule-scoped diff, got: {text}"
+            );
+        }
+        other => panic!("expected a git diff for the submodule file, got {other:?}"),
     }
 }
 

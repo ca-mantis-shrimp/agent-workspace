@@ -976,7 +976,7 @@ impl Workspace {
         } else {
             None
         };
-        let git_revision = git_output(&self.repository_root, &["rev-parse", "HEAD"])?;
+        let git_revision = owning_revision(&self.repository_root, &path)?;
         let reconciliation_fingerprint = observation_reconciliation_fingerprint(
             &self.repository_root,
             &path,
@@ -1193,7 +1193,7 @@ impl Workspace {
             None => (None, None),
         };
 
-        let git_revision = git_output(&self.repository_root, &["rev-parse", "HEAD"])?;
+        let git_revision = owning_revision(&self.repository_root, &path)?;
         let reconciliation_fingerprint = observation_reconciliation_fingerprint(
             &self.repository_root,
             &path,
@@ -2065,8 +2065,7 @@ impl Workspace {
                 "transaction is not open or already owns this path".to_owned(),
             ));
         }
-        let before =
-            git_file_at_revision(&self.repository_root, &transaction.base_revision, &path)?;
+        let before = clean_base_bytes(&self.repository_root, &transaction.base_revision, &path)?;
         let absolute_path = self.repository_root.join(&path);
         let current = fs::read(&absolute_path)?;
         if current != before {
@@ -2116,7 +2115,7 @@ impl Workspace {
                     mutation.path.display()
                 )));
             }
-            let original = git_file_at_revision(
+            let original = clean_base_bytes(
                 &self.repository_root,
                 &transaction.base_revision,
                 &mutation.path,

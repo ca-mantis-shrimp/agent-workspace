@@ -418,9 +418,13 @@ pub(crate) fn investigate_drift(
     let text = String::from_utf8_lossy(&bytes);
     let span = selector_line_span(&text, selector);
 
-    if let Some(path) = path.to_str() {
+    // Content and span come from the working tree at the superproject path, but the
+    // diff must run in the repo that owns the file (a submodule sees its own
+    // history; the superproject sees only an opaque gitlink).
+    let (git_root, git_path) = git_context(repository_root, path);
+    if let Some(git_path) = git_path.to_str() {
         let base = revision.unwrap_or("HEAD");
-        if let Ok(raw) = git_bytes(repository_root, &["diff", "--no-color", base, "--", path]) {
+        if let Ok(raw) = git_bytes(&git_root, &["diff", "--no-color", base, "--", git_path]) {
             let diff = String::from_utf8_lossy(&raw);
             let scoped = scope_diff_to_span(&diff, span);
             if !scoped.trim().is_empty() {
@@ -451,7 +455,8 @@ fn probe_relocation(
     if matches!(selector, ObservationSelector::WholeFile) {
         return None;
     }
-    let old_container = git_file_at_revision(repository_root, revision?, path).ok()?;
+    let (git_root, git_path) = git_context(repository_root, path);
+    let old_container = git_file_at_revision(&git_root, revision?, &git_path).ok()?;
     let old_unit = select_observation_unit(&old_container, selector).ok()?;
     if old_unit.is_empty() {
         return None;
@@ -776,6 +781,116 @@ pub(crate) fn git_file_at_revision(
     git_bytes(repository_root, &["show", &object])
 }
 
+/// A submodule that owns an observed/mutated path, when the path lives inside one.
+/// `None` means the superproject (or a plain checkout) owns the file directly, and
+/// callers should keep today's superproject-rooted git behavior.
+pub(crate) struct SubmoduleContext {
+    /// Absolute toplevel of the owning submodule's working tree.
+    pub(crate) root: PathBuf,
+    /// The submodule's directory relative to the superproject — the gitlink path
+    /// recorded in the superproject tree, i.e. the argument to `git ls-tree`.
+    pub(crate) gitlink_path: PathBuf,
+    /// The path relative to the submodule root.
+    pub(crate) relative_path: PathBuf,
+}
+
+/// Resolve the git repository that actually owns `path`. Git at the superproject
+/// root sees a submodule as one opaque gitlink, so a `git show`/`git diff` for a
+/// file *inside* a submodule must run in the submodule's own repo instead. Returns
+/// `None` — degrade to superproject behavior — whenever git cannot place the file,
+/// so plain checkouts and any resolution failure behave exactly as before.
+pub(crate) fn owning_submodule(repository_root: &Path, path: &Path) -> Option<SubmoduleContext> {
+    let absolute = repository_root.join(path);
+    let start = absolute.parent().unwrap_or(absolute.as_path());
+    let toplevel = git_output(start, &["rev-parse", "--show-toplevel"]).ok()?;
+    let root = fs::canonicalize(toplevel).ok()?;
+    let super_root = fs::canonicalize(repository_root).ok()?;
+    if root == super_root {
+        return None;
+    }
+    let gitlink_path = root.strip_prefix(&super_root).ok()?.to_path_buf();
+    let relative_path = fs::canonicalize(&absolute)
+        .ok()?
+        .strip_prefix(&root)
+        .ok()?
+        .to_path_buf();
+    Some(SubmoduleContext {
+        root,
+        gitlink_path,
+        relative_path,
+    })
+}
+
+/// The `(git root, git-relative path)` to run a `git` operation for `path` in —
+/// the owning submodule when `path` lives in one, else the superproject unchanged.
+/// Use this when the revision being passed already belongs to the owning repo (an
+/// observation's capture revision, recorded via [`owning_revision`]); the base for
+/// a *transaction* is a superproject SHA and must go through [`clean_base_bytes`].
+fn git_context(repository_root: &Path, path: &Path) -> (PathBuf, PathBuf) {
+    match owning_submodule(repository_root, path) {
+        Some(context) => (context.root, context.relative_path),
+        None => (repository_root.to_path_buf(), path.to_path_buf()),
+    }
+}
+
+/// The HEAD of the git repository that owns `path`: the owning submodule's HEAD for
+/// a submodule file — so an observation's provenance names the revision that
+/// actually contains the file, and later drift/relocation `git` reads resolve in
+/// the repo where that revision exists — else the superproject HEAD.
+pub(crate) fn owning_revision(
+    repository_root: &Path,
+    path: &Path,
+) -> Result<String, WorkspaceError> {
+    let (git_root, _) = git_context(repository_root, path);
+    git_output(&git_root, &["rev-parse", "HEAD"])
+}
+
+/// Fetch a path's bytes at a transaction's clean base, resolving through the
+/// owning git repository. In the superproject this is a plain
+/// `git show <base>:<path>`. For a submodule file the superproject records only an
+/// opaque gitlink at `base`, so recover the submodule's pinned commit from that
+/// gitlink and show the file from the submodule's own history — keeping the S6
+/// clean-base check meaningful across the boundary with no change to the recorded
+/// base revision. (A dirty submodule still fails the caller's equality check,
+/// which is correct: a dirty submodule is not a clean base.)
+pub(crate) fn clean_base_bytes(
+    repository_root: &Path,
+    base_revision: &str,
+    path: &Path,
+) -> Result<Vec<u8>, WorkspaceError> {
+    match owning_submodule(repository_root, path) {
+        None => git_file_at_revision(repository_root, base_revision, path),
+        Some(context) => {
+            let pinned =
+                pinned_submodule_revision(repository_root, base_revision, &context.gitlink_path)?;
+            git_file_at_revision(&context.root, &pinned, &context.relative_path)
+        }
+    }
+}
+
+/// Recover a submodule's pinned commit from the superproject's gitlink at
+/// `base_revision`. `git ls-tree <base> <gitlink>` prints
+/// `160000 commit <sha>\t<path>`; the third whitespace-delimited field is the SHA.
+fn pinned_submodule_revision(
+    repository_root: &Path,
+    base_revision: &str,
+    gitlink_path: &Path,
+) -> Result<String, WorkspaceError> {
+    let gitlink = gitlink_path.to_str().ok_or_else(|| {
+        WorkspaceError::Git("non-UTF-8 submodule path is not yet supported".to_owned())
+    })?;
+    let entry = git_output(repository_root, &["ls-tree", base_revision, gitlink])?;
+    entry
+        .split_whitespace()
+        .nth(2)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            WorkspaceError::Git(format!(
+                "superproject base has no gitlink for submodule {gitlink}"
+            ))
+        })
+}
+
 pub(crate) fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<(), WorkspaceError> {
     let parent = path
         .parent()
@@ -808,6 +923,14 @@ pub(crate) fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<(), 
     result
 }
 
+// NOTE (superproject caution): this enumerates via `git ls-files` at the given
+// root, which lists a submodule as a single gitlink entry and never descends into
+// it — so a submodule collapses to a `<directory>` marker and this fingerprint is
+// blind to any change inside a submodule. That is harmless today only because the
+// value it produces (`initial_worktree_fingerprint`) is recorded at
+// TransactionBegan but never read back to drive a decision. Do NOT wire this into
+// a freshness/coverage check on a superproject without first making it descend
+// into submodules; otherwise it will silently pass submodule drift.
 pub(crate) fn worktree_fingerprint(repository_root: &Path) -> Result<String, WorkspaceError> {
     let listed = git_bytes(
         repository_root,
