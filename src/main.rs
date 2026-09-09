@@ -68,13 +68,15 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
     let _lock = workspace.lock_exclusive()?;
 
     match command.as_str() {
-        "bind-objective" => {
-            print_json(&workspace.bind_objective(
-                options.intent.ok_or_else(|| {
-                    CliError::Usage("bind-objective requires --intent".to_owned())
-                })?,
-                options.external_reference,
-            )?)?;
+        "set-intent" => {
+            print_json(
+                &workspace.set_intent(
+                    options.intent.ok_or_else(|| {
+                        CliError::Usage("set-intent requires --intent".to_owned())
+                    })?,
+                    options.external_reference,
+                )?,
+            )?;
         }
         "focus" => {
             let observation_id = options

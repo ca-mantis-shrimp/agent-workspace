@@ -156,8 +156,8 @@ fn mcp_server_projects_the_complete_read_surface_over_stdio() {
 
     let bound = server.call(
         3,
-        "workspace_bind_objective",
-        json!({"intent": "exercise the MCP read surface"}),
+        "workspace_set_intent",
+        json!({"thesis": "exercise the MCP read surface"}),
     );
     assert_eq!(bound["result"]["isError"], json!(false));
     let belief = server.call(
@@ -188,7 +188,7 @@ fn mcp_server_projects_the_complete_read_surface_over_stdio() {
 
     let brief_status = tool_json(&server.call(6, "workspace_status", json!({})));
     assert_eq!(
-        brief_status["objective"]["intent"],
+        brief_status["intent"]["thesis"],
         "exercise the MCP read surface"
     );
     assert_eq!(brief_status["counts"]["open_transactions"], 1);
@@ -339,7 +339,7 @@ fn mcp_server_names_a_missing_repository_instead_of_a_bare_io_error() {
 }
 
 #[test]
-fn mcp_server_binds_an_objective_over_stdio() {
+fn mcp_server_sets_an_intent_over_stdio() {
     let repo = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
     make_repo(repo.path());
@@ -347,34 +347,34 @@ fn mcp_server_binds_an_objective_over_stdio() {
 
     let names = server.handshake();
     assert!(
-        names.contains(&"workspace_bind_objective".to_owned()),
-        "bind-objective tool not routed; got {names:?}"
+        names.contains(&"workspace_set_intent".to_owned()),
+        "set-intent tool not routed; got {names:?}"
     );
 
-    // Binding an objective records it and returns the projected Objective.
+    // Setting the intent records it and returns the projected Intent.
     let ok = server.call(
         3,
-        "workspace_bind_objective",
-        json!({"intent": "write-api slice 2",
+        "workspace_set_intent",
+        json!({"thesis": "write-api slice 2",
                "external_reference": "clearhead:01a06f11"}),
     );
     assert_eq!(
         ok["result"]["isError"],
         json!(false),
-        "bind_objective should succeed: {ok}"
+        "set_intent should succeed: {ok}"
     );
     let text = ok["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
-        text.contains("\"intent\""),
-        "expected an objective in the result: {text}"
+        text.contains("\"thesis\""),
+        "expected an intent in the result: {text}"
     );
 
-    // An empty intent is rejected strictly so bad objectives cannot land silently.
-    let bad = server.call(4, "workspace_bind_objective", json!({"intent": "   "}));
+    // An empty thesis is rejected strictly so bad intents cannot land silently.
+    let bad = server.call(4, "workspace_set_intent", json!({"thesis": "   "}));
     assert_eq!(
         bad["result"]["isError"],
         json!(true),
-        "empty intent must be an error: {bad}"
+        "empty thesis must be an error: {bad}"
     );
 }
 

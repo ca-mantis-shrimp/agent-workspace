@@ -51,7 +51,7 @@ const TOOL_METADATA = {
 	workspace_status: {
 		label: "Workspace Status",
 		promptSnippet:
-			"Workspace orientation: objective, claim freshness, checkpoints.",
+			"Workspace orientation: intent, claim freshness, checkpoints.",
 		promptGuidelines: [
 			"Call workspace_status when resuming work or before acting on a workspace claim: a stale claim outranks your remembered belief.",
 		],
@@ -91,10 +91,12 @@ const TOOL_METADATA = {
 			"Record durable beliefs as they form; a later stale verdict outranks memory.",
 		],
 	},
-	workspace_bind_objective: {
-		label: "Workspace Bind Objective",
-		promptSnippet: "Bind the workspace to the current objective.",
-		promptGuidelines: ["Bind the external work authority when one exists."],
+	workspace_set_intent: {
+		label: "Workspace Set Intent",
+		promptSnippet: "Set the workspace's current intent, thesis-first.",
+		promptGuidelines: [
+			"Reference the external work authority (e.g. a Clearhead objective) when one exists.",
+		],
 	},
 	workspace_supersede_claim: {
 		label: "Workspace Supersede Claim",
@@ -107,7 +109,7 @@ const TOOL_METADATA = {
 		label: "Workspace Checkpoint",
 		promptSnippet: "Draw a named restart boundary in the workspace log.",
 		promptGuidelines: [
-			"Checkpoint each coherent completed slice before changing objectives.",
+			"Checkpoint each coherent completed slice before changing intent.",
 		],
 	},
 	workspace_observe_read: {

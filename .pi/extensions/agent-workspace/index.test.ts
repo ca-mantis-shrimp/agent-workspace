@@ -50,7 +50,7 @@ const TOOL_NAMES = [
 	"workspace_findings",
 	"workspace_transaction_preview",
 	"workspace_record_belief",
-	"workspace_bind_objective",
+	"workspace_set_intent",
 	"workspace_supersede_claim",
 	"workspace_checkpoint",
 	"workspace_observe_read",

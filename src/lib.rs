@@ -13,7 +13,7 @@ mod reconcile;
 pub use locate::resolve_state_root;
 pub use model::*;
 pub use projection::*;
-use projection::{BRIEF_OBJECTIVE_MAX_CHARS, WORKING_SET_UNCITED_CANDIDATE_LIMIT, claim_headline};
+use projection::{BRIEF_INTENT_MAX_CHARS, WORKING_SET_UNCITED_CANDIDATE_LIMIT, claim_headline};
 use reconcile::*;
 pub use reconcile::{DriftStatus, DriftView, InputDrift, RelocationProbe, StaleExplanation};
 
@@ -33,7 +33,7 @@ pub enum WorkspaceError {
     Io(std::io::Error),
     Json(serde_json::Error),
     InvalidPath(PathBuf),
-    InvalidObjective(String),
+    InvalidIntent(String),
     InvalidConfig(String),
     InvalidWorkingSet(String),
     Git(String),
@@ -64,7 +64,7 @@ impl fmt::Display for WorkspaceError {
                     path.display()
                 )
             }
-            Self::InvalidObjective(message) => write!(formatter, "invalid objective: {message}"),
+            Self::InvalidIntent(message) => write!(formatter, "invalid intent: {message}"),
             Self::InvalidConfig(message) => write!(formatter, "invalid config: {message}"),
             Self::InvalidWorkingSet(message) => {
                 write!(formatter, "invalid working set entry: {message}")
@@ -129,8 +129,14 @@ struct AssembledClaim {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Event {
-    ObjectiveBound {
-        intent: String,
+    /// Wire type is pinned to `objective_bound` and the payload key to `intent`
+    /// (both via `serde(rename)`) so journals written before the objective→intent
+    /// rename replay byte-identically. Only the Rust-side names became `IntentSet`
+    /// / `thesis`; the persisted format is unchanged.
+    #[serde(rename = "objective_bound")]
+    IntentSet {
+        #[serde(rename = "intent")]
+        thesis: String,
         external_reference: Option<String>,
     },
     ObservationFocused {
@@ -346,24 +352,24 @@ impl Workspace {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn bind_objective(
+    pub fn set_intent(
         &self,
-        intent: impl Into<String>,
+        thesis: impl Into<String>,
         external_reference: Option<String>,
-    ) -> Result<Objective, WorkspaceError> {
-        let intent = intent.into();
-        if intent.trim().is_empty() {
-            return Err(WorkspaceError::InvalidObjective(
-                "intent must not be empty".to_owned(),
+    ) -> Result<Intent, WorkspaceError> {
+        let thesis = thesis.into();
+        if thesis.trim().is_empty() {
+            return Err(WorkspaceError::InvalidIntent(
+                "thesis must not be empty".to_owned(),
             ));
         }
-        self.append(Event::ObjectiveBound {
-            intent,
+        self.append(Event::IntentSet {
+            thesis,
             external_reference,
         })?;
-        self.project()?.objective.ok_or_else(|| {
-            WorkspaceError::CorruptLog("objective event was not projected".to_owned())
-        })
+        self.project()?
+            .intent
+            .ok_or_else(|| WorkspaceError::CorruptLog("intent event was not projected".to_owned()))
     }
 
     pub fn focus_observation(
@@ -541,7 +547,7 @@ impl Workspace {
             }
         }
         WorkspaceStatus {
-            objective: projection.objective,
+            intent: projection.intent,
             working_set: projection.working_set.into_values().collect(),
             navigation_trail: projection.navigation_trail,
             observations: projection.observations.into_values().collect(),
@@ -747,17 +753,16 @@ impl Workspace {
         };
         let baseline = self.project_upto(Some(checkpoint.sequence))?;
 
-        let objective_change =
-            (baseline.objective != current.objective).then(|| BriefObjectiveChange {
-                before: baseline
-                    .objective
-                    .as_ref()
-                    .map(|objective| claim_headline(&objective.intent, BRIEF_OBJECTIVE_MAX_CHARS)),
-                after: current
-                    .objective
-                    .as_ref()
-                    .map(|objective| claim_headline(&objective.intent, BRIEF_OBJECTIVE_MAX_CHARS)),
-            });
+        let intent_change = (baseline.intent != current.intent).then(|| BriefIntentChange {
+            before: baseline
+                .intent
+                .as_ref()
+                .map(|intent| claim_headline(&intent.thesis, BRIEF_INTENT_MAX_CHARS)),
+            after: current
+                .intent
+                .as_ref()
+                .map(|intent| claim_headline(&intent.thesis, BRIEF_INTENT_MAX_CHARS)),
+        });
         let active_claims = current
             .claims
             .values()
@@ -816,7 +821,7 @@ impl Workspace {
 
         Ok(BriefDeltaStatus {
             checkpoint: BriefCheckpoint::from_marker(&checkpoint),
-            objective_change,
+            intent_change,
             claims_recorded,
             claims_superseded,
             claims_staled,
@@ -845,10 +850,10 @@ impl Workspace {
         let baseline = self.project_upto(Some(checkpoint.sequence))?;
         let current = self.resume_status()?;
 
-        let objective_change = if baseline.objective != current.objective {
-            Some(ObjectiveChange {
-                before: baseline.objective.clone(),
-                after: current.objective.clone(),
+        let intent_change = if baseline.intent != current.intent {
+            Some(IntentChange {
+                before: baseline.intent.clone(),
+                after: current.intent.clone(),
             })
         } else {
             None
@@ -906,7 +911,7 @@ impl Workspace {
 
         Ok(DeltaStatus {
             checkpoint,
-            objective_change,
+            intent_change,
             claims_recorded,
             claims_superseded,
             claims_staled,
@@ -2354,7 +2359,7 @@ impl Workspace {
 
 #[derive(Default)]
 struct Projection {
-    objective: Option<Objective>,
+    intent: Option<Intent>,
     working_set: BTreeMap<u64, WorkingSetEntry>,
     /// Ordered focus history — one entry per `ObservationFocused` event,
     /// revisits included. The deduped `working_set` map answers "what am I
@@ -2400,12 +2405,12 @@ impl Projection {
         self.next_sequence += 1;
 
         match record.event {
-            Event::ObjectiveBound {
-                intent,
+            Event::IntentSet {
+                thesis,
                 external_reference,
             } => {
-                self.objective = Some(Objective {
-                    intent,
+                self.intent = Some(Intent {
+                    thesis,
                     external_reference,
                 });
             }
@@ -3031,7 +3036,7 @@ impl Projection {
                     label,
                     note,
                     git_revision,
-                    objective: self.objective.clone(),
+                    intent: self.intent.clone(),
                     // `next_sequence` was advanced above; this event's own
                     // sequence is therefore one less.
                     sequence: self.next_sequence - 1,

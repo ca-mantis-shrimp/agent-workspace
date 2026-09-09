@@ -421,8 +421,8 @@ impl Claim {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Objective {
-    pub intent: String,
+pub struct Intent {
+    pub thesis: String,
     pub external_reference: Option<String>,
 }
 
@@ -619,7 +619,7 @@ impl Transaction {
 }
 
 /// A named point in the event log. Recording a checkpoint captures *where in the
-/// log* a line was drawn (its `sequence`) together with the objective in force at
+/// log* a line was drawn (its `sequence`) together with the intent in force at
 /// that moment. It creates no entity state of its own; it is the anchor a delta
 /// projection diffs against.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -628,6 +628,6 @@ pub struct CheckpointMarker {
     #[serde(default)]
     pub note: Option<String>,
     pub git_revision: String,
-    pub objective: Option<Objective>,
+    pub intent: Option<Intent>,
     pub sequence: u64,
 }

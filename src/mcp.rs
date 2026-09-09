@@ -72,13 +72,13 @@ pub struct AmendClaimParams {
     pub full: bool,
 }
 
-/// Input schema for `workspace_bind_objective`, exposing the CLI
-/// `bind-objective` verb over the same thin transport.
+/// Input schema for `workspace_set_intent`, exposing the CLI
+/// `set-intent` verb over the same thin transport.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct BindObjectiveParams {
+pub struct SetIntentParams {
     /// Why the current work exists, thesis-first.
-    pub intent: String,
-    /// Optional external authority reference (e.g. a Clearhead action id or URL).
+    pub thesis: String,
+    /// Optional external authority reference (e.g. a Clearhead objective/action id or URL).
     pub external_reference: Option<String>,
 }
 
@@ -190,7 +190,7 @@ impl WorkspaceServer {
     }
 
     #[tool(
-        description = "Orient in the persistent agent workspace: objective, a kernel-bounded stale-first claim window with explicit omission count, aggregate freshness, open transactions, and latest checkpoint. `full` returns the complete audit record. A stale claim outranks your remembered belief."
+        description = "Orient in the persistent agent workspace: intent, a kernel-bounded stale-first claim window with explicit omission count, aggregate freshness, open transactions, and latest checkpoint. `full` returns the complete audit record. A stale claim outranks your remembered belief."
     )]
     fn workspace_status(
         &self,
@@ -200,7 +200,7 @@ impl WorkspaceServer {
     }
 
     #[tool(
-        description = "Kernel-bounded changes since a checkpoint: objective shift plus total/recent ids for claims, observations, and transactions. Use after workspace_status when resuming; `full` returns complete changed entities and `since` selects a checkpoint label."
+        description = "Kernel-bounded changes since a checkpoint: intent shift plus total/recent ids for claims, observations, and transactions. Use after workspace_status when resuming; `full` returns complete changed entities and `since` selects a checkpoint label."
     )]
     fn workspace_delta(
         &self,
@@ -290,13 +290,13 @@ impl WorkspaceServer {
     }
 
     #[tool(
-        description = "Bind (or rebind) the workspace objective: declare why the current work exists, with an optional reference to an external authority such as a Clearhead action. This records an ObjectiveBound event; a future status/delta will surface the intent and the transition."
+        description = "Set (or reset) the workspace intent: declare why the current work exists, thesis-first, with an optional reference to an external authority such as a Clearhead objective or action. This records an intent event; a future status/delta will surface the intent and the transition."
     )]
-    fn workspace_bind_objective(
+    fn workspace_set_intent(
         &self,
-        Parameters(params): Parameters<BindObjectiveParams>,
+        Parameters(params): Parameters<SetIntentParams>,
     ) -> Result<CallToolResult, McpError> {
-        match self.bind(params.intent, params.external_reference) {
+        match self.set_intent(params.thesis, params.external_reference) {
             Ok(json) => Ok(CallToolResult::success(vec![ContentBlock::text(json)])),
             Err(message) => Ok(CallToolResult::error(vec![ContentBlock::text(message)])),
         }
@@ -481,8 +481,12 @@ impl WorkspaceServer {
         })
     }
 
-    fn bind(&self, intent: String, external_reference: Option<String>) -> Result<String, String> {
-        self.run(move |workspace| workspace.bind_objective(intent, external_reference))
+    fn set_intent(
+        &self,
+        thesis: String,
+        external_reference: Option<String>,
+    ) -> Result<String, String> {
+        self.run(move |workspace| workspace.set_intent(thesis, external_reference))
     }
 
     fn supersede(
@@ -564,7 +568,7 @@ impl ServerHandler for WorkspaceServer {
         info.instructions = Some(
             "Agent Workspace: orient with workspace_status then workspace_delta; inspect \
              attention, findings, and transaction readiness with workspace_working_set, \
-             workspace_findings, and workspace_transaction_preview. Bind the objective, \
+             workspace_findings, and workspace_transaction_preview. Set the intent, \
              record cited beliefs, retire revised claims, checkpoint coherent slices, and \
              capture native reads through the corresponding workspace_* tools. A claim \
              reported as stale outranks your remembered belief."

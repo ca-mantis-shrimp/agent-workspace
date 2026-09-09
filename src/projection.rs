@@ -12,7 +12,7 @@ use crate::model::*;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkspaceStatus {
-    pub objective: Option<Objective>,
+    pub intent: Option<Intent>,
     pub working_set: Vec<WorkingSetEntry>,
     #[serde(default)]
     pub navigation_trail: Vec<WorkingSetEntry>,
@@ -39,7 +39,7 @@ pub struct WorkspaceStatus {
 
 /// The default `status` output: the orientation surface an agent resumes from,
 /// not the full audit dump (`--full`, [`WorkspaceStatus`]). It carries the
-/// objective in force, a bounded stale-first window of active claims as
+/// intent in force, a bounded stale-first window of active claims as
 /// scannable headlines with freshness and scope, a freshness histogram, and
 /// counts — nothing heavier. `claims_omitted` makes truncation explicit.
 /// Observations, superseded claims, evidence, transactions, and per-claim
@@ -49,7 +49,7 @@ pub struct WorkspaceStatus {
 /// to serialize.
 #[derive(Clone, Debug, Serialize)]
 pub struct BriefStatus {
-    pub objective: Option<Objective>,
+    pub intent: Option<Intent>,
     pub claims: Vec<BriefClaim>,
     pub claims_omitted: usize,
     pub counts: BriefCounts,
@@ -157,14 +157,14 @@ impl WorkspaceStatus {
             })
             .collect();
         BriefStatus {
-            // The objective is the orientation anchor, so it is shown far more
+            // The intent is the orientation anchor, so it is shown far more
             // generously than the delta's change-summary headline — but it is
             // still bounded, because it is the one wake-status field that would
             // otherwise grow without limit and reopen the inline-preview-budget
-            // finding the claim cap closed. The full intent is one `--full` away.
-            objective: self.objective.as_ref().map(|objective| Objective {
-                intent: claim_headline(&objective.intent, BRIEF_STATUS_OBJECTIVE_MAX_CHARS),
-                external_reference: objective.external_reference.clone(),
+            // finding the claim cap closed. The full thesis is one `--full` away.
+            intent: self.intent.as_ref().map(|intent| Intent {
+                thesis: claim_headline(&intent.thesis, BRIEF_STATUS_INTENT_MAX_CHARS),
+                external_reference: intent.external_reference.clone(),
             }),
             claims,
             claims_omitted: self.claims.len().saturating_sub(BRIEF_CLAIM_LIMIT),
@@ -639,17 +639,17 @@ impl WorkspaceStatus {
 ///
 /// The claim cap is the load-bearing bound: headline length was already capped,
 /// but at eight claims the *cardinality* cap never bit, so a real wake status —
-/// which also carries the bound objective, unlike a bare claim list — ran past
+/// which also carries the bound intent, unlike a bare claim list — ran past
 /// the Claude Code inline-preview budget (status ~2.5KB > 1800B; the imported
 /// wake-legibility finding). Five keeps the stale-first window that actually
-/// needs re-verification within budget with the objective present, and
+/// needs re-verification within budget with the intent present, and
 /// `claims_omitted` plus `--full` keep the remainder one step away.
 const BRIEF_CLAIM_LIMIT: usize = 5;
 const BRIEF_HEADLINE_MAX_CHARS: usize = 80;
-/// The objective anchor's upper bound in the brief status — generous enough that
-/// a normal two-to-three sentence intent shows whole, but bounded so the wake
-/// status cannot grow past the inline-preview budget on the objective axis.
-const BRIEF_STATUS_OBJECTIVE_MAX_CHARS: usize = 300;
+/// The intent anchor's upper bound in the brief status — generous enough that
+/// a normal two-to-three sentence thesis shows whole, but bounded so the wake
+/// status cannot grow past the inline-preview budget on the intent axis.
+const BRIEF_STATUS_INTENT_MAX_CHARS: usize = 300;
 /// The latest checkpoint note's excerpt bound in the brief status. Sized to carry
 /// a decision or two ("axis = SI suffixes, agreed as the slice after bar") whole,
 /// but bounded so a long durable-prose note cannot grow the wake status past the
@@ -677,11 +677,11 @@ pub(crate) fn claim_headline(statement: &str, max_chars: usize) -> String {
     format!("{}…", head.trim_end())
 }
 
-/// The objective in force shifted between the checkpoint and now.
+/// The intent in force shifted between the checkpoint and now.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ObjectiveChange {
-    pub before: Option<Objective>,
-    pub after: Option<Objective>,
+pub struct IntentChange {
+    pub before: Option<Intent>,
+    pub after: Option<Intent>,
 }
 
 /// What changed since a checkpoint. Every field is derived by projecting the log
@@ -691,7 +691,7 @@ pub struct ObjectiveChange {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DeltaStatus {
     pub checkpoint: CheckpointMarker,
-    pub objective_change: Option<ObjectiveChange>,
+    pub intent_change: Option<IntentChange>,
     pub claims_recorded: Vec<Claim>,
     pub claims_superseded: Vec<Claim>,
     pub claims_staled: Vec<Claim>,
@@ -706,7 +706,7 @@ pub struct DeltaStatus {
 #[derive(Clone, Debug, Serialize)]
 pub struct BriefDeltaStatus {
     pub checkpoint: BriefCheckpoint,
-    pub objective_change: Option<BriefObjectiveChange>,
+    pub intent_change: Option<BriefIntentChange>,
     pub claims_recorded: BriefIdSet,
     pub claims_superseded: BriefIdSet,
     pub claims_staled: BriefIdSet,
@@ -716,7 +716,7 @@ pub struct BriefDeltaStatus {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct BriefObjectiveChange {
+pub struct BriefIntentChange {
     pub before: Option<String>,
     pub after: Option<String>,
 }
@@ -744,17 +744,16 @@ impl DeltaStatus {
     pub fn brief(&self) -> BriefDeltaStatus {
         BriefDeltaStatus {
             checkpoint: BriefCheckpoint::from_marker(&self.checkpoint),
-            objective_change: self
-                .objective_change
-                .as_ref()
-                .map(|change| BriefObjectiveChange {
-                    before: change.before.as_ref().map(|objective| {
-                        claim_headline(&objective.intent, BRIEF_OBJECTIVE_MAX_CHARS)
-                    }),
-                    after: change.after.as_ref().map(|objective| {
-                        claim_headline(&objective.intent, BRIEF_OBJECTIVE_MAX_CHARS)
-                    }),
-                }),
+            intent_change: self.intent_change.as_ref().map(|change| BriefIntentChange {
+                before: change
+                    .before
+                    .as_ref()
+                    .map(|intent| claim_headline(&intent.thesis, BRIEF_INTENT_MAX_CHARS)),
+                after: change
+                    .after
+                    .as_ref()
+                    .map(|intent| claim_headline(&intent.thesis, BRIEF_INTENT_MAX_CHARS)),
+            }),
             claims_recorded: BriefIdSet::from_ids(self.claims_recorded.iter().map(|item| item.id)),
             claims_superseded: BriefIdSet::from_ids(
                 self.claims_superseded.iter().map(|item| item.id),
@@ -774,4 +773,4 @@ impl DeltaStatus {
 }
 
 const BRIEF_DELTA_ID_LIMIT: usize = 16;
-pub(crate) const BRIEF_OBJECTIVE_MAX_CHARS: usize = 120;
+pub(crate) const BRIEF_INTENT_MAX_CHARS: usize = 120;

@@ -1,7 +1,7 @@
 use agent_workspace::{
     Belief, BeliefSupport, Claim, ClaimInputSource, ClaimLifecycle, DeltaStatus, DriftStatus,
     DriftView, Evidence, Finding, FindingDisposition, FindingSeverity, FreshnessWithinScope,
-    Normalizer, Objective, Observation, ObservationCapture, ObservationCaptureOptions,
+    Intent, Normalizer, Observation, ObservationCapture, ObservationCaptureOptions,
     ObservationSelector, RelocationProbe, RevealedFinding, RevealedObservation, ScopeCompleteness,
     ScopeSource, Transaction, TransactionState, Workspace, WorkspaceStatus,
 };
@@ -630,11 +630,11 @@ fn current_passing_evidence_accepts_transaction() {
 }
 
 #[test]
-fn s5_restart_recovers_objective_working_set_and_open_work() {
+fn s5_restart_recovers_intent_working_set_and_open_work() {
     let fixture = GitFixture::new();
     let workspace = fixture.root.path().join("workspace-state");
     invoke(&[
-        "bind-objective",
+        "set-intent",
         "--repository",
         fixture.repository.to_str().unwrap(),
         "--workspace",
@@ -717,10 +717,7 @@ fn s5_restart_recovers_objective_working_set_and_open_work() {
     ]);
     let resumed: WorkspaceStatus = serde_json::from_slice(&resumed.stdout).unwrap();
     assert_eq!(
-        resumed
-            .objective
-            .as_ref()
-            .map(|objective| objective.intent.as_str()),
+        resumed.intent.as_ref().map(|intent| intent.thesis.as_str()),
         Some("prove restart recovery")
     );
     assert_eq!(resumed.working_set[0].observation_id, observation.id);
@@ -1836,10 +1833,10 @@ fn checkpoint_delta_reports_recorded_superseded_and_staled_since_a_line() {
         delta.claims_staled[0].report.freshness_within_scope,
         FreshnessWithinScope::Stale
     );
-    // A reused observation, an untouched objective, and no transactions must not
+    // A reused observation, an untouched intent, and no transactions must not
     // masquerade as changes.
     assert!(delta.observations_recorded.is_empty());
-    assert!(delta.objective_change.is_none());
+    assert!(delta.intent_change.is_none());
     assert!(delta.transactions_opened.is_empty());
     assert!(delta.transactions_closed.is_empty());
 }
@@ -1942,14 +1939,14 @@ fn delta_without_a_label_uses_the_latest_checkpoint() {
 }
 
 #[test]
-fn checkpoint_rejects_duplicate_labels_and_records_objective_change() {
+fn checkpoint_rejects_duplicate_labels_and_records_intent_change() {
     let fixture = GitFixture::new();
     let workspace = fixture.root.path().join("workspace-state");
     let repo = fixture.repository.to_str().unwrap().to_owned();
     let ws = workspace.to_str().unwrap().to_owned();
 
     invoke(&[
-        "bind-objective",
+        "set-intent",
         "--repository",
         &repo,
         "--workspace",
@@ -1979,7 +1976,7 @@ fn checkpoint_rejects_duplicate_labels_and_records_objective_change() {
     assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already used"));
 
     invoke(&[
-        "bind-objective",
+        "set-intent",
         "--repository",
         &repo,
         "--workspace",
@@ -1993,15 +1990,15 @@ fn checkpoint_rejects_duplicate_labels_and_records_objective_change() {
     )
     .unwrap();
     assert_eq!(
-        delta.checkpoint.objective,
-        Some(Objective {
-            intent: "ship the delta view".to_owned(),
+        delta.checkpoint.intent,
+        Some(Intent {
+            thesis: "ship the delta view".to_owned(),
             external_reference: None,
         })
     );
-    let change = delta.objective_change.expect("objective changed");
-    assert_eq!(change.before.unwrap().intent, "ship the delta view");
-    assert_eq!(change.after.unwrap().intent, "ship the read hook");
+    let change = delta.intent_change.expect("intent changed");
+    assert_eq!(change.before.unwrap().thesis, "ship the delta view");
+    assert_eq!(change.after.unwrap().thesis, "ship the read hook");
 }
 
 #[test]
@@ -2031,7 +2028,7 @@ fn default_status_is_the_brief_orientation_surface() {
     let ws = workspace.to_str().unwrap().to_owned();
 
     invoke(&[
-        "bind-objective",
+        "set-intent",
         "--repository",
         &repo,
         "--workspace",
@@ -2083,7 +2080,7 @@ fn default_status_is_the_brief_orientation_surface() {
     // orientation surface...
     let brief_out = invoke(&["status", "--repository", &repo, "--workspace", &ws]);
     let brief: Value = serde_json::from_slice(&brief_out.stdout).unwrap();
-    assert_eq!(brief["objective"]["intent"], "make status cheap to consult");
+    assert_eq!(brief["intent"]["thesis"], "make status cheap to consult");
     assert_eq!(brief["claims"].as_array().unwrap().len(), 2);
     // Short claim: headline is the whole statement, no ellipsis.
     assert_eq!(brief["claims"][0]["headline"], "lib.rs defines the kernel");
@@ -2162,11 +2159,11 @@ fn brief_status_caps_claims_and_compact_transport_fits_hook_preview() {
     )
     .unwrap();
 
-    // A bound objective is part of every real wake status and is not truncated
+    // A bound intent is part of every real wake status and is not truncated
     // in the brief surface (it is the orientation anchor), so the budget guard
-    // is only honest if it carries one. Use a realistically long intent.
+    // is only honest if it carries one. Use a realistically long thesis.
     invoke(&[
-        "bind-objective",
+        "set-intent",
         "--repository",
         &repo,
         "--workspace",
@@ -2209,7 +2206,7 @@ fn brief_status_caps_claims_and_compact_transport_fits_hook_preview() {
     assert_eq!(brief["claims"].as_array().unwrap().len(), 5);
     assert_eq!(brief["claims_omitted"], 7);
     assert_eq!(brief["counts"]["active_claims"], 12);
-    // The whole point of the slice: the wake status — objective included — fits
+    // The whole point of the slice: the wake status — intent included — fits
     // the harness inline-preview budget (1800B for status alone).
     assert!(
         output.stdout.len() < 1_800,
@@ -2218,12 +2215,12 @@ fn brief_status_caps_claims_and_compact_transport_fits_hook_preview() {
     );
 }
 
-/// The objective is the one wake-status field a user can make arbitrarily long,
-/// so it is bounded like the claim headlines: a pathologically long intent is
+/// The intent is the one wake-status field a user can make arbitrarily long,
+/// so it is bounded like the claim headlines: a pathologically long thesis is
 /// truncated with a trailing ellipsis in the brief surface (full text in
 /// `--full`), and the status still fits the inline-preview budget.
 #[test]
-fn brief_status_bounds_a_pathologically_long_objective() {
+fn brief_status_bounds_a_pathologically_long_intent() {
     let fixture = GitFixture::new();
     let workspace = fixture.root.path().join("workspace-state");
     let repo = fixture.repository.to_str().unwrap().to_owned();
@@ -2231,7 +2228,7 @@ fn brief_status_bounds_a_pathologically_long_objective() {
 
     let long_intent = "word ".repeat(200); // ~1000 chars, far past the bound
     invoke(&[
-        "bind-objective",
+        "set-intent",
         "--repository",
         &repo,
         "--workspace",
@@ -2249,14 +2246,14 @@ fn brief_status_bounds_a_pathologically_long_objective() {
         &ws,
     ]);
     let brief: Value = serde_json::from_slice(&output.stdout).unwrap();
-    let shown = brief["objective"]["intent"].as_str().unwrap();
+    let shown = brief["intent"]["thesis"].as_str().unwrap();
     assert!(
         shown.ends_with('…') && shown.chars().count() < long_intent.chars().count(),
-        "a long objective intent must be truncated in the brief surface: {shown:?}"
+        "a long intent thesis must be truncated in the brief surface: {shown:?}"
     );
     assert!(
         output.stdout.len() < 1_800,
-        "even a pathological objective must not blow the wake budget: {} bytes",
+        "even a pathological intent must not blow the wake budget: {} bytes",
         output.stdout.len()
     );
 }
@@ -2930,7 +2927,7 @@ fn concurrent_writers_serialize_without_corrupting_the_log() {
 
     // One sequential event establishes the workspace (sequence 0).
     invoke(&[
-        "bind-objective",
+        "set-intent",
         "--repository",
         &repo,
         "--workspace",
