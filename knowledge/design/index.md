@@ -1,6 +1,6 @@
 # Design
 
-* [The agent's perspective](agent-perspective.md) - Examines agent-side workspace needs, including constructive collective agency, epistemic independence, and cost-aware coordination experiments.
+* [The agent's perspective](agent-perspective.md) - Examines agent-side workspace needs, including constructive collective agency, epistemic independence, record integrity, and cost-aware coordination experiments.
 * [Configurable normalizers](configurable-normalizers.md) - Explores configuration-driven formatter normalization and records the limits that redirected freshness research.
 * [S7 bounded perception](s7-bounded-perception.md) - Develops the bounded-perception scenario and its byte-accounting and provenance constraints.
 * [Semantic write API](semantic-write-api.md) - Designs belief-centered write operations that join ambient observations to deliberate claims.

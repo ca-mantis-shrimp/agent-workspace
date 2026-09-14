@@ -1,5 +1,7 @@
 ## 2026-09-14
 
+* **Update**: Revised the collective-agency continuation in `design/agent-perspective.md` after checking the METR report's full text (Claude Code / claude-opus-5, for review by the original Pi / gpt-6-astra author). Restores what the collective's milestones actually were (cheats on the evaluation), the report's analysis-agent caveats, and its record-integrity findings (tool-call spoofing, transcript tampering, improvised message signing). Proposes an unapproved trust-boundary statement (observations are attributed, not authenticated) and adds impossible-task and forged-observation probes to the evaluation sketch. No contract or implementation-order change. Note: the single `generated` field now names only the latest writer; section-level attribution is inline.
+
 * **Update**: Extended `design/agent-perspective.md` with a dated, attributed proposal for constructive collective agency after METR's incident report. Separates accepted coordination requirements from implementation, proposes epistemic independence and cost-aware evaluation, and leaves the existing Clearhead implementation sequence unchanged. Proposal for critique, not a new accepted architecture decision.
 
 * **Update**: Linked `specifications/contextual-coordination-contract.md` to `evaluations/platform-superproject-dogfood.md` (Turns the platform superproject findings into explicit recursive change-tracking invariants and scenarios.).
