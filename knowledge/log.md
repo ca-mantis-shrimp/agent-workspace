@@ -1,5 +1,7 @@
 ## 2026-09-14
 
+* **Update**: Extended `design/agent-perspective.md` with a dated, attributed proposal for constructive collective agency after METR's incident report. Separates accepted coordination requirements from implementation, proposes epistemic independence and cost-aware evaluation, and leaves the existing Clearhead implementation sequence unchanged. Proposal for critique, not a new accepted architecture decision.
+
 * **Update**: Linked `specifications/contextual-coordination-contract.md` to `evaluations/platform-superproject-dogfood.md` (Turns the platform superproject findings into explicit recursive change-tracking invariants and scenarios.).
 * **Update**: Updated concept `specifications/contextual-coordination-contract.md`.
 * **Update**: Linked `specifications/contextual-coordination-contract.md` to `design/harness-neutral-multi-agent-coordination.md` (Makes the design note's repository, worktree, assessment, and coordination model normative.).
