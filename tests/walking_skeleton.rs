@@ -5605,12 +5605,12 @@ fn state_root_is_shared_across_worktrees_and_separate_across_clones() {
 }
 
 #[test]
-fn legacy_global_claim_reconciliation_oscillates_across_linked_worktrees() {
-    // CC2 characterization: linked worktrees correctly share one event log, but
-    // the pre-contextual schema stores ClaimReconciled as one global verdict.
-    // Reconciling divergent bytes therefore makes the durable projection oscillate
-    // according to whichever worktree queried last. Contextual freshness will turn
-    // this characterization into simultaneous per-worktree assessments.
+fn linked_worktrees_keep_independent_freshness_verdicts() {
+    // CC1: one shared claim, two linked worktrees with different bytes. After
+    // both reconcile, the divergent worktree serves Stale and the recording
+    // worktree serves Current *simultaneously* — and each status names the
+    // worktree context it was computed for. The recording worktree never
+    // re-emits a reconcile that would overwrite the other's verdict.
     let fixture = GitFixture::new();
     let workspace = fixture.root.path().join("workspace-state");
     let linked = fixture.root.path().join("linked-worktree");
@@ -5664,7 +5664,12 @@ fn legacy_global_claim_reconciliation_oscillates_across_linked_worktrees() {
         FreshnessWithinScope::Current
     );
 
-    let verdicts: Vec<_> = fs::read_to_string(workspace.join("events.jsonl"))
+    // Each surface names the worktree context its verdicts were computed for.
+    assert_ne!(stale.worktree, current.worktree);
+    assert!(!stale.worktree.is_empty());
+    assert!(!current.worktree.is_empty());
+
+    let reconciles: Vec<Value> = fs::read_to_string(workspace.join("events.jsonl"))
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
@@ -5672,9 +5677,282 @@ fn legacy_global_claim_reconciliation_oscillates_across_linked_worktrees() {
             record["event"]["type"] == "claim_reconciled"
                 && record["event"]["claim_id"] == belief.claim.id
         })
-        .map(|record| record["event"]["freshness"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(verdicts, ["stale", "current"]);
+    // No oscillation: the recording worktree's Current verdict comes from its
+    // record-time assessment (stamped with its own worktree identity), so it
+    // never re-emits a reconcile that would overwrite the linked worktree's
+    // Stale verdict. Exactly one reconcile exists, attributed to the divergent
+    // linked worktree.
+    assert_eq!(reconciles.len(), 1);
+    assert_eq!(
+        reconciles[0]["event"]["freshness"].as_str().unwrap(),
+        "stale"
+    );
+    assert_eq!(
+        reconciles[0]["event"]["worktree_identity"]
+            .as_str()
+            .unwrap(),
+        stale.worktree.as_str()
+    );
+}
+
+#[test]
+fn legacy_identity_less_reconcile_is_not_served_as_current() {
+    // CC2: an identity-less `ClaimReconciled` (the pre-contextual schema) must
+    // replay without corruption and must never be served as a current contextual
+    // assessment. Appended after a contextual record, it must not displace the
+    // recording worktree's Current verdict.
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let recorded = invoke(&[
+        "record-belief",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--statement",
+        "foo returns one",
+        "--rests-on",
+        "src/lib.rs",
+    ]);
+    let belief: Belief = serde_json::from_slice(&recorded.stdout).unwrap();
+    assert_eq!(
+        belief.claim.report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+
+    let log_path = workspace.join("events.jsonl");
+    let lines: Vec<Value> = fs::read_to_string(&log_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let last_sequence = lines.last().unwrap()["sequence"].as_u64().unwrap();
+    let legacy = serde_json::json!({
+        "schema_version": 2,
+        "sequence": last_sequence + 1,
+        "event": {
+            "type": "claim_reconciled",
+            "claim_id": belief.claim.id,
+            "freshness": "stale",
+            "reason": "legacy unattributed",
+            "reconciliation_fingerprint":
+                "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+    });
+    let mut log = fs::read_to_string(&log_path).unwrap();
+    log.push_str(&format!("{}\n", serde_json::to_string(&legacy).unwrap()));
+    fs::write(&log_path, log).unwrap();
+
+    let status = invoke(&[
+        "status",
+        "--full",
+        "--repository",
+        fixture.repository.to_str().unwrap(),
+        "--workspace",
+        workspace.to_str().unwrap(),
+    ]);
+    let status: WorkspaceStatus = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(
+        status.claims[0].report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+}
+
+#[test]
+fn finding_freshness_is_worktree_relative() {
+    // A finding binds to one location; its freshness is a worktree-relative
+    // assessment of that location. Divergent linked worktrees must serve the
+    // shared finding as Stale (diverged) and Current (recording) simultaneously.
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let linked = fixture.root.path().join("linked-worktree");
+    git(
+        &fixture.repository,
+        &["worktree", "add", "--quiet", linked.to_str().unwrap()],
+    );
+    let primary_repo = fixture.repository.to_str().unwrap();
+    let linked_repo = linked.to_str().unwrap();
+    let workspace_path = workspace.to_str().unwrap();
+
+    invoke_with_stdin(
+        &[
+            "record-finding",
+            "--repository",
+            primary_repo,
+            "--workspace",
+            workspace_path,
+            "--provider",
+            "rustc",
+            "--severity",
+            "error",
+            "--message",
+            "mismatched types",
+            "--path",
+            "src/lib.rs",
+        ],
+        "",
+    );
+
+    fs::write(linked.join("src/lib.rs"), "pub fn foo() -> i32 { 2 }\n").unwrap();
+
+    let stale: WorkspaceStatus = serde_json::from_slice(
+        &invoke(&[
+            "status",
+            "--full",
+            "--repository",
+            linked_repo,
+            "--workspace",
+            workspace_path,
+        ])
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        stale.findings[0].report.freshness_within_scope,
+        FreshnessWithinScope::Stale
+    );
+
+    let current: WorkspaceStatus = serde_json::from_slice(
+        &invoke(&[
+            "status",
+            "--full",
+            "--repository",
+            primary_repo,
+            "--workspace",
+            workspace_path,
+        ])
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        current.findings[0].report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+    assert_ne!(stale.worktree, current.worktree);
+}
+
+#[test]
+fn evidence_freshness_is_worktree_relative() {
+    // Evidence inherits its claim's inputs; its freshness is a worktree-relative
+    // assessment of those inputs. Divergent linked worktrees serve the shared
+    // evidence as Stale (diverged) and Current (recording) simultaneously.
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let linked = fixture.root.path().join("linked-worktree");
+    git(
+        &fixture.repository,
+        &["worktree", "add", "--quiet", linked.to_str().unwrap()],
+    );
+    let primary_repo = fixture.repository.to_str().unwrap();
+    let linked_repo = linked.to_str().unwrap();
+    let workspace_path = workspace.to_str().unwrap();
+
+    let observation: Observation = serde_json::from_slice(
+        &invoke(&[
+            "observe",
+            "--repository",
+            primary_repo,
+            "--workspace",
+            workspace_path,
+            "--path",
+            "src/lib.rs",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let claim: Claim = serde_json::from_slice(
+        &invoke(&[
+            "claim",
+            "--repository",
+            primary_repo,
+            "--workspace",
+            workspace_path,
+            "--statement",
+            "foo returns one",
+            "--observation",
+            &observation.id.to_string(),
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let transaction: Transaction = serde_json::from_slice(
+        &invoke(&[
+            "begin-transaction",
+            "--repository",
+            primary_repo,
+            "--workspace",
+            workspace_path,
+            "--intent",
+            "change foo",
+            "--claim",
+            &claim.id.to_string(),
+        ])
+        .stdout,
+    )
+    .unwrap();
+    let evidence: Evidence = serde_json::from_slice(
+        &invoke(&[
+            "evidence",
+            "--repository",
+            primary_repo,
+            "--workspace",
+            workspace_path,
+            "--transaction",
+            &transaction.id.to_string(),
+            "--claim",
+            &claim.id.to_string(),
+            "--check",
+            "cargo-test",
+            "--invocation",
+            "cargo test",
+            "--result",
+            "passed",
+        ])
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        evidence.report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+
+    fs::write(linked.join("src/lib.rs"), "pub fn foo() -> i32 { 2 }\n").unwrap();
+
+    let stale: WorkspaceStatus = serde_json::from_slice(
+        &invoke(&[
+            "status",
+            "--full",
+            "--repository",
+            linked_repo,
+            "--workspace",
+            workspace_path,
+        ])
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        stale.evidence[0].report.freshness_within_scope,
+        FreshnessWithinScope::Stale
+    );
+
+    let current: WorkspaceStatus = serde_json::from_slice(
+        &invoke(&[
+            "status",
+            "--full",
+            "--repository",
+            primary_repo,
+            "--workspace",
+            workspace_path,
+        ])
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        current.evidence[0].report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+    assert_ne!(stale.worktree, current.worktree);
 }
 
 #[test]

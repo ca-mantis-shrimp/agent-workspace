@@ -183,12 +183,16 @@ enum Event {
         freshness: FreshnessWithinScope,
         reason: String,
         reconciliation_fingerprint: String,
+        #[serde(default)]
+        worktree_identity: Option<String>,
     },
     ClaimReconciled {
         claim_id: u64,
         freshness: FreshnessWithinScope,
         reason: String,
         reconciliation_fingerprint: String,
+        #[serde(default)]
+        worktree_identity: Option<String>,
     },
     ClaimSuperseded {
         claim_id: u64,
@@ -214,6 +218,8 @@ enum Event {
         freshness: FreshnessWithinScope,
         reason: String,
         reconciliation_fingerprint: String,
+        #[serde(default)]
+        worktree_identity: Option<String>,
     },
     TransactionBegan {
         transaction_id: u64,
@@ -245,12 +251,16 @@ enum Event {
         freshness: FreshnessWithinScope,
         reason: String,
         reconciliation_fingerprint: String,
+        #[serde(default)]
+        worktree_identity: Option<String>,
     },
     EvidenceReconciled {
         evidence_id: u64,
         freshness: FreshnessWithinScope,
         reason: String,
         reconciliation_fingerprint: String,
+        #[serde(default)]
+        worktree_identity: Option<String>,
     },
     FindingRecorded {
         finding_id: u64,
@@ -276,12 +286,16 @@ enum Event {
         freshness: FreshnessWithinScope,
         reason: String,
         reconciliation_fingerprint: String,
+        #[serde(default)]
+        worktree_identity: Option<String>,
     },
     FindingReconciled {
         finding_id: u64,
         freshness: FreshnessWithinScope,
         reason: String,
         reconciliation_fingerprint: String,
+        #[serde(default)]
+        worktree_identity: Option<String>,
     },
     FindingDispositionChanged {
         finding_id: u64,
@@ -313,6 +327,12 @@ enum Event {
 pub struct Workspace {
     repository_root: PathBuf,
     workspace_root: PathBuf,
+    /// The canonical worktree git directory this handle was opened in — the
+    /// context every served freshness verdict is attributed to. Linked
+    /// worktrees share `workspace_root` (project identity hashes the common
+    /// dir) but differ here, which is what makes claim/evidence/finding
+    /// assessments worktree-relative.
+    worktree_identity: String,
     /// Diagnostic: how many times this handle has replayed the event log from
     /// disk. It exists to make the single-pass `status` guarantee observable and
     /// testable — a settled `resume_status` must read the log O(1) times, never
@@ -333,12 +353,14 @@ impl Workspace {
         workspace_root: impl Into<PathBuf>,
     ) -> Result<Self, WorkspaceError> {
         let repository_root = repository_root.into().canonicalize()?;
+        let worktree_identity = crate::locate::worktree_identity(&repository_root);
         let workspace_root = workspace_root.into();
         fs::create_dir_all(&workspace_root)?;
         let workspace_root = workspace_root.canonicalize()?;
         Ok(Self {
             repository_root,
             workspace_root,
+            worktree_identity,
             event_log_reads: std::sync::atomic::AtomicUsize::new(0),
         })
     }
@@ -536,6 +558,7 @@ impl Workspace {
     }
 
     fn status_from_projection(projection: Projection) -> WorkspaceStatus {
+        let worktree = projection.worktree_identity.clone();
         let mut claims = Vec::new();
         let mut superseded_claims = Vec::new();
         let mut retired_claims = Vec::new();
@@ -547,6 +570,7 @@ impl Workspace {
             }
         }
         WorkspaceStatus {
+            worktree,
             intent: projection.intent,
             working_set: projection.working_set.into_values().collect(),
             navigation_trail: projection.navigation_trail,
@@ -623,6 +647,7 @@ impl Workspace {
             freshness,
             reason,
             reconciliation_fingerprint,
+            worktree_identity: Some(self.worktree_identity.clone()),
         }))
     }
 
@@ -646,6 +671,7 @@ impl Workspace {
             freshness,
             reason,
             reconciliation_fingerprint,
+            worktree_identity: Some(self.worktree_identity.clone()),
         }))
     }
 
@@ -673,6 +699,7 @@ impl Workspace {
             freshness,
             reason,
             reconciliation_fingerprint,
+            worktree_identity: Some(self.worktree_identity.clone()),
         }))
     }
 
@@ -821,6 +848,7 @@ impl Workspace {
 
         Ok(BriefDeltaStatus {
             checkpoint: BriefCheckpoint::from_marker(&checkpoint),
+            worktree: self.worktree_identity.clone(),
             intent_change,
             claims_recorded,
             claims_superseded,
@@ -910,6 +938,7 @@ impl Workspace {
         }
 
         Ok(DeltaStatus {
+            worktree: self.worktree_identity.clone(),
             checkpoint,
             intent_change,
             claims_recorded,
@@ -1220,6 +1249,7 @@ impl Workspace {
             freshness: FreshnessWithinScope::Current,
             reason: "finding recorded".to_owned(),
             reconciliation_fingerprint,
+            worktree_identity: Some(self.worktree_identity.clone()),
         })?;
         self.project()?
             .findings
@@ -1407,6 +1437,7 @@ impl Workspace {
             freshness: assembled.freshness,
             reason: assembled.reason,
             reconciliation_fingerprint: assembled.reconciliation_fingerprint,
+            worktree_identity: Some(self.worktree_identity.clone()),
         })?;
 
         self.project()?
@@ -1614,6 +1645,7 @@ impl Workspace {
             freshness: assembled.freshness,
             reason: assembled.reason,
             reconciliation_fingerprint: assembled.reconciliation_fingerprint,
+            worktree_identity: Some(self.worktree_identity.clone()),
         })?;
 
         let claim = self
@@ -2018,6 +2050,7 @@ impl Workspace {
                 &self.repository_root,
                 &fingerprint_inputs,
             )?,
+            worktree_identity: Some(self.worktree_identity.clone()),
         })?;
         self.project()?
             .evidence
@@ -2334,14 +2367,17 @@ impl Workspace {
     /// the freshness it reports is the freshness *recorded at that time*.
     fn project_upto(&self, max_sequence: Option<u64>) -> Result<Projection, WorkspaceError> {
         let path = self.event_log_path();
+        let mut projection = Projection {
+            worktree_identity: self.worktree_identity.clone(),
+            ..Projection::default()
+        };
         if !path.exists() {
-            return Ok(Projection::default());
+            return Ok(projection);
         }
 
         let reader = BufReader::new(File::open(path)?);
         self.event_log_reads
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut projection = Projection::default();
         for (index, line) in reader.lines().enumerate() {
             let line = line?;
             let record: EventRecord = serde_json::from_str(&line).map_err(|error| {
@@ -2359,6 +2395,10 @@ impl Workspace {
 #[derive(Default)]
 struct Projection {
     intent: Option<Intent>,
+    /// The worktree this projection is materialized for. Set by the owning
+    /// `Workspace` handle after replay; the reducer uses it to decide which
+    /// assessment events to surface in each entity's `report`.
+    worktree_identity: String,
     working_set: BTreeMap<u64, WorkingSetEntry>,
     /// Ordered focus history — one entry per `ObservationFocused` event,
     /// revisits included. The deduped `working_set` map answers "what am I
@@ -2388,6 +2428,34 @@ struct Projection {
 }
 
 impl Projection {
+    /// Whether an event carrying `worktree_identity` was computed in the
+    /// worktree this handle projects for. Events from other worktrees still
+    /// apply to the shared log but must not touch this handle's materialized
+    /// `report` — that is the whole of worktree-relative freshness.
+    fn is_my_worktree(&self, worktree_identity: Option<&str>) -> bool {
+        worktree_identity == Some(self.worktree_identity.as_str())
+    }
+
+    /// The materialized verdict for an event that named `worktree_identity`:
+    /// the event's own verdict when it was computed for this worktree, else
+    /// `Unknown`. An event from another worktree, or a legacy unattributed one
+    /// (`None`), must never masquerade as this worktree's current assessment.
+    fn materialize_verdict(
+        &self,
+        worktree_identity: Option<&str>,
+        freshness: FreshnessWithinScope,
+        reason: String,
+    ) -> (FreshnessWithinScope, String) {
+        if self.is_my_worktree(worktree_identity) {
+            (freshness, reason)
+        } else {
+            (
+                FreshnessWithinScope::Unknown,
+                "not yet assessed in this worktree".to_owned(),
+            )
+        }
+    }
+
     fn apply(&mut self, record: EventRecord) -> Result<(), WorkspaceError> {
         if !(MINIMUM_EVENT_SCHEMA_VERSION..=EVENT_SCHEMA_VERSION).contains(&record.schema_version) {
             return Err(WorkspaceError::CorruptLog(format!(
@@ -2517,6 +2585,7 @@ impl Projection {
                 freshness,
                 reason,
                 reconciliation_fingerprint,
+                worktree_identity,
             } => {
                 if self.claims.contains_key(&claim_id) {
                     return Err(WorkspaceError::CorruptLog(format!(
@@ -2541,6 +2610,8 @@ impl Projection {
                     })
                     .collect();
                 let assurance_source = scope_strategy.assurance_source();
+                let (freshness, reason) =
+                    self.materialize_verdict(worktree_identity.as_deref(), freshness, reason);
                 self.claims.insert(
                     claim_id,
                     Claim {
@@ -2577,6 +2648,7 @@ impl Projection {
                 freshness,
                 reason,
                 reconciliation_fingerprint,
+                worktree_identity,
             } => {
                 if let Some(missing) = supporting_observation_ids
                     .iter()
@@ -2603,6 +2675,8 @@ impl Projection {
                     })
                     .collect();
                 let assurance_source = scope_strategy.assurance_source();
+                let (freshness, reason) =
+                    self.materialize_verdict(worktree_identity.as_deref(), freshness, reason);
                 let claim = self
                     .claims
                     .get_mut(&claim_id)
@@ -2641,15 +2715,19 @@ impl Projection {
                 freshness,
                 reason,
                 reconciliation_fingerprint,
+                worktree_identity,
             } => {
+                let is_mine = self.is_my_worktree(worktree_identity.as_deref());
                 let claim = self
                     .claims
                     .get_mut(&claim_id)
                     .ok_or(WorkspaceError::ClaimNotFound(claim_id))?;
-                claim.report.freshness_within_scope = freshness;
-                claim.report.reason = reason;
-                claim.report.operational_coverage.reconciliation_fingerprint =
-                    reconciliation_fingerprint;
+                if is_mine {
+                    claim.report.freshness_within_scope = freshness;
+                    claim.report.reason = reason;
+                    claim.report.operational_coverage.reconciliation_fingerprint =
+                        reconciliation_fingerprint;
+                }
             }
             Event::ClaimSuperseded {
                 claim_id,
@@ -2806,6 +2884,7 @@ impl Projection {
                 freshness,
                 reason,
                 reconciliation_fingerprint,
+                worktree_identity,
             } => {
                 if self.evidence.contains_key(&evidence_id) {
                     return Err(WorkspaceError::CorruptLog(format!(
@@ -2857,6 +2936,8 @@ impl Projection {
                     .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?
                     .evidence_ids
                     .push(evidence_id);
+                let (freshness, reason) =
+                    self.materialize_verdict(worktree_identity.as_deref(), freshness, reason);
                 self.evidence.insert(
                     evidence_id,
                     Evidence {
@@ -2890,17 +2971,21 @@ impl Projection {
                 freshness,
                 reason,
                 reconciliation_fingerprint,
+                worktree_identity,
             } => {
+                let is_mine = self.is_my_worktree(worktree_identity.as_deref());
                 let evidence = self
                     .evidence
                     .get_mut(&evidence_id)
                     .ok_or(WorkspaceError::EvidenceNotFound(evidence_id))?;
-                evidence.report.freshness_within_scope = freshness;
-                evidence.report.reason = reason;
-                evidence
-                    .report
-                    .operational_coverage
-                    .reconciliation_fingerprint = reconciliation_fingerprint;
+                if is_mine {
+                    evidence.report.freshness_within_scope = freshness;
+                    evidence.report.reason = reason;
+                    evidence
+                        .report
+                        .operational_coverage
+                        .reconciliation_fingerprint = reconciliation_fingerprint;
+                }
             }
             Event::FindingRecorded {
                 finding_id,
@@ -2920,6 +3005,7 @@ impl Projection {
                 freshness,
                 reason,
                 reconciliation_fingerprint,
+                worktree_identity,
             } => {
                 if self.findings.contains_key(&finding_id) {
                     return Err(WorkspaceError::CorruptLog(format!(
@@ -2927,6 +3013,8 @@ impl Projection {
                     )));
                 }
                 self.next_finding_id = self.next_finding_id.max(finding_id + 1);
+                let (freshness, reason) =
+                    self.materialize_verdict(worktree_identity.as_deref(), freshness, reason);
                 self.findings.insert(
                     finding_id,
                     Finding {
@@ -2970,17 +3058,21 @@ impl Projection {
                 freshness,
                 reason,
                 reconciliation_fingerprint,
+                worktree_identity,
             } => {
+                let is_mine = self.is_my_worktree(worktree_identity.as_deref());
                 let finding = self
                     .findings
                     .get_mut(&finding_id)
                     .ok_or(WorkspaceError::FindingNotFound(finding_id))?;
-                finding.report.freshness_within_scope = freshness;
-                finding.report.reason = reason;
-                finding
-                    .report
-                    .operational_coverage
-                    .reconciliation_fingerprint = reconciliation_fingerprint;
+                if is_mine {
+                    finding.report.freshness_within_scope = freshness;
+                    finding.report.reason = reason;
+                    finding
+                        .report
+                        .operational_coverage
+                        .reconciliation_fingerprint = reconciliation_fingerprint;
+                }
             }
             Event::FindingDispositionChanged {
                 finding_id,

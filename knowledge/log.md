@@ -1,5 +1,7 @@
 ## 2026-09-14
 
+* **Creation**: Documented concept `decisions/worktree-relative-freshness.md` (Worktree-relative freshness): the design decision behind the `contextual-freshness` action — stamp a worktree identity on the claim/evidence/finding assessment events, materialize the querying worktree's verdict during replay (no separate assessment entity), and serve legacy identity-less events as unattributed (never current). Implemented and tested (CC1/CC2, findings/evidence independence).
+
 * **Update**: Via Clearhead CLI, `coordination-dogfood` now also depends on `coordination-selection` (so cancelling handoff during selection cannot make the dogfood ready early) and is priority 2, removing the inversion with the earlier pilot. `clearhead doctor` clean; ready set unchanged.
 
 * **Update**: Final pass (Claude Code / claude-opus-5). Corrected the shared-intent observation in `decisions/coordination-pilot-and-trust-limits.md`: the reviewer did set intent; its later checkpoint was silently stamped with the drafter's intent because intent is global and was not re-set. Updated `evaluations/review-coordination-sequencing.md` dispositions from pending to owner-accepted/applied (`28cc819`, `52cb258`).

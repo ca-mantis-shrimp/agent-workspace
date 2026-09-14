@@ -129,6 +129,28 @@ fn project_identity(repository_root: &Path) -> Result<String, WorkspaceError> {
     Ok(hex_digest(canonical.to_string_lossy().as_bytes()))
 }
 
+/// Derive a stable identity for the *worktree* the kernel was opened in,
+/// distinct from [`project_identity`]'s common directory that linked worktrees
+/// share. The worktree's own Git directory is canonical and stable:
+/// `<repo>/.git` for the main worktree, `<repo>/.git/worktrees/<name>` for each
+/// linked worktree. A non-Git target falls back to the canonical repository
+/// path, mirroring `project_identity`.
+pub fn worktree_identity(repository_root: &Path) -> String {
+    let source = match git_output(repository_root, &["rev-parse", "--git-dir"]) {
+        Ok(git_dir) if !git_dir.is_empty() => {
+            let path = PathBuf::from(&git_dir);
+            if path.is_absolute() {
+                path
+            } else {
+                repository_root.join(path)
+            }
+        }
+        _ => repository_root.to_path_buf(),
+    };
+    let canonical = source.canonicalize().unwrap_or(source);
+    canonical.to_string_lossy().into_owned()
+}
+
 /// Read an environment variable, treating empty values as absent.
 fn non_empty_env(key: &str) -> Option<String> {
     env::var(key).ok().filter(|value| !value.is_empty())

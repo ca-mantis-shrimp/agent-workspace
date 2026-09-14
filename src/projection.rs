@@ -13,6 +13,10 @@ use crate::model::*;
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkspaceStatus {
     pub intent: Option<Intent>,
+    /// The worktree context every served verdict in this status was computed
+    /// for (the canonical worktree git directory). Two linked worktrees can
+    /// therefore project the same shared claim as current and stale at once.
+    pub worktree: String,
     pub working_set: Vec<WorkingSetEntry>,
     #[serde(default)]
     pub navigation_trail: Vec<WorkingSetEntry>,
@@ -50,6 +54,8 @@ pub struct WorkspaceStatus {
 #[derive(Clone, Debug, Serialize)]
 pub struct BriefStatus {
     pub intent: Option<Intent>,
+    /// The worktree context the served claim verdicts were computed for.
+    pub worktree: String,
     pub claims: Vec<BriefClaim>,
     pub claims_omitted: usize,
     pub counts: BriefCounts,
@@ -157,6 +163,7 @@ impl WorkspaceStatus {
             })
             .collect();
         BriefStatus {
+            worktree: self.worktree.clone(),
             // The intent is the orientation anchor, so it is shown far more
             // generously than the delta's change-summary headline — but it is
             // still bounded, because it is the one wake-status field that would
@@ -691,6 +698,8 @@ pub struct IntentChange {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DeltaStatus {
     pub checkpoint: CheckpointMarker,
+    /// The worktree context the served (and baseline) verdicts were computed for.
+    pub worktree: String,
     pub intent_change: Option<IntentChange>,
     pub claims_recorded: Vec<Claim>,
     pub claims_superseded: Vec<Claim>,
@@ -706,6 +715,7 @@ pub struct DeltaStatus {
 #[derive(Clone, Debug, Serialize)]
 pub struct BriefDeltaStatus {
     pub checkpoint: BriefCheckpoint,
+    pub worktree: String,
     pub intent_change: Option<BriefIntentChange>,
     pub claims_recorded: BriefIdSet,
     pub claims_superseded: BriefIdSet,
@@ -743,6 +753,7 @@ impl BriefIdSet {
 impl DeltaStatus {
     pub fn brief(&self) -> BriefDeltaStatus {
         BriefDeltaStatus {
+            worktree: self.worktree.clone(),
             checkpoint: BriefCheckpoint::from_marker(&self.checkpoint),
             intent_change: self.intent_change.as_ref().map(|change| BriefIntentChange {
                 before: change
