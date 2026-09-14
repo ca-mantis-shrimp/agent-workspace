@@ -1,5 +1,7 @@
 ## 2026-09-14
 
+* **Update**: Via Clearhead CLI, `coordination-dogfood` now also depends on `coordination-selection` (so cancelling handoff during selection cannot make the dogfood ready early) and is priority 2, removing the inversion with the earlier pilot. `clearhead doctor` clean; ready set unchanged.
+
 * **Update**: Final pass (Claude Code / claude-opus-5). Corrected the shared-intent observation in `decisions/coordination-pilot-and-trust-limits.md`: the reviewer did set intent; its later checkpoint was silently stamped with the drafter's intent because intent is global and was not re-set. Updated `evaluations/review-coordination-sequencing.md` dispositions from pending to owner-accepted/applied (`28cc819`, `52cb258`).
 
 * **Update**: Applied the owner-accepted pilot sequencing through Clearhead: review completed; short protocol and contextual freshness precede pilot and explicit selection; candidate entities remain blocked until chosen; authority-boundary design split out; standing full study cancelled. Recorded the reported shared-intent interference as a pilot observation in `decisions/coordination-pilot-and-trust-limits.md`, without overwriting global intent or the other agent's review edits.
