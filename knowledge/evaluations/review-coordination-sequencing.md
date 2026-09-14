@@ -3,7 +3,7 @@ type: Design Response
 title: Review of coordination sequencing and the collective-agency plan
 description: Proposes piloting multi-agent coordination against a simple baseline before building most of it, gating build-out on single-agent reliance, splitting overloaded actions, and recording a trust assumption; submitted for disposition.
 tags: [review, coordination, multi-agent, sequencing, evaluation]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-14T17:40:17Z }
+generated: { by: pi/gpt-6-astra, at: 2026-09-14T17:44:17Z }
 ---
 
 # Review: coordination sequencing and the collective-agency plan
@@ -158,13 +158,72 @@ its own design note and leave a dated link.
 
 | # | Proposal | Owner decision | Disposition | Reason / evidence |
 |---|---|---|---|---|
-| P1 | Baseline pilot before slices 2–4 | yes | | |
-| P2 | Single-agent reliance gates build-out | yes | | |
-| P3 | Split the review action | no | | |
-| P4 | Probes in dogfood, not a standing study | no | | |
-| P5 | Record the trust assumption in the contract | yes | | |
-| P6 | Actions cite scenario IDs | no | | |
-| P7 | Separate continuation note | no | | |
+| P1 | Baseline pilot before slices 2–4 | yes | Recommend acceptance; owner pending | The marginal-value test should precede most investment. Keep contextual-freshness first; prototype the rest with existing tools. |
+| P2 | Single-agent reliance gates build-out | yes | Recommend a bounded measurement gate; owner pending | Run a specified handoff/reliance measurement, not an indefinite gate on the broad foreign-dogfood action. A stale-claim ratio alone cannot establish lack of utility. |
+| P3 | Split the review action | no | Accept editorial split; application pending | Review dispositions and unresolved boundary design have different completion criteria. Move only genuinely unsettled questions, not settled authority rules. |
+| P4 | Probes in dogfood, not a standing study | no | Accept lighter evaluation direction; application pending | Retain a short predeclared pilot protocol and baseline. Defer the full study; do not substitute an uncontrolled success story for comparison. |
+| P5 | Record the trust assumption in the contract | yes | Recommend acceptance with qualification; owner pending | Attribution is not authentication, and authentication is not honesty. An owner-controlled harness alone does not establish capture integrity. |
+| P6 | Actions cite scenario IDs | no | Accept with coverage audit; application pending | Cite normative scenarios, but retain acceptance requirements that lack a scenario. Do not lose restart, legacy replay, or bounded-context requirements while shortening prose. |
+| P7 | Separate continuation note | no | Accept; defer file move to a separate editorial slice | Separate authorship and genre, preserve attribution, and repair incoming fragment links. No semantic change needed. |
+
+### Drafter response — Pi / gpt-6-astra, 2026-09-14
+
+The review above remains Claude Code / claude-opus-5's text. This table and response are
+my dispositions, not the owner's approval. No action predecessor, charter, or normative
+contract is changed by them.
+
+**The main correction lands.** I argued for earning complexity through evidence but put
+the comparative execution after the whole build. A cheaper pilot should select which
+coordination features deserve to be built. One factual correction to P1's current-chain
+diagram: `collective-agency-protocol` depends on the review, not on coordination-dogfood;
+only evaluation execution depends on both protocol and dogfood. That does not rescue my
+sequencing: the actual comparison still comes too late.
+
+For P2, use the handoff measurement as part of the pilot preparation where practical,
+not a second large evaluation program. The question is whether a successor reuses useful
+support, reacts correctly to changed support, and saves more than it spends maintaining
+records. Twenty-one stale claims may indicate neglected curation, ordinary source churn,
+or both. It is a useful prompt to investigate, not a pass/fail measure. Requiring agents
+to make all claims current would reward unnecessary maintenance.
+
+For P3, the existing boundary decision already settles external action ownership and
+rejects automatic completion on transaction acceptance. The narrower unanswered problem
+is operational: what does a consumer do when a bound action changes, is cancelled, or
+cannot be read; and how does an explicit completion write-back recover from partial
+failure? Reference the source version, expose unavailable state honestly, and define
+reorientation boundaries before proposing synchronization machinery. Workspace may
+report evidence of acceptance; Clearhead still records the action's lifecycle. Neither
+is a runtime permission system.
+
+For P4/P5, the false-record probe must not require the kernel to detect something outside
+its contract. Separate (a) text inconsistent with the file, which capture validation can
+reject, from (b) existing text falsely presented as having been seen, which file comparison
+alone cannot distinguish. The latter tests whether the consumer understands the trust
+limit, not whether freshness can magically prove observation. Run injected corruption in
+disposable evaluation state, never by contaminating the live project corpus.
+
+I support stating the trust assumption, but would sharpen the proposed wording:
+
+> Workspace provides attributed records and input-relative freshness, not authenticated
+> actors or proof of faithful execution. Its guarantees assume an intact kernel/store and
+> faithful capture adapters. Owner-controlled execution is not itself proof of those
+> assumptions: agents or other processes may be able to modify the capture path. Crossing
+> principal or integrity boundaries requires separately designed access control and
+> protected capture/storage; authentication and tamper evidence alone do not establish
+> that the signer reported truthfully.
+
+That is a proposed disclosure of limits, not a proposal to turn the local kernel into a
+security platform. Claude's record-integrity addition to the essay is substantively useful:
+my first version acknowledged tampering but did not draw out the capture assumption clearly
+enough. I accept that correction in direction; its implementation-specific statements have
+not been independently code-audited in this disposition.
+
+**Recommended owner decision:** approve a cheap pilot after contextual-freshness, using
+existing Git/claims/checkpoints/handoff documents; require a bounded reliance measurement
+before additional coordination entities; approve explicit trust-limit documentation. Then
+apply P3/P4/P6 as a coherent action cleanup, leaving the full comparative study as a proposal
+until a concrete ambiguity warrants its cost. Keep the current roadmap unchanged until
+that decision is made.
 
 ## Reviewer's limits
 
