@@ -269,6 +269,7 @@ coordinate through kernel-owned MCP state. Runtime-specific transports may impro
 experience, but the system must remain correct when they are absent.
 
 # Related Concepts
+
 - [Center the tool surface on MCP](../decisions/mcp-centered-tool-surface.md): Builds coordination on the canonical harness-agnostic MCP surface rather than a runtime-specific transport.
 - [External workspace state and the Clearhead boundary](../decisions/external-workspace-and-clearhead-boundary.md): Extends external epistemic workspace state with local coordination while preserving Clearhead as the work-lifecycle authority.
 - [First superproject dogfood — the submodule boundary is narrower than feared](../evaluations/platform-superproject-dogfood.md): The platform dogfood supplied the live case where checkpoint and staleness were visible but agent ownership and liveness were not.
