@@ -3,7 +3,7 @@ type: Specification
 title: Contextual coordination contract
 description: Defines worktree-relative assessments, durable workstreams, bounded coordination projections, and recursive superproject change tracking for harness-neutral multi-agent coordination.
 tags: [coordination, worktrees, superprojects, submodules, contract]
-generated: { by: agent/cli, at: 2026-09-14T05:28:03Z }
+generated: { by: claude-code/claude-opus-5, at: 2026-09-14T19:13:40Z }
 ---
 
 # Contextual Coordination Contract
@@ -46,6 +46,16 @@ Git remains authoritative for bytes, revisions, branches, worktrees, nested repo
 state, diffs, and reachability. Agent Workspace owns only the durable associations,
 attribution, assessments, declarations, dependencies, handoffs, and bounded projections.
 Harness adapters capture and present; they own no coordination semantics.
+
+**Trust limits.** Agent Workspace provides attributed records and input-relative freshness,
+not authenticated actors or proof of faithful execution. Read capture rejects text that does
+not match the current file, but no record proves an agent saw what it cites: recording a
+belief captures a cited file itself when no current observation exists. These guarantees
+assume an intact kernel and store and faithful capture adapters. Owner-controlled execution
+does not establish those assumptions, because agents or other processes may be able to
+modify the capture path. Crossing principal or integrity boundaries requires separately
+designed access control and protected capture and storage; a signature identifies who
+reported, not whether the report is true.
 
 ## 2. Contextual freshness
 
