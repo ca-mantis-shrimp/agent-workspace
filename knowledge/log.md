@@ -1,3 +1,13 @@
+## 2026-09-14
+* **Update**: Updated concept `design/harness-neutral-multi-agent-coordination.md`.
+* **Update**: Linked `design/harness-neutral-multi-agent-coordination.md` to `evaluations/platform-superproject-dogfood.md` (The platform dogfood supplied the live case where checkpoint and staleness were visible but agent ownership and liveness were not.).
+* **Update**: Updated concept `design/harness-neutral-multi-agent-coordination.md`.
+* **Update**: Linked `design/harness-neutral-multi-agent-coordination.md` to `decisions/external-workspace-and-clearhead-boundary.md` (Extends external epistemic workspace state with local coordination while preserving Clearhead as the work-lifecycle authority.).
+* **Update**: Updated concept `design/harness-neutral-multi-agent-coordination.md`.
+* **Update**: Linked `design/harness-neutral-multi-agent-coordination.md` to `decisions/mcp-centered-tool-surface.md` (Builds coordination on the canonical harness-agnostic MCP surface rather than a runtime-specific transport.).
+* **Update**: Updated concept `design/harness-neutral-multi-agent-coordination.md`.
+* **Creation**: Documented concept `design/harness-neutral-multi-agent-coordination.md` (Harness-neutral multi-agent coordination).
+
 ## 2026-09-09
 * **Amendment**: Corrected `evaluations/platform-superproject-dogfood.md` — the "boundary is narrower than feared" headline held only for the freshness verdict; the real gap was the S6 transaction clean-base gate (inoperable on submodule files). Implemented the owning-repo resolution across the git-dependent periphery (clean-base gate via `ls-tree`→submodule `show`; provenance/drift/relocation via owning repo) and added two submodule tests. Cross-submodule atomicity left as git's boundary.
 * **Update**: Linked `evaluations/platform-superproject-dogfood.md` to `research/relocatable-exact-text-selectors.md` (The relocation probe (git_file_at_revision / probe_relocation) silently fails for submodule files because git show <rev>:<path> cannot resolve into a submodule tree; relocatable-selector work must run in the owning repo.).
