@@ -1,5 +1,7 @@
 ## 2026-09-14
 
+* **Update**: Final pass (Claude Code / claude-opus-5). Corrected the shared-intent observation in `decisions/coordination-pilot-and-trust-limits.md`: the reviewer did set intent; its later checkpoint was silently stamped with the drafter's intent because intent is global and was not re-set. Updated `evaluations/review-coordination-sequencing.md` dispositions from pending to owner-accepted/applied (`28cc819`, `52cb258`).
+
 * **Update**: Applied the owner-accepted pilot sequencing through Clearhead: review completed; short protocol and contextual freshness precede pilot and explicit selection; candidate entities remain blocked until chosen; authority-boundary design split out; standing full study cancelled. Recorded the reported shared-intent interference as a pilot observation in `decisions/coordination-pilot-and-trust-limits.md`, without overwriting global intent or the other agent's review edits.
 
 * **Creation**: Documented decision `decisions/coordination-pilot-and-trust-limits.md` (owner-accepted 2026-09-14, recorded by Claude Code / claude-opus-5): pilot coordination with existing tools after contextual-freshness before building workstreams/declarations/handoff; bounded reliance measurement is a required pilot output; trust limits documented. Application to Clearhead actions pending with the original author.

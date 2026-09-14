@@ -157,13 +157,13 @@ its own design note and leave a dated link.
 *For the original author. A rejected proposal with a reason is a useful outcome.*
 
 | # | Proposal | Owner decision | Disposition | Reason / evidence |
-|---|---|---|---|---|
-| P1 | Baseline pilot before slices 2–4 | yes | Recommend acceptance; owner pending | The marginal-value test should precede most investment. Keep contextual-freshness first; prototype the rest with existing tools. |
-| P2 | Single-agent reliance gates build-out | yes | Recommend a bounded measurement gate; owner pending | Run a specified handoff/reliance measurement, not an indefinite gate on the broad foreign-dogfood action. A stale-claim ratio alone cannot establish lack of utility. |
-| P3 | Split the review action | no | Accept editorial split; application pending | Review dispositions and unresolved boundary design have different completion criteria. Move only genuinely unsettled questions, not settled authority rules. |
-| P4 | Probes in dogfood, not a standing study | no | Accept lighter evaluation direction; application pending | Retain a short predeclared pilot protocol and baseline. Defer the full study; do not substitute an uncontrolled success story for comparison. |
-| P5 | Record the trust assumption in the contract | yes | Recommend acceptance with qualification; owner pending | Attribution is not authentication, and authentication is not honesty. An owner-controlled harness alone does not establish capture integrity. |
-| P6 | Actions cite scenario IDs | no | Accept with coverage audit; application pending | Cite normative scenarios, but retain acceptance requirements that lack a scenario. Do not lose restart, legacy replay, or bounded-context requirements while shortening prose. |
+| --- | --- | --- | --- | --- |
+| P1 | Baseline pilot before slices 2–4 | yes | Owner accepted 2026-09-14; applied in `52cb258` | The marginal-value test should precede most investment. Keep contextual-freshness first; prototype the rest with existing tools. |
+| P2 | Single-agent reliance gates build-out | yes | Owner accepted as a required pilot output; applied in `52cb258` | Run a specified handoff/reliance measurement, not an indefinite gate on the broad foreign-dogfood action. A stale-claim ratio alone cannot establish lack of utility. |
+| P3 | Split the review action | no | Accept editorial split; applied in `52cb258` | Review dispositions and unresolved boundary design have different completion criteria. Move only genuinely unsettled questions, not settled authority rules. |
+| P4 | Probes in dogfood, not a standing study | no | Accept lighter evaluation direction; applied in `52cb258` | Retain a short predeclared pilot protocol and baseline. Defer the full study; do not substitute an uncontrolled success story for comparison. |
+| P5 | Record the trust assumption in the contract | yes | Owner accepted; trust limits in contract §1 (`28cc819`) | Attribution is not authentication, and authentication is not honesty. An owner-controlled harness alone does not establish capture integrity. |
+| P6 | Actions cite scenario IDs | no | Accept with coverage audit; applied in `52cb258` | Cite normative scenarios, but retain acceptance requirements that lack a scenario. Do not lose restart, legacy replay, or bounded-context requirements while shortening prose. |
 | P7 | Separate continuation note | no | Accept; defer file move to a separate editorial slice | Separate authorship and genre, preserve attribution, and repair incoming fragment links. No semantic change needed. |
 
 ### Drafter response — Pi / gpt-6-astra, 2026-09-14

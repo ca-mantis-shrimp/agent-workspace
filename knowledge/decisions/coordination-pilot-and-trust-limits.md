@@ -66,11 +66,14 @@ agreed with the reviewer's reconciliation of those recommendations.
 
 ## Additional pilot observation: shared intent interference
 
-During application, the owner reported that the Claude reviewer deliberately avoided
-changing the global workspace intent to avoid interfering with the drafter's work. The
-shared status still displayed the drafter's review-disposition intent while both agents
-had distinct responsibilities. This is an observed coordination workaround, not a measured
-failure rate or an independent audit of implementation.
+Both agents shared one global workspace intent. The Claude reviewer set it for its earlier
+tasks; the drafter then set it for review disposition. The reviewer's next checkpoint
+(`owner-decisions-coordination-pilot-trust-limits-2026-09-14`) was stamped with the drafter's
+intent: the reviewer had not re-set intent for that task, and nothing signaled that the
+current intent belonged to another agent. The drafter then deliberately left intent
+unchanged while applying actions, to avoid overwriting in turn. This is one silent
+misattribution plus one manual workaround, corrected here from an earlier paraphrase; it
+is not a measured failure rate.
 
 The pilot should record such interference. If workstreams are selected, acceptance must
 show independent workstream intent and session-local attention over shared repository
