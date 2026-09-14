@@ -1,5 +1,10 @@
 ## 2026-09-14
 
+* **Creation**: Documented the predeclared coordination pilot protocol at `evaluations/coordination-pilot-protocol.md` (Pi / gpt-6-astra, for the `collective-agency-protocol` action): a short two-harness (Pi + Claude Code), two-linked-worktree pilot using only existing Git, shared claims/checkpoints, and a handoff document. Predeclares the task shape (producer → Git-landed integration → dependent successor), stop budgets (≤20 turns/agent, ≤3h), the three required reliance outputs (reuse-without-rereading, changed-support response, maintenance-vs-reconstruction with explicit uncertainty and a bounded control arm), eight fixed probes (duplication, missed dependency, ownership/activity, global-intent interference, wrong-but-current belief, honest impossibility, peer scope expansion, misreported observation in disposable state only), independent checks (tests + transcript-verified reliance log), failure→slice scoring with the unscorable-attribution exception, and scenario coverage claims (CC1 exercised; CC6–CC8 explicitly not claimed). Execution gated on owner scope/spend approval.
+
+* **Update**: Linked `evaluations/coordination-pilot-protocol.md` to `decisions/coordination-pilot-and-trust-limits.md`.
+* **Update**: Updated concept `evaluations/coordination-pilot-protocol.md`.
+
 * **Creation**: Documented concept `decisions/worktree-relative-freshness.md` (Worktree-relative freshness): the design decision behind the `contextual-freshness` action — stamp a worktree identity on the claim/evidence/finding assessment events, materialize the querying worktree's verdict during replay (no separate assessment entity), and serve legacy identity-less events as unattributed (never current). Implemented and tested (CC1/CC2, findings/evidence independence).
 
 * **Update**: Via Clearhead CLI, `coordination-dogfood` now also depends on `coordination-selection` (so cancelling handoff during selection cannot make the dogfood ready early) and is priority 2, removing the inversion with the earlier pilot. `clearhead doctor` clean; ready set unchanged.
