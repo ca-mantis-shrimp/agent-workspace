@@ -1,4 +1,11 @@
 ## 2026-09-14
+
+* **Update**: Linked `specifications/contextual-coordination-contract.md` to `evaluations/platform-superproject-dogfood.md` (Turns the platform superproject findings into explicit recursive change-tracking invariants and scenarios.).
+* **Update**: Updated concept `specifications/contextual-coordination-contract.md`.
+* **Update**: Linked `specifications/contextual-coordination-contract.md` to `design/harness-neutral-multi-agent-coordination.md` (Makes the design note's repository, worktree, assessment, and coordination model normative.).
+* **Update**: Updated concept `specifications/contextual-coordination-contract.md`.
+
+* **Creation**: Documented concept `specifications/contextual-coordination-contract.md` (Contextual coordination contract).
 * **Update**: Updated concept `design/harness-neutral-multi-agent-coordination.md`.
 * **Update**: Linked `design/harness-neutral-multi-agent-coordination.md` to `evaluations/platform-superproject-dogfood.md` (The platform dogfood supplied the live case where checkpoint and staleness were visible but agent ownership and liveness were not.).
 * **Update**: Updated concept `design/harness-neutral-multi-agent-coordination.md`.
@@ -9,6 +16,7 @@
 * **Creation**: Documented concept `design/harness-neutral-multi-agent-coordination.md` (Harness-neutral multi-agent coordination).
 
 ## 2026-09-09
+
 * **Amendment**: Corrected `evaluations/platform-superproject-dogfood.md` — the "boundary is narrower than feared" headline held only for the freshness verdict; the real gap was the S6 transaction clean-base gate (inoperable on submodule files). Implemented the owning-repo resolution across the git-dependent periphery (clean-base gate via `ls-tree`→submodule `show`; provenance/drift/relocation via owning repo) and added two submodule tests. Cross-submodule atomicity left as git's boundary.
 * **Update**: Linked `evaluations/platform-superproject-dogfood.md` to `research/relocatable-exact-text-selectors.md` (The relocation probe (git_file_at_revision / probe_relocation) silently fails for submodule files because git show <rev>:<path> cannot resolve into a submodule tree; relocatable-selector work must run in the owning repo.).
 * **Update**: Updated concept `evaluations/platform-superproject-dogfood.md`.
@@ -17,6 +25,7 @@
 * **Creation**: Documented concept `evaluations/platform-superproject-dogfood.md` (First superproject dogfood — proves freshness crosses the submodule boundary via content fingerprinting; isolates the one narrow degradation, where the observation's superproject-HEAD `observed_revision` drives three git renderings run in the wrong repo for submodule files; specifies a scoped owning-repo fix + submodule test to implement next session).
 
 ## 2026-09-08
+
 * **Creation**: Documented concept `evaluations/plot-checkpoint-summary-follow-up.md` (Checkpoint summary follow-up — sufficient content, inconclusive transport).
 * **Update**: Linked `evaluations/plot-checkpoint-summary-follow-up.md` to `evaluations/plot-continuation-insight.md`, `decisions/durable-constraints-portable-intent-entity.md`, `evaluations/plot-foreign-dogfood-write-loop.md`, and `design/s7-bounded-perception.md`.
 * **Update**: Linked `evaluations/plot-continuation-insight.md` to `design/s7-bounded-perception.md` (Extends bounded perception from cardinality control toward a decision-bearing continuation capsule with progressive disclosure.).
@@ -26,6 +35,7 @@
 * **Creation**: Documented concept `evaluations/plot-continuation-insight.md` (From change explanation to continuation insight).
 
 ## 2026-09-07
+
 * **Update**: Shipped the checkpoint-note excerpt (cheap fix from `evaluations/plot-continuation-insight.md`): brief `status`/`delta` now surface `latest_checkpoint.note`, a 200-char word-boundary excerpt via `BriefCheckpoint::from_marker`, so a decision recorded in a checkpoint note reaches the wake surface instead of only `--full`. Regression + budget tests added; 75 tests pass. Recorded in `decisions/durable-constraints-portable-intent-entity.md`.
 * **Creation**: Documented decision `decisions/durable-constraints-portable-intent-entity.md` — models constraints/decisions as a repo-scoped, freshness-exempt intent entity above the objective, held natively as a thin headline (+ optional detail, optional references) so it stays portable into a bare repo; defers Clearhead/OKF to optional enrichment. Agreed with user, no implementation started; cheap prerequisite (checkpoint-note excerpt in brief status) to ship separately first.
 * **Update**: Linked `research/relocatable-exact-text-selectors.md` to `decisions/freshness-cost-sequencing.md` (Deferred and re-sequenced by this decision; build diff-on-stale and drift instrumentation before any relocation spike.).

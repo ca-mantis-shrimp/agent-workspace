@@ -6,6 +6,9 @@ state: Active
 ---
 # Harness-neutral multi-agent coordination
 
+The normative identities, failure semantics, and executable scenarios are defined in the
+[contextual coordination contract](../../knowledge/specifications/contextual-coordination-contract.md).
+
 Build a local-first coordination layer in which agents working through different
 harnesses and Git worktrees share one repository-level knowledge substrate while
 retaining honest session, workstream, and worktree context.

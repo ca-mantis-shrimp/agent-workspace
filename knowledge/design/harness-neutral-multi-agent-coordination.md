@@ -8,7 +8,7 @@ generated: { by: pi/gpt-5.4, at: 2026-09-14T05:00:02Z }
 
 # Design Note — Harness-neutral multi-agent coordination
 
-**Status:** exploratory and revised after immediate reflection; this records a candidate direction, not an accepted implementation decision.
+**Status:** historical design input. The accepted identities, failure semantics, and executable scenarios now live in the [contextual coordination contract](../specifications/contextual-coordination-contract.md); where this note differs, that contract governs.
 
 ## Motivating observation
 
@@ -248,8 +248,10 @@ automatic notifications, or distributed synchronization be promoted.
    semantics?
 4. Can transaction affected paths seed a declared scope without making transactions
    mandatory before the first edit?
-5. How should untracked files and submodule-owning repositories participate in overlap
-   checks?
+5. ~~How should untracked files and submodule-owning repositories participate in overlap
+   checks?~~ Resolved by the contextual coordination contract: recursively join initialized
+   submodule state into the project namespace, retain owning-repository provenance, and
+   fail unknown rather than clean when nested coverage is unavailable.
 6. What bounded projection is sufficient at session start without recreating the oversized
    wake-status problem?
 7. Should bypass detection create a finding, a coordination warning, or both?

@@ -5605,6 +5605,111 @@ fn state_root_is_shared_across_worktrees_and_separate_across_clones() {
 }
 
 #[test]
+fn legacy_global_claim_reconciliation_oscillates_across_linked_worktrees() {
+    // CC2 characterization: linked worktrees correctly share one event log, but
+    // the pre-contextual schema stores ClaimReconciled as one global verdict.
+    // Reconciling divergent bytes therefore makes the durable projection oscillate
+    // according to whichever worktree queried last. Contextual freshness will turn
+    // this characterization into simultaneous per-worktree assessments.
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let linked = fixture.root.path().join("linked-worktree");
+    git(
+        &fixture.repository,
+        &["worktree", "add", "--quiet", linked.to_str().unwrap()],
+    );
+
+    let primary_repo = fixture.repository.to_str().unwrap();
+    let linked_repo = linked.to_str().unwrap();
+    let workspace_path = workspace.to_str().unwrap();
+    let recorded = invoke(&[
+        "record-belief",
+        "--repository",
+        primary_repo,
+        "--workspace",
+        workspace_path,
+        "--statement",
+        "foo returns one",
+        "--rests-on",
+        "src/lib.rs",
+    ]);
+    let belief: Belief = serde_json::from_slice(&recorded.stdout).unwrap();
+
+    fs::write(linked.join("src/lib.rs"), "pub fn foo() -> i32 { 2 }\n").unwrap();
+    let stale = invoke(&[
+        "status",
+        "--full",
+        "--repository",
+        linked_repo,
+        "--workspace",
+        workspace_path,
+    ]);
+    let stale: WorkspaceStatus = serde_json::from_slice(&stale.stdout).unwrap();
+    assert_eq!(
+        stale.claims[0].report.freshness_within_scope,
+        FreshnessWithinScope::Stale
+    );
+
+    let current = invoke(&[
+        "status",
+        "--full",
+        "--repository",
+        primary_repo,
+        "--workspace",
+        workspace_path,
+    ]);
+    let current: WorkspaceStatus = serde_json::from_slice(&current.stdout).unwrap();
+    assert_eq!(
+        current.claims[0].report.freshness_within_scope,
+        FreshnessWithinScope::Current
+    );
+
+    let verdicts: Vec<_> = fs::read_to_string(workspace.join("events.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| {
+            record["event"]["type"] == "claim_reconciled"
+                && record["event"]["claim_id"] == belief.claim.id
+        })
+        .map(|record| record["event"]["freshness"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(verdicts, ["stale", "current"]);
+}
+
+#[test]
+fn superproject_git_status_is_opaque_without_owned_repo_enumeration() {
+    // CC3 characterization: the parent Git repository reports only a dirty
+    // gitlink, while the owning repository can name the changed file. A future
+    // coordination projection must join both views and remap the nested path.
+    let (_root, repository) = superproject_with_submodule();
+    fs::write(
+        repository.join("lib-sub/api.rs"),
+        "pub fn api() -> u32 { 2 }\n",
+    )
+    .unwrap();
+
+    let parent = Command::new("git")
+        .current_dir(&repository)
+        .args(["status", "--porcelain=v1"])
+        .output()
+        .unwrap();
+    assert!(parent.status.success());
+    let parent = String::from_utf8(parent.stdout).unwrap();
+    assert!(parent.contains("lib-sub"));
+    assert!(!parent.contains("lib-sub/api.rs"));
+
+    let nested = Command::new("git")
+        .current_dir(repository.join("lib-sub"))
+        .args(["status", "--porcelain=v1"])
+        .output()
+        .unwrap();
+    assert!(nested.status.success());
+    let nested = String::from_utf8(nested.stdout).unwrap();
+    assert!(nested.contains("api.rs"));
+}
+
+#[test]
 fn state_path_reports_the_resolved_root_without_creating_it() {
     // `state-path` is pure resolution for transparency: it must print where
     // state lives and touch nothing, so an adapter or human can inspect the
