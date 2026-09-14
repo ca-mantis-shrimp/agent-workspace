@@ -3,13 +3,14 @@ type: Decision
 title: Coordination pilot before build-out, and documented trust limits
 description: Records owner decisions to pilot coordination with existing tools after contextual freshness, require a bounded reliance measurement before new coordination entities, and document attribution and capture-integrity limits.
 tags: [architecture, coordination, evaluation, trust]
-generated: { by: claude-code/claude-opus-5, at: 2026-09-14T19:13:40Z }
+generated: { by: pi/gpt-6-astra, at: 2026-09-14T21:28:26Z }
 ---
 
 # Decision — Coordination pilot before build-out, and documented trust limits
 
 **Status:** Accepted by the owner in conversation on 2026-09-14; recorded by Claude Code /
-claude-opus-5 at the owner's instruction. Application to Clearhead actions is pending.
+claude-opus-5 at the owner's instruction. Applied to Clearhead actions by Pi / gpt-6-astra
+on 2026-09-14; this application does not claim the pilot or implementation has run.
 
 **Date:** 2026-09-14
 
@@ -48,10 +49,30 @@ agreed with the reviewer's reconciliation of those recommendations.
 
 ## Consequences
 
-- The original author applies decisions 1, 2, and 4 to the Clearhead actions and predecessor
-  graph. Until then the existing action order stands, and `contextual-freshness` is
-  unaffected either way.
+- The original author applied decisions 1, 2, and 4 through the Clearhead CLI:
+  `contextual-freshness` plus the short `collective-agency-protocol` precede
+  `coordination-pilot`, which precedes `coordination-selection`. The three candidate
+  implementation actions remain explicitly blocked until selected; selection must cancel,
+  narrow or unblock them and revise downstream dependencies before it completes.
+- The review is complete. Unsettled authority-crossing design has its own
+  `coordination-authority-boundary` action before selected handoff implementation. The
+  standing full-study action is cancelled; the written study proposal remains available.
+  Scenario references replace duplicated prose where coverage exists, retaining extra
+  acceptance criteria for restart, session attention and legacy replay.
 - A pilot showing that existing tools suffice is a successful result, and removes planned
   entities from the roadmap.
 - Any design that crosses principal or integrity boundaries must answer the contract's trust
   limits explicitly rather than inherit attribution as proof.
+
+## Additional pilot observation: shared intent interference
+
+During application, the owner reported that the Claude reviewer deliberately avoided
+changing the global workspace intent to avoid interfering with the drafter's work. The
+shared status still displayed the drafter's review-disposition intent while both agents
+had distinct responsibilities. This is an observed coordination workaround, not a measured
+failure rate or an independent audit of implementation.
+
+The pilot should record such interference. If workstreams are selected, acceptance must
+show independent workstream intent and session-local attention over shared repository
+knowledge. The goal is contextual views, not private per-agent knowledge silos. This
+observation motivates that test; it does not bypass the pilot's selection gate.

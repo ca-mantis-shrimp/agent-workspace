@@ -1,5 +1,7 @@
 ## 2026-09-14
 
+* **Update**: Applied the owner-accepted pilot sequencing through Clearhead: review completed; short protocol and contextual freshness precede pilot and explicit selection; candidate entities remain blocked until chosen; authority-boundary design split out; standing full study cancelled. Recorded the reported shared-intent interference as a pilot observation in `decisions/coordination-pilot-and-trust-limits.md`, without overwriting global intent or the other agent's review edits.
+
 * **Creation**: Documented decision `decisions/coordination-pilot-and-trust-limits.md` (owner-accepted 2026-09-14, recorded by Claude Code / claude-opus-5): pilot coordination with existing tools after contextual-freshness before building workstreams/declarations/handoff; bounded reliance measurement is a required pilot output; trust limits documented. Application to Clearhead actions pending with the original author.
 * **Update**: Added **Trust limits** to `specifications/contextual-coordination-contract.md` §1 (attributed not authenticated; capture validation cannot prove an agent saw cited text; owner control does not establish capture integrity). Verified against `plan_read_selection` and `capture_supports` in code.
 * **Update**: Corrected `design/agent-perspective.md` record-integrity passage: removed the claim that excluding authentication is defensible merely under one owner; noted belief recording self-captures unread files; points to contract §1.
