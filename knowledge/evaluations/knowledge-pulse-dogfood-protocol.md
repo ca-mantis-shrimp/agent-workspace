@@ -165,8 +165,9 @@ inheritance measurement.
   repository, not the agent's declaration: the durable decision is in the
   right durable location; the belief is an Agent Workspace claim (not
   harness memory); no duplicate of the boundary decision exists.
-- The discovery-call count (turns, tool calls, wall-clock, cost) is verified
-  against transcripts and harness telemetry, not self-reported.
+- The discovery cost — raw input + output tokens, attributable cost, and
+  the turns/tool-calls/wall-clock diagnostics — is verified against
+  transcripts and harness telemetry, not self-reported.
 - The §10 use test is recorded per run: **which wake lines were acted on or
   cited; which `workspace_reveal` calls were made; which facts were
   re-derived that the wake already carried.** A section never used across
@@ -174,15 +175,33 @@ inheritance measurement.
 
 ## 8. Scoring and the decision rule
 
-- **Primary metric:** orientation discovery cost before correct placement —
-  turns, tool calls (reads/searches/reveals), wall-clock seconds, and
-  attributable cost — compared against the baseline (18 / 15 / 82.5 s /
-  $0.672). Success is **materially fewer**: predeclared as **≤ 8 tool calls
-  and ≤ 8 turns** to reach a correctly-placed belief, in each arm. (Owner may
-  adjust the threshold before sign-off; the number is fixed before the run.)
+- **The measure is raw tokens, reported as cost.** Turns and tool calls are
+  poor proxies: one `read` of a large file can cost more input tokens than
+  several small reveals, and a turn with a large context costs more than a
+  lean one. The honest primary metric is therefore **raw input + output
+  tokens** consumed during the orientation phase, rolled up into attributable
+  **cost (USD)** — the baseline's own unit (it reported $0.672, not a token
+  count; its archaeology was essentially its entire session, so the figure is
+  a like-for-like orientation number).
+- **Orientation phase = session start until first correct placement.**
+  Correct placement is the first observed event of either (a) a
+  `workspace_record_belief` landing a belief in Agent Workspace rather than
+  harness memory, or (b) a transcript utterance correctly applying the
+  boundary rule. Everything before that event is discovery; everything after
+  is task work with the rule in hand.
+- **Primary comparison (Arm A — Claude Code):** orientation-phase cost against
+  the $0.672 baseline. Success is **materially fewer**, predeclared as
+  **≤ ⅓ of the baseline cost (~$0.22)**. The fraction is owner-set before the
+  run; the number is fixed after sign-off.
+- **Arm B (Pi):** a different model and pricing mean its dollar cost is not
+  directly comparable to the Claude baseline. It must satisfy the same gating
+  behaviors and show a same-order-of-magnitude reduction in orientation
+  tokens; its absolute cost is reported, not scored against $0.672.
+- **Secondary diagnostics (both arms):** turns, tool calls, wall-clock —
+  reported from harness telemetry, never pass/fail gates on their own.
 - **Gating behaviors:** §5.1 `acted-on-binding`, §5.3 `placed in workspace`,
   and §5.4 `no duplication` must all hold for an arm to count as passing,
-  whatever the call count. A cheap-but-wrong placement is not a pass.
+  whatever the cost. A cheap-but-wrong placement is not a pass.
 
 **Decision rule.**
 
