@@ -1,7 +1,7 @@
 ---
 type: Evaluation Protocol
 title: Predeclared knowledge-pulse dogfood protocol
-description: Predeclared cold-agent knowledge-inheritance experiment in the foreign plot repository across two harness surfaces (Claude Code and Pi), measuring whether the wake's governing binding lets a cold successor inherit the OKF/workspace knowledge boundary cheaply instead of the 2026-09-15 Claude baseline's 18-turn, 15-call, 82.5 s, $0.672 archaeology. Defines the task, the cold-start prompt (no destination hint), the success threshold, probes, and honest reporting. Execution requires owner sign-off before any paid run.
+description: Predeclared cold-agent knowledge-inheritance experiment in the foreign plot repository across two harness surfaces (Claude Code and Pi), testing whether the wake's governing binding is load-bearing — whether a cold successor acts on it, places provisional state correctly, and avoids duplicating curated knowledge — rather than re-deriving the boundary through the archaeology the 2026-09-15 Claude baseline needed (18 turns, 15 tool calls, 82.5 s, $0.672). Defines the task, the cold-start prompt (no destination hint), the behavior scorecard, probes, and honest reporting. Execution requires owner sign-off before any paid run.
 tags: [evaluation, knowledge, dogfood, protocol, wake, continuity]
 generated: { by: agent/pi, at: 2026-09-15T21:36:56Z }
 ---
@@ -19,10 +19,10 @@ document does not).
 
 ## 1. What is being tested, and with what
 
-One question: **does the wake's governing binding let a cold agent inherit the
-knowledge-boundary rule cheaply — act on it, place provisional state in the
-right place, and avoid duplicating curated knowledge — instead of
-reconstructing the rule through repository archaeology?**
+One question: **does the wake's governing binding change what a cold agent
+does — does it act on the inherited rule, place provisional state in the
+right place, and avoid duplicating curated knowledge — or does the agent
+ignore the wake and reconstruct the rule through repository archaeology?**
 
 The boundary rule under test is the one `plot` binding **k1** pins:
 [the OKF curated-knowledge-layer decision](../decisions/okf-curated-knowledge-layer.md).
@@ -36,11 +36,12 @@ Its load-bearing consequence for a cold agent working in `plot` is:
 - harness-local memory is neither project authority nor the continuity
   substrate.
 
-The baseline this must beat is the 2026-09-15 cold Claude probe: it found the
-governing decision and placed its belief correctly only after **18 turns,
+The baseline is the 2026-09-15 cold Claude probe: it found the governing
+decision and placed its belief correctly, but only after **18 turns,
 15 tool calls, 82.5 s, and $0.672** of archaeology — and its prompt supplied
 the principle itself, so it tested destination discovery, not salience. This
-prompt must not.
+prompt must not. The baseline is context (the "before" picture), not a cost
+threshold to beat: §8 scores behavior, not dollars.
 
 No unbuilt machinery is used. The substrate is exactly what shipped in
 `knowledge-pulse-kernel` and `orientation-worktree-context`: the wake summary's
@@ -72,8 +73,8 @@ anchor.
   the kernel-rendered wake the harness prints at SessionStart (and the task
   prompt in §3).
 - **Attribution:** the wake and claims are attributed, not authenticated; this
-  experiment proves nothing about who recorded what, only about cheap
-  inheritance.
+  experiment proves nothing about who recorded what, only about whether the
+  wake is load-bearing.
 
 ## 3. Task and cold-start prompt
 
@@ -117,22 +118,29 @@ hint beyond this, the run is void and re-run.
 - Stop early once the inheritance question is answered; polish past the
   measurement is waste.
 
-## 5. Required behaviors (from the action, made observable)
+## 5. The scorecard — did the wake change behavior?
 
-For each arm, the transcript must let a reviewer answer:
+This is the test. For each arm, the transcript must let a reviewer answer
+every question below; the answers — not any cost number — are the score.
 
-1. **Acted on the binding.** Did the agent cite or act on the wake's `governs`
-   line (k1) before performing any broad corpus search or reading repository
-   links? Score: `acted-on-binding` / `re-derived` / `neither`.
-2. **Opened the source only on demand.** Did it open the pinned decision file
-   only when the task required its content, or immediately as a reflex?
-3. **Placed provisional state in Agent Workspace.** Its working beliefs landed
+1. **The trust moment (primary).** Did the agent cite or act on the wake's
+   `governs` line (k1) before performing any broad corpus search or reading
+   repository links? Score: `acted-on-binding` / `re-derived` / `neither`.
+   This is the single most important observation: the wake must be
+   load-bearing, because reconstruction is always available and often cheap
+   — the coordination pilot already failed this once (reuse-without-rereading).
+2. **Placed provisional state in Agent Workspace.** Its working beliefs landed
    via the workspace write loop (`workspace_record_belief` or equivalent),
    not harness-local memory, not a comment, not an uncommitted note.
-4. **Did not duplicate curated knowledge.** It did not re-create the
-   boundary decision or a duplicate design record where one already exists;
-   it did not write a durable operating rule as a claim.
-5. **Reported honestly.** If a source state, omission, or false-relevance
+3. **Did not duplicate curated knowledge.** It did not re-create the boundary
+   decision or a duplicate design record where one already exists; it did not
+   write a durable operating rule as a claim.
+4. **No unforced archaeology.** It did not broad-search, follow repository
+   links, or re-derive "where does knowledge live" once the wake had told it.
+5. **Stopped once oriented.** It opened the pinned source (`workspace_reveal`
+   or a direct read) only on demand, not as a reflex; it re-derived no fact
+   the wake already carried.
+6. **Reported honestly.** If a source state, omission, or false-relevance
    condition arose, it was named honestly — not silently papered over or
    invented (§6 probes).
 
@@ -165,9 +173,9 @@ inheritance measurement.
   repository, not the agent's declaration: the durable decision is in the
   right durable location; the belief is an Agent Workspace claim (not
   harness memory); no duplicate of the boundary decision exists.
-- The discovery cost — raw input + output tokens, attributable cost, and
-  the turns/tool-calls/wall-clock diagnostics — is verified against
-  transcripts and harness telemetry, not self-reported.
+- Cost and tokens are recorded from harness telemetry as a **sanity check** —
+  they confirm the wake has not become its own token tax and the run was not
+  absurdly expensive — but they are not the score (§8).
 - The §10 use test is recorded per run: **which wake lines were acted on or
   cited; which `workspace_reveal` calls were made; which facts were
   re-derived that the wake already carried.** A section never used across
@@ -175,42 +183,30 @@ inheritance measurement.
 
 ## 8. Scoring and the decision rule
 
-- **The measure is raw tokens, reported as cost.** Turns and tool calls are
-  poor proxies: one `read` of a large file can cost more input tokens than
-  several small reveals, and a turn with a large context costs more than a
-  lean one. The honest primary metric is therefore **raw input + output
-  tokens** consumed during the orientation phase, rolled up into attributable
-  **cost (USD)** — the baseline's own unit (it reported $0.672, not a token
-  count; its archaeology was essentially its entire session, so the figure is
-  a like-for-like orientation number).
-- **Orientation phase = session start until first correct placement.**
-  Correct placement is the first observed event of either (a) a
-  `workspace_record_belief` landing a belief in Agent Workspace rather than
-  harness memory, or (b) a transcript utterance correctly applying the
-  boundary rule. Everything before that event is discovery; everything after
-  is task work with the rule in hand.
-- **Primary comparison (Arm A — Claude Code):** orientation-phase cost against
-  the $0.672 baseline. Success is **materially fewer**, predeclared as
-  **≤ ⅓ of the baseline cost (~$0.22)**. The fraction is owner-set before the
-  run; the number is fixed after sign-off.
-- **Arm B (Pi):** a different model and pricing mean its dollar cost is not
-  directly comparable to the Claude baseline. It must satisfy the same gating
-  behaviors and show a same-order-of-magnitude reduction in orientation
-  tokens; its absolute cost is reported, not scored against $0.672.
-- **Secondary diagnostics (both arms):** turns, tool calls, wall-clock —
-  reported from harness telemetry, never pass/fail gates on their own.
-- **Gating behaviors:** §5.1 `acted-on-binding`, §5.3 `placed in workspace`,
-  and §5.4 `no duplication` must all hold for an arm to count as passing,
-  whatever the cost. A cheap-but-wrong placement is not a pass.
+An arm **passes** when §5.1 (`acted-on-binding`), §5.2 (placed in workspace),
+§5.3 (no duplication), and §5.4 (no unforced archaeology) all hold, with §5.5
+(stopped once oriented) and §5.6 (honest reporting) recorded. A cheap-but-
+wrong placement is not a pass; a correct placement that was slow or spent
+tokens still passes if it was behaviorally right — it trusted the wake.
+Cost is a sanity check (§7), never a gate.
+
+**The report's headline is the trust moment, not a number:** a one- or
+two-line description per arm, e.g. *"the agent cited k1 and recorded its
+belief via record-belief in turn 2, never opening the pinned source or
+searching"* — set against the baseline's *"re-derived the boundary through
+six searches over 18 turns."* That contrast is the evidence.
 
 **Decision rule.**
 
-- **Keep** — both arms beat the threshold and satisfy the gating behaviors;
-  the wake carries the boundary rule cheaply and harness-neutrally.
-- **Change** — mixed or partial: one arm passes, or the call count beats but a
-  gating behavior fails. Name exactly what would have to change.
-- **Reject** — neither arm beats the baseline, or the binding added ceremony
-  without better placement or lower burden.
+- **Keep** — both arms pass the §5 scorecard; the wake is load-bearing and
+  harness-neutral.
+- **Change** — mixed: one arm passes, or the wake is trusted but placement is
+  wrong (the headline is ambiguous), or it earns trust at an unacceptable
+  token cost. Name exactly what would have to change.
+- **Reject** — the wake is decoration: the agent ignored or misread the
+  governs line and re-derived the rule anyway (the reuse-without-rereading
+  failure). A rejected wake is a reason to change the wake's content or
+  salience, not a reason to add machinery.
 
 A negative or stopped result is successful completion of the action and
 publishable evidence — not a reason to enlarge the system or invent a
@@ -230,11 +226,12 @@ flattering measure. Do not generalize beyond observed evidence.
 ## 10. Uncertainty and reporting
 
 Single task, single run per harness, two different harness models, one owner.
-Comparisons are reported with explicit uncertainty; directional findings are
-claims about the wake's salience, not about every harness. The report (a field
-report under `knowledge/evaluations/`) retains transcripts, costs, failures,
-false-relevance and omission behavior, the §10 use-test record, and the
-keep/change/reject disposition.
+The report leads with the behavior contrast (the trust moment versus the
+baseline's archaeology), then records cost and tokens as a sanity check with
+explicit uncertainty — directional findings are claims about the wake's
+salience, not about every harness. The report retains transcripts, costs,
+failures, false-relevance and omission behavior, the wake-summary-contract
+§10 use-test record, and the keep/change/reject disposition.
 
 ## Related concepts
 
