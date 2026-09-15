@@ -1,5 +1,14 @@
 ## 2026-09-15
 
+* **Update**: Linked `evaluations/networked-agency-council-review.md` to `decisions/coordination-selection-disposition.md` (Keeps cancelled coordination machinery and deferred Clearhead integration in force absent new repeated evidence.).
+* **Update**: Updated concept `evaluations/networked-agency-council-review.md`.
+* **Update**: Linked `evaluations/networked-agency-council-review.md` to `evaluations/coordination-pilot-report.md` (Uses the prior two-harness pilot as the simpler-tools baseline and negative evidence against premature machinery.).
+* **Update**: Updated concept `evaluations/networked-agency-council-review.md`.
+* **Update**: Linked `evaluations/networked-agency-council-review.md` to `design/networked-agency-continuity-commons.md` (Reviews and refines the owner-accepted proposal through two bounded read-only council passes.).
+* **Update**: Updated concept `evaluations/networked-agency-council-review.md`.
+
+* **Creation**: Documented concept `evaluations/networked-agency-council-review.md` (Council review — networked agency and the continuity commons).
+
 * **Update**: Completed slice `kernel-install-smoke` and parent action `knowledge-pulse-kernel`: installed kernel bound plot's governing decision across repositories (`../agent-workspace:knowledge/decisions/okf-curated-knowledge-layer.md`, pinned at 28dda4a); plot wake 676B→837B with one governs pointer line; MCP and CLI summaries byte-identical; Claude hook via PATH install printed it. Added the 2026-09-15 section to `implementation/implementation-notes.md`, replaced `specifications/wake-summary-contract.md` §8 with the live plot render, and updated README Interfaces (knowledge binding vocabulary, text wake, corrected MCP tool list). Cold-agent inheritance remains unproven until `knowledge-pulse-dogfood`.
 
 * **Update**: Updated concept `design/networked-agency-continuity-commons.md`.
