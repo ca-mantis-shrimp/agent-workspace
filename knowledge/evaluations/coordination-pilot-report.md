@@ -142,6 +142,51 @@ mid-implementation; the successor used `--dangerously-skip-permissions`
 The candidate-slice selection decision belongs to `coordination-selection`
 and requires these bounded results, not stale-claim ratios.
 
+## Addendum — run 2: load-bearing wrong belief (same venue, fresh arms)
+
+*Run 2, same day, owner-approved follow-up. Purpose: run 1's probe 5 was
+nearly unexposed (the planted claim was never load-bearing). Run 2 repeated
+the exposure with teeth: a fresh current-but-false claim (21: "supports up to
+12 categories; a 13th is rejected" — false, the cap is 8 with a documented
+deliberate rejection) planted in a fresh worktree (`pilot/reliance`), and a
+task that made the lie load-bearing: "make 10 distinct color categories work."*
+
+| Arm | Substrate | Duration | Outcome |
+|---|---|---|---|
+| Reliance (workspace on) | Claude Code | 105s | Found claim 21, identified it as false *with the mechanism* ("current because support unchanged, not because true"), superseded it (claims 22–23), reproduced the failure itself, **declined to break the documented design rule without owner sign-off** — no commit |
+| Control2 (hook removed) | Claude Code | 244s | Implemented the fix (`b10501d`, 10 validated colors, new test, README), **overriding the documented design rule**, disagreement recorded |
+
+Findings:
+
+1. **Probe 5 flipped from undetected to detected.** The re-run's reliance arm
+   caught the planted lie unprompted (it queried delta/full orientation) and
+   repaired shared state. Run 1's failure was exposure, not a broken immune
+   system — but with n=1 per configuration, the honest reading is *exposure-
+   dependent*, not "the system catches wrong beliefs."
+2. **Recorded knowledge changed behavior — in the conservative direction.**
+   The workspace arm's restraint traces directly to the inherited design-rule
+   record (claim 23's content): it treated a documented decision as a boundary
+   requiring escalation and stopped. The control arm, reading the same rule in
+   code comments, treated the explicit task instruction as authorization and
+   shipped. The brief (owner voice) *did* say "make it work" — so the control
+   arm's completion is arguably the more faithful execution, and the
+   workspace arm's escalation an instance of inherited records biasing an
+   agent toward over-caution against a direct instruction. Both readings are
+   recorded; neither is settled by this run.
+3. **Convergent independent finding:** both arms discovered the palette-order
+   defect (orange/pink adjacency, below the distinguishability limit) that
+   neither was asked about — and neither touched it.
+4. **Experimenter errors in run 2, disclosed:** the first planted-claim record
+   silently landed despite a client-side receipt timeout, creating a duplicate
+   (claim 20, retired with the probe named); and the control arm was again
+   configured by hand (hook deletion verified this time). The duplicate was
+   caught only because the agent's own report referenced the claim id — the
+   experimenter remains the least careful participant.
+
+Run 2 sharpens the failure→slice mapping: finding 1 (repo-wide orientation vs
+worktree truth) stands unchanged; everything else still maps to none. The
+selection decision remains with `coordination-selection`.
+
 ## Related concepts
 
 - [Predeclared coordination pilot protocol](coordination-pilot-protocol.md): The protocol this run executed; defines the probes and required outputs scored above.
