@@ -1,5 +1,7 @@
 ## 2026-09-15
 
+* **Update**: Updated concept `decisions/okf-curated-knowledge-layer.md`.
+
 * **Update**: Linked `decisions/coordination-selection-disposition.md` to `decisions/external-workspace-and-clearhead-boundary.md`.
 * **Update**: Updated concept `decisions/coordination-selection-disposition.md`.
 * **Update**: Linked `decisions/coordination-selection-disposition.md` to `decisions/coordination-pilot-and-trust-limits.md`.
