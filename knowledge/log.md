@@ -1,5 +1,7 @@
 ## 2026-09-15
 
+* **Creation**: Documented concept `evaluations/knowledge-pulse-dogfood-protocol.md` (Predeclared knowledge-pulse dogfood protocol).
+
 * **Update**: Linked `decisions/plural-agency-charter-transition.md` to `decisions/coordination-selection-disposition.md` (Preserves cancelled coordination entities while replacing the obsolete swarm-dogfood obligation.).
 * **Update**: Updated concept `decisions/plural-agency-charter-transition.md`.
 * **Update**: Linked `decisions/plural-agency-charter-transition.md` to `evaluations/networked-agency-council-review.md` (Turns the council recommendation into a staged falsification trial without authorizing machinery.).

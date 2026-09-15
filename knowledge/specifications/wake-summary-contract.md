@@ -238,12 +238,14 @@ goal, and a maximal checkpoint note, the skeleton alone (step 1) is at most
 750 B, so step 2 always has room for at least one full-form item.
 
 **WS3 — news first.**
+
 - *Given* a checkpoint followed by two new claims, one of them now stale, plus
   one changed binding source,
 - *then* the output has one `!+` line and one `!` binding line in full, before
   any new-claim headline.
 
 **WS4 — priority under pressure.**
+
 - *Given* a fixture that cannot fit every full form,
 - *then* the upgrades follow §3 order exactly. Removing the highest-priority
   item frees bytes that the next item uses.
@@ -252,6 +254,7 @@ goal, and a maximal checkpoint note, the skeleton alone (step 1) is at most
 `reveal <id>` returns the complete record over both CLI and MCP.
 
 **WS6 — quiet.**
+
 - An empty workspace yields zero bytes.
 - A checkpoint with no subsequent change yields no `new since` section.
 
@@ -266,6 +269,7 @@ ids plus `+k`.
 byte-identical.
 
 **WS10 — worktree-scoped last stop.**
+
 - *Given* checkpoints recorded in two linked worktrees of one repository,
 - *then* a wake opened in worktree X shows only X's latest checkpoint as
   `stopped at` and never Y's; and a legacy identity-less checkpoint is never
