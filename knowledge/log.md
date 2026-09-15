@@ -1,5 +1,7 @@
 ## 2026-09-15
 
+* **Creation**: Documented `specifications/wake-summary-contract.md` (wake-summary-contract action, owner-directed: the agent is the client; wake is a summary under 1000 bytes). Kernel-rendered text replaces brief JSON status+delta at wake; skeleton of short forms upgraded to full forms by priority (changed knowledge, newly stale claims, goal, checkpoint note, bindings, open work, new claims, ended); claims only as news or stale ids; kind-prefixed ids with one-call `reveal`; W1-W6, WS1-WS9. Evidence: live wake 1874B+~650B, text mocks 775B/1283B, pilot exposure via news not the stale-first window. Updated `specifications/knowledge-pulse-contract.md` §3/KP14 to defer its wake budget (withdrew the 1800B claim-cap trade).
+
 * **Creation**: Documented `specifications/knowledge-pulse-contract.md` (knowledge-pulse-contract action): one knowledge-binding entity (headline, optional detail, at most one reference), repository_file references pinned by content hash with current/changed/unavailable/unknown source state, explicit repository/paths applicability, bounded status/delta pulse (3 entries + omission count), two verbs (bind-knowledge, retire-knowledge), fail-closed writes, K1-K9 prohibited failures, KP1-KP14 scenarios. Evidence: 2026-09-15 cold-probe baseline and plot claim 6 (a rule forced into a claim, false-stale on README). Updated `decisions/durable-constraints-portable-intent-entity.md` status to point at the contract.
 
 * **Update**: Updated concept `decisions/durable-constraints-portable-intent-entity.md`.

@@ -187,15 +187,12 @@ Each entry has these fields:
 scope, and the latest assessment reason. Ended bindings are served with their
 successor or retirement reason.
 
-**Wake byte budget.** The compact brief status must stay under the existing
-1800-byte inline-preview budget for this worst case: 5 max-length claims, the
-maximum intent, the maximum checkpoint note, and 3 max-length bindings.
-
-> **Known pressure — owner review requested.** Three bindings add roughly
-> 1 KB to a status already near budget. If field compaction cannot fit this
-> worst case, the claim cap drops from 5 to 4 **before** the knowledge cap
-> drops below 3. The baseline failure was a missing governing decision, and
-> claims beyond the window stay one `--full` away with `claims_omitted`.
+**Wake.** The wake is not this JSON. It is the kernel-rendered text summary
+defined by the [wake summary contract](wake-summary-contract.md), under a
+1000-byte budget. Bindings enter it at that contract's priorities: a changed or
+unavailable source ranks first, and current governing knowledge follows the
+goal and the last stop. The JSON fields above remain the structured surface for
+tools.
 
 ## 4. Ranking
 
@@ -376,7 +373,8 @@ reached by a relative locator.
 **KP13 — fail-closed writes.** Each §5 rejection case is a table-driven case
 asserting a named error and no appended event.
 
-**KP14 — wake budget.** The §3 worst case fits under 1800 bytes.
+**KP14 — wake entry.** Governing bindings reach the wake summary at the
+priorities and byte budget that contract defines (its WS3 and WS4 scenarios).
 
 ## 9. Deliberately out of scope
 
