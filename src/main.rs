@@ -1,7 +1,8 @@
 use agent_workspace::{
     ClaimScopeStrategy, EvidenceOutcome, FindingCaptureOptions, FindingDisposition,
-    FindingSeverity, Normalizer, ObservationCaptureOptions, ObservationSelector,
-    ReadCaptureOutcome, ReadCaptureRequest, Workspace, WorkspaceError, resolve_state_root,
+    FindingSeverity, KnowledgeBindingRequest, KnowledgeReference, Normalizer,
+    ObservationCaptureOptions, ObservationSelector, ReadCaptureOutcome, ReadCaptureRequest,
+    Workspace, WorkspaceError, resolve_state_root,
 };
 use serde::Serialize;
 use std::env;
@@ -337,6 +338,42 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 .ok_or_else(|| CliError::Usage("supersede-claim requires --reason".to_owned()))?;
             print_json(&workspace.supersede_claim(id, replacement_claim_id, reason)?)?;
         }
+        "bind-knowledge" => {
+            let headline = options
+                .headline
+                .ok_or_else(|| CliError::Usage("bind-knowledge requires --headline".to_owned()))?;
+            let reference = KnowledgeReference::from_parts(
+                options.path,
+                options.source_repository,
+                options.locator,
+            )?;
+            let binding = workspace.bind_knowledge(KnowledgeBindingRequest {
+                headline,
+                detail: options.detail,
+                reference,
+                scope_paths: options.scope_paths,
+                supersedes: options.supersedes,
+            })?;
+            if options.full {
+                print_json(&binding)?;
+            } else {
+                print_json(&binding.brief())?;
+            }
+        }
+        "retire-knowledge" => {
+            let id = options
+                .id
+                .ok_or_else(|| CliError::Usage("retire-knowledge requires --id".to_owned()))?;
+            let reason = options
+                .reason
+                .ok_or_else(|| CliError::Usage("retire-knowledge requires --reason".to_owned()))?;
+            let binding = workspace.retire_knowledge(id, reason)?;
+            if options.full {
+                print_json(&binding)?;
+            } else {
+                print_json(&binding.brief())?;
+            }
+        }
         "retire-claim" => {
             let id = options
                 .id
@@ -488,6 +525,12 @@ struct Options {
     since: Option<String>,
     full: bool,
     summary: bool,
+    headline: Option<String>,
+    detail: Option<String>,
+    locator: Option<String>,
+    source_repository: Option<String>,
+    scope_paths: Vec<String>,
+    supersedes: Option<u64>,
     compact: bool,
     offset: Option<usize>,
     limit: Option<usize>,
@@ -534,6 +577,12 @@ impl Options {
         let mut since = None;
         let mut full = false;
         let mut summary = false;
+        let mut headline = None;
+        let mut detail = None;
+        let mut locator = None;
+        let mut source_repository = None;
+        let mut scope_paths = Vec::new();
+        let mut supersedes = None;
         let mut compact = false;
         let mut offset = None;
         let mut limit = None;
@@ -626,6 +675,18 @@ impl Options {
                 "--label" => label = Some(value.clone()),
                 "--note" => note = Some(value.clone()),
                 "--since" => since = Some(value.clone()),
+                "--headline" => headline = Some(value.clone()),
+                "--detail" => detail = Some(value.clone()),
+                "--locator" => locator = Some(value.clone()),
+                "--source-repository" => source_repository = Some(value.clone()),
+                "--scope-path" => scope_paths.push(value.clone()),
+                "--supersedes" => {
+                    supersedes = Some(
+                        value
+                            .parse()
+                            .map_err(|_| CliError::Usage(format!("invalid binding id: {value}")))?,
+                    )
+                }
                 "--content" => contents = Some(value.clone()),
                 "--range" => selector = Some(parse_byte_range(value)?),
                 "--normalize" => {
@@ -734,6 +795,12 @@ impl Options {
             since,
             full,
             summary,
+            headline,
+            detail,
+            locator,
+            source_repository,
+            scope_paths,
+            supersedes,
             compact,
             offset,
             limit,

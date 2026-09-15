@@ -52,6 +52,8 @@ pub enum WorkspaceError {
     InvalidCheckpoint(String),
     CheckpointNotFound(String),
     InvalidEntityRef(String),
+    InvalidKnowledge(String),
+    KnowledgeNotFound(u64),
     CorruptLog(String),
 }
 
@@ -94,8 +96,12 @@ impl fmt::Display for WorkspaceError {
             Self::InvalidEntityRef(text) => write!(
                 formatter,
                 "invalid entity id {text:?}: expected a kind prefix (c claim, o observation, \
-                 f finding, t transaction) followed by a number, e.g. c15"
+                 f finding, t transaction, k knowledge binding) followed by a number, e.g. c15"
             ),
+            Self::InvalidKnowledge(message) => {
+                write!(formatter, "invalid knowledge binding: {message}")
+            }
+            Self::KnowledgeNotFound(id) => write!(formatter, "knowledge binding {id} not found"),
             Self::CorruptLog(message) => write!(formatter, "corrupt event log: {message}"),
         }
     }
@@ -137,6 +143,40 @@ struct AssembledClaim {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Event {
+    /// A knowledge binding established, optionally ending the active binding it
+    /// supersedes, with its first source assessment for the recording worktree.
+    KnowledgeBound {
+        binding_id: u64,
+        headline: String,
+        #[serde(default)]
+        detail: Option<String>,
+        #[serde(default)]
+        reference: Option<KnowledgeReference>,
+        #[serde(default)]
+        scope: KnowledgeScope,
+        #[serde(default)]
+        pin: Option<SourcePin>,
+        #[serde(default)]
+        supersedes: Option<u64>,
+        #[serde(default)]
+        assessment: Option<SourceAssessment>,
+        #[serde(default)]
+        worktree_identity: Option<String>,
+    },
+    KnowledgeRetired {
+        binding_id: u64,
+        reason: String,
+    },
+    /// A changed source assessment, served only in the worktree it names.
+    KnowledgeSourceAssessed {
+        binding_id: u64,
+        state: SourceState,
+        reason: String,
+        #[serde(default)]
+        fingerprint: Option<String>,
+        #[serde(default)]
+        worktree_identity: Option<String>,
+    },
     /// Wire type is pinned to `objective_bound` and the payload key to `intent`
     /// (both via `serde(rename)`) so journals written before the objective→intent
     /// rename replay byte-identically. Only the Rust-side names became `IntentSet`
@@ -443,6 +483,9 @@ impl Workspace {
         for finding in projection.findings.values() {
             pending.extend(self.finding_reconcile_event(finding)?);
         }
+        for binding in projection.knowledge.values() {
+            pending.extend(self.knowledge_reconcile_event(binding));
+        }
         let projection = self.apply_reconciliations(projection, pending)?;
         Ok(Self::status_from_projection(projection))
     }
@@ -459,6 +502,9 @@ impl Workspace {
             .filter(|claim| claim.lifecycle.is_active())
         {
             pending.extend(self.claim_reconcile_event(claim)?);
+        }
+        for binding in projection.knowledge.values() {
+            pending.extend(self.knowledge_reconcile_event(binding));
         }
         let projection = self.apply_reconciliations(projection, pending)?;
         Ok(Self::status_from_projection(projection).brief())
@@ -478,6 +524,9 @@ impl Workspace {
             .filter(|claim| claim.lifecycle.is_active())
         {
             pending.extend(self.claim_reconcile_event(claim)?);
+        }
+        for binding in current.knowledge.values() {
+            pending.extend(self.knowledge_reconcile_event(binding));
         }
         let current = self.apply_reconciliations(current, pending)?;
         let marker = match since {
@@ -709,7 +758,13 @@ impl Workspace {
                 ClaimLifecycle::Retired { .. } => retired_claims.push(claim),
             }
         }
+        let (knowledge, ended_knowledge) = projection
+            .knowledge
+            .into_values()
+            .partition(|binding| binding.lifecycle.is_active());
         WorkspaceStatus {
+            knowledge,
+            ended_knowledge,
             worktree,
             intent: projection.intent,
             working_set: projection.working_set.into_values().collect(),
@@ -904,6 +959,9 @@ impl Workspace {
         {
             pending.extend(self.claim_reconcile_event(claim)?);
         }
+        for binding in current.knowledge.values() {
+            pending.extend(self.knowledge_reconcile_event(binding));
+        }
         let current = self.apply_reconciliations(current, pending)?;
         let checkpoint = match label {
             Some(label) => current
@@ -986,7 +1044,15 @@ impl Workspace {
             }
         }
 
+        let [
+            knowledge_established,
+            knowledge_ended,
+            knowledge_source_changed,
+        ] = knowledge_transitions(current.knowledge.values(), &baseline.knowledge);
         Ok(BriefDeltaStatus {
+            knowledge_established: BriefIdSet::from_ids(knowledge_established),
+            knowledge_ended: BriefIdSet::from_ids(knowledge_ended),
+            knowledge_source_changed: BriefIdSet::from_ids(knowledge_source_changed),
             checkpoint: BriefCheckpoint::from_marker(&checkpoint),
             worktree: self.worktree_identity.clone(),
             intent_change,
@@ -1077,7 +1143,24 @@ impl Workspace {
             }
         }
 
+        let all_knowledge: Vec<&KnowledgeBinding> = current
+            .knowledge
+            .iter()
+            .chain(&current.ended_knowledge)
+            .collect();
+        let [established, ended, source_changed] =
+            knowledge_transitions(all_knowledge.iter().copied(), &baseline.knowledge);
+        let pick = |ids: &[u64]| -> Vec<KnowledgeBinding> {
+            all_knowledge
+                .iter()
+                .filter(|binding| ids.contains(&binding.id))
+                .map(|binding| (*binding).clone())
+                .collect()
+        };
         Ok(DeltaStatus {
+            knowledge_established: pick(&established),
+            knowledge_ended: pick(&ended),
+            knowledge_source_changed: pick(&source_changed),
             worktree: self.worktree_identity.clone(),
             checkpoint,
             intent_change,
@@ -1458,6 +1541,208 @@ impl Workspace {
         })
     }
 
+    /// Establish a knowledge binding (knowledge pulse contract §5). Thin fields
+    /// are validated fail-closed, a file reference is pinned and assessed, and a
+    /// superseded binding ends in the same event. Re-affirming a changed source
+    /// is a supersession with the same reference, which re-pins it.
+    pub fn bind_knowledge(
+        &self,
+        request: KnowledgeBindingRequest,
+    ) -> Result<KnowledgeBinding, WorkspaceError> {
+        let invalid = WorkspaceError::InvalidKnowledge;
+        let headline = request.headline.trim().to_owned();
+        if headline.is_empty() {
+            return Err(invalid("headline must not be blank".to_owned()));
+        }
+        check_knowledge_chars("headline", &headline, KNOWLEDGE_HEADLINE_MAX_CHARS)?;
+        if let Some(detail) = &request.detail {
+            check_knowledge_chars("detail", detail, KNOWLEDGE_DETAIL_MAX_CHARS)?;
+        }
+        if request.scope_paths.len() > KNOWLEDGE_SCOPE_PATHS_MAX {
+            return Err(invalid(format!(
+                "at most {KNOWLEDGE_SCOPE_PATHS_MAX} path prefixes may scope a binding"
+            )));
+        }
+        for prefix in &request.scope_paths {
+            check_knowledge_chars("path prefix", prefix, KNOWLEDGE_LOCATOR_MAX_CHARS)?;
+            validate_relative_path(Path::new(prefix)).map_err(|_| {
+                invalid(format!(
+                    "path prefix {prefix:?} must be repository-relative"
+                ))
+            })?;
+        }
+        let projection = self.project()?;
+        if let Some(previous) = request.supersedes {
+            let binding = projection
+                .knowledge
+                .get(&previous)
+                .ok_or(WorkspaceError::KnowledgeNotFound(previous))?;
+            if !binding.lifecycle.is_active() {
+                return Err(invalid(format!(
+                    "k{previous} is not active and cannot be superseded"
+                )));
+            }
+        }
+        let pin = match &request.reference {
+            None => None,
+            Some(KnowledgeReference::Opaque { locator }) => {
+                check_knowledge_chars("locator", locator, KNOWLEDGE_LOCATOR_MAX_CHARS)?;
+                if locator.trim().is_empty() {
+                    return Err(invalid("locator must not be blank".to_owned()));
+                }
+                None
+            }
+            Some(KnowledgeReference::RepositoryFile { repository, path }) => {
+                if let Some(repository) = repository {
+                    check_knowledge_chars("repository", repository, KNOWLEDGE_LOCATOR_MAX_CHARS)?;
+                }
+                check_knowledge_chars(
+                    "path",
+                    &path.to_string_lossy(),
+                    KNOWLEDGE_LOCATOR_MAX_CHARS,
+                )?;
+                validate_relative_path(path).map_err(|_| {
+                    invalid(format!(
+                        "path {} must be relative to its repository",
+                        path.display()
+                    ))
+                })?;
+                if is_sensitive_repository_path(path) {
+                    return Err(invalid(format!(
+                        "path {} is sensitive and cannot be referenced",
+                        path.display()
+                    )));
+                }
+                Some(pin_knowledge_source(
+                    &self.repository_root,
+                    repository.as_deref(),
+                    path,
+                )?)
+            }
+        };
+        if let Some(key) = request
+            .reference
+            .as_ref()
+            .and_then(|reference| knowledge_source_key(reference, pin.as_ref()))
+        {
+            let duplicate =
+                projection.knowledge.values().find(|binding| {
+                    binding.lifecycle.is_active()
+                        && Some(binding.id) != request.supersedes
+                        && binding.reference.as_ref().and_then(|reference| {
+                            knowledge_source_key(reference, binding.pin.as_ref())
+                        }) == Some(key.clone())
+                });
+            if let Some(existing) = duplicate {
+                return Err(invalid(format!(
+                    "this source is already bound as k{}; supersede it instead",
+                    existing.id
+                )));
+            }
+        }
+        let assessment = request.reference.as_ref().map(|reference| {
+            assess_knowledge_source(&self.repository_root, reference, pin.as_ref())
+        });
+        let binding_id = projection.last_knowledge_id + 1;
+        let scope = if request.scope_paths.is_empty() {
+            KnowledgeScope::Repository
+        } else {
+            KnowledgeScope::Paths {
+                prefixes: request.scope_paths,
+            }
+        };
+        self.append(Event::KnowledgeBound {
+            binding_id,
+            headline,
+            detail: request.detail,
+            reference: request.reference,
+            scope,
+            pin,
+            supersedes: request.supersedes,
+            assessment,
+            worktree_identity: Some(self.worktree_identity.clone()),
+        })?;
+        self.project()?
+            .knowledge
+            .remove(&binding_id)
+            .ok_or_else(|| {
+                WorkspaceError::CorruptLog(format!(
+                    "knowledge binding {binding_id} was not projected"
+                ))
+            })
+    }
+
+    /// Retire a knowledge binding without a replacement; its record and reason
+    /// stay in the append-only log.
+    pub fn retire_knowledge(
+        &self,
+        binding_id: u64,
+        reason: impl Into<String>,
+    ) -> Result<KnowledgeBinding, WorkspaceError> {
+        let reason = reason.into();
+        if reason.trim().is_empty() {
+            return Err(WorkspaceError::InvalidKnowledge(
+                "retirement reason must not be blank".to_owned(),
+            ));
+        }
+        let projection = self.project()?;
+        let binding = projection
+            .knowledge
+            .get(&binding_id)
+            .ok_or(WorkspaceError::KnowledgeNotFound(binding_id))?;
+        if !binding.lifecycle.is_active() {
+            return Err(WorkspaceError::InvalidKnowledge(format!(
+                "k{binding_id} is not active"
+            )));
+        }
+        self.append(Event::KnowledgeRetired { binding_id, reason })?;
+        self.project()?
+            .knowledge
+            .remove(&binding_id)
+            .ok_or(WorkspaceError::KnowledgeNotFound(binding_id))
+    }
+
+    /// Serve one binding with a fresh source assessment for this worktree.
+    pub fn reconcile_knowledge(&self, binding_id: u64) -> Result<KnowledgeBinding, WorkspaceError> {
+        let projection = self.project()?;
+        let binding = projection
+            .knowledge
+            .get(&binding_id)
+            .ok_or(WorkspaceError::KnowledgeNotFound(binding_id))?;
+        match self.knowledge_reconcile_event(binding) {
+            None => Ok(binding.clone()),
+            Some(event) => {
+                self.append(event)?;
+                self.project()?
+                    .knowledge
+                    .remove(&binding_id)
+                    .ok_or(WorkspaceError::KnowledgeNotFound(binding_id))
+            }
+        }
+    }
+
+    /// Re-assess an active binding's referenced source and return the event
+    /// recording it, or `None` when this worktree already serves that
+    /// assessment (no-op suppression) or there is no reference to assess.
+    fn knowledge_reconcile_event(&self, binding: &KnowledgeBinding) -> Option<Event> {
+        if !binding.lifecycle.is_active() {
+            return None;
+        }
+        let reference = binding.reference.as_ref()?;
+        let assessment =
+            assess_knowledge_source(&self.repository_root, reference, binding.pin.as_ref());
+        if binding.source.as_ref() == Some(&assessment) {
+            return None;
+        }
+        Some(Event::KnowledgeSourceAssessed {
+            binding_id: binding.id,
+            state: assessment.state,
+            reason: assessment.reason,
+            fingerprint: assessment.fingerprint,
+            worktree_identity: Some(self.worktree_identity.clone()),
+        })
+    }
+
     /// Serve the complete record behind a kind-prefixed id: the one-call
     /// recovery path that makes shortening honest in bounded summaries. Claims
     /// and findings are reconciled first, so a revealed verdict is never
@@ -1465,6 +1750,9 @@ impl Workspace {
     pub fn reveal(&self, entity: EntityRef) -> Result<Revealed, WorkspaceError> {
         Ok(match entity {
             EntityRef::Claim(id) => Revealed::Claim(Box::new(self.reconcile_claim(id)?)),
+            EntityRef::Knowledge(id) => {
+                Revealed::Knowledge(Box::new(self.reconcile_knowledge(id)?))
+            }
             EntityRef::Observation(id) => {
                 Revealed::Observation(Box::new(self.reconcile_observation(id)?))
             }
@@ -2583,9 +2871,29 @@ struct Projection {
     /// proprioceptive fact (like freshness); whether the lag is a debt is the
     /// agent's judgment, so no threshold or verdict lives here.
     observations_since_last_claim: u64,
+    knowledge: BTreeMap<u64, KnowledgeBinding>,
+    last_knowledge_id: u64,
 }
 
 impl Projection {
+    /// A source assessment as this worktree may serve it: the event's own when
+    /// computed here, else `unknown` — never another worktree's verdict.
+    fn materialize_source(
+        &self,
+        worktree_identity: Option<&str>,
+        assessment: SourceAssessment,
+    ) -> SourceAssessment {
+        if self.is_my_worktree(worktree_identity) {
+            assessment
+        } else {
+            SourceAssessment {
+                state: SourceState::Unknown,
+                reason: "not yet assessed in this worktree".to_owned(),
+                fingerprint: None,
+            }
+        }
+    }
+
     /// Whether an event carrying `worktree_identity` was computed in the
     /// worktree this handle projects for. Events from other worktrees still
     /// apply to the shared log but must not touch this handle's materialized
@@ -3276,6 +3584,87 @@ impl Projection {
                     .ok_or(WorkspaceError::TransactionNotFound(transaction_id))?;
                 transaction.last_rejection = Some(reason);
             }
+            Event::KnowledgeBound {
+                binding_id,
+                headline,
+                detail,
+                reference,
+                scope,
+                pin,
+                supersedes,
+                assessment,
+                worktree_identity,
+            } => {
+                if self.knowledge.contains_key(&binding_id) {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "knowledge binding {binding_id} was established twice"
+                    )));
+                }
+                if let Some(previous) = supersedes {
+                    let superseded = self
+                        .knowledge
+                        .get_mut(&previous)
+                        .ok_or(WorkspaceError::KnowledgeNotFound(previous))?;
+                    if !superseded.lifecycle.is_active() {
+                        return Err(WorkspaceError::CorruptLog(format!(
+                            "superseded knowledge binding {previous} is not active"
+                        )));
+                    }
+                    superseded.lifecycle = BindingLifecycle::Superseded {
+                        replacement_binding_id: binding_id,
+                    };
+                }
+                let source = assessment.map(|assessment| {
+                    self.materialize_source(worktree_identity.as_deref(), assessment)
+                });
+                self.knowledge.insert(
+                    binding_id,
+                    KnowledgeBinding {
+                        id: binding_id,
+                        headline,
+                        detail,
+                        reference,
+                        scope,
+                        pin,
+                        source,
+                        lifecycle: BindingLifecycle::Active,
+                        established_sequence: self.next_sequence - 1,
+                    },
+                );
+                self.last_knowledge_id = self.last_knowledge_id.max(binding_id);
+            }
+            Event::KnowledgeRetired { binding_id, reason } => {
+                let binding = self
+                    .knowledge
+                    .get_mut(&binding_id)
+                    .ok_or(WorkspaceError::KnowledgeNotFound(binding_id))?;
+                if !binding.lifecycle.is_active() {
+                    return Err(WorkspaceError::CorruptLog(format!(
+                        "retired knowledge binding {binding_id} is not active"
+                    )));
+                }
+                binding.lifecycle = BindingLifecycle::Retired { reason };
+            }
+            Event::KnowledgeSourceAssessed {
+                binding_id,
+                state,
+                reason,
+                fingerprint,
+                worktree_identity,
+            } => {
+                let mine = self.is_my_worktree(worktree_identity.as_deref());
+                let binding = self
+                    .knowledge
+                    .get_mut(&binding_id)
+                    .ok_or(WorkspaceError::KnowledgeNotFound(binding_id))?;
+                if mine {
+                    binding.source = Some(SourceAssessment {
+                        state,
+                        reason,
+                        fingerprint,
+                    });
+                }
+            }
             Event::Checkpointed {
                 label,
                 note,
@@ -3294,4 +3683,53 @@ impl Projection {
         }
         Ok(())
     }
+}
+
+/// Reject a knowledge field longer than its write-time bound (knowledge pulse
+/// contract §3): thin bindings are enforced, not truncated.
+fn check_knowledge_chars(field: &str, value: &str, max_chars: usize) -> Result<(), WorkspaceError> {
+    let length = value.chars().count();
+    if length > max_chars {
+        return Err(WorkspaceError::InvalidKnowledge(format!(
+            "{field} is {length} chars; the limit is {max_chars}"
+        )));
+    }
+    Ok(())
+}
+
+/// The resolved source a binding points at, for duplicate detection: pinned
+/// repository identity plus path, or the opaque locator.
+fn knowledge_source_key(reference: &KnowledgeReference, pin: Option<&SourcePin>) -> Option<String> {
+    match reference {
+        KnowledgeReference::Opaque { locator } => Some(format!("opaque:{locator}")),
+        KnowledgeReference::RepositoryFile { path, .. } => {
+            pin.map(|pin| format!("{}:{}", pin.repository_identity, path.display()))
+        }
+    }
+}
+
+/// Knowledge transitions since a checkpoint baseline, as
+/// `[established, ended, source changed]` binding ids.
+fn knowledge_transitions<'a>(
+    current: impl Iterator<Item = &'a KnowledgeBinding>,
+    baseline: &BTreeMap<u64, KnowledgeBinding>,
+) -> [Vec<u64>; 3] {
+    let mut transitions: [Vec<u64>; 3] = Default::default();
+    for binding in current {
+        match baseline.get(&binding.id) {
+            None if binding.lifecycle.is_active() => transitions[0].push(binding.id),
+            None => {}
+            Some(before) if before.lifecycle.is_active() && !binding.lifecycle.is_active() => {
+                transitions[1].push(binding.id)
+            }
+            Some(before)
+                if binding.lifecycle.is_active()
+                    && before.source_state() != binding.source_state() =>
+            {
+                transitions[2].push(binding.id)
+            }
+            Some(_) => {}
+        }
+    }
+    transitions
 }

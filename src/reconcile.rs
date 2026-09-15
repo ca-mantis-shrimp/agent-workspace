@@ -1113,6 +1113,163 @@ pub(crate) fn hex_digest(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// A repository's durable identity for a knowledge source pin: its root
+/// commit(s), so a moved or re-cloned repository keeps its identity while an
+/// unrelated repository at the same locator does not. A repository with no
+/// commits yet falls back to its canonical Git common directory. `None` when
+/// `path` is not inside a Git repository.
+pub(crate) fn repository_identity(path: &Path) -> Option<String> {
+    let common_dir = git_output(path, &["rev-parse", "--git-common-dir"])
+        .ok()
+        .filter(|dir| !dir.is_empty())?;
+    if let Ok(roots) = git_output(path, &["rev-list", "--max-parents=0", "HEAD"]) {
+        let mut roots: Vec<&str> = roots.lines().collect();
+        if !roots.is_empty() {
+            roots.sort_unstable();
+            return Some(format!("roots:{}", roots.join(",")));
+        }
+    }
+    let common_dir = PathBuf::from(common_dir);
+    let absolute = if common_dir.is_absolute() {
+        common_dir
+    } else {
+        path.join(common_dir)
+    };
+    absolute
+        .canonicalize()
+        .ok()
+        .map(|dir| format!("git-dir:{}", dir.to_string_lossy()))
+}
+
+/// The repository that owns a file reference: this project, or the locator
+/// joined to this project's root — never the process working directory.
+fn knowledge_owning_root(
+    repository_root: &Path,
+    repository: Option<&str>,
+) -> Result<PathBuf, String> {
+    match repository {
+        None => Ok(repository_root.to_path_buf()),
+        Some(locator) => repository_root
+            .join(locator)
+            .canonicalize()
+            .map_err(|error| format!("repository locator {locator:?} does not resolve: {error}")),
+    }
+}
+
+/// Pin a file reference at establish time (knowledge pulse contract §1.4):
+/// owning repository identity, its `HEAD`, and the raw-byte fingerprint. The
+/// source text itself is hashed and dropped, never retained.
+pub(crate) fn pin_knowledge_source(
+    repository_root: &Path,
+    repository: Option<&str>,
+    path: &Path,
+) -> Result<SourcePin, WorkspaceError> {
+    let owning_root = knowledge_owning_root(repository_root, repository)
+        .map_err(WorkspaceError::InvalidKnowledge)?;
+    let repository_identity = repository_identity(&owning_root).ok_or_else(|| {
+        WorkspaceError::InvalidKnowledge(format!(
+            "{} is not a Git repository",
+            owning_root.display()
+        ))
+    })?;
+    let file = resolve_repository_file(&owning_root, path).map_err(|_| {
+        WorkspaceError::InvalidKnowledge(format!(
+            "source {} is not a regular file inside its repository",
+            path.display()
+        ))
+    })?;
+    Ok(SourcePin {
+        repository_identity,
+        revision: git_output(&owning_root, &["rev-parse", "HEAD"]).ok(),
+        fingerprint: fingerprint_file(&file)?,
+    })
+}
+
+/// Assess a referenced source against its pin (knowledge pulse contract §1.4).
+/// Moved, renamed, or re-pointed sources become `unavailable`; nothing is ever
+/// retargeted to a guessed location.
+pub(crate) fn assess_knowledge_source(
+    repository_root: &Path,
+    reference: &KnowledgeReference,
+    pin: Option<&SourcePin>,
+) -> SourceAssessment {
+    let assessment = |state, reason: String, fingerprint| SourceAssessment {
+        state,
+        reason,
+        fingerprint,
+    };
+    let (repository, path) = match reference {
+        KnowledgeReference::Opaque { .. } => {
+            return assessment(
+                SourceState::Unknown,
+                "opaque reference is not assessed".to_owned(),
+                None,
+            );
+        }
+        KnowledgeReference::RepositoryFile { repository, path } => (repository.as_deref(), path),
+    };
+    let Some(pin) = pin else {
+        return assessment(
+            SourceState::Unknown,
+            "file reference has no recorded pin".to_owned(),
+            None,
+        );
+    };
+    let owning_root = match knowledge_owning_root(repository_root, repository) {
+        Ok(root) => root,
+        Err(reason) => return assessment(SourceState::Unavailable, reason, None),
+    };
+    match repository_identity(&owning_root) {
+        None => {
+            return assessment(
+                SourceState::Unavailable,
+                "repository locator is not a Git repository".to_owned(),
+                None,
+            );
+        }
+        Some(identity) if identity != pin.repository_identity => {
+            return assessment(
+                SourceState::Unavailable,
+                "repository locator now names a different repository".to_owned(),
+                None,
+            );
+        }
+        Some(_) => {}
+    }
+    let bytes = resolve_repository_file(&owning_root, path)
+        .and_then(|file| fs::read(file).map_err(WorkspaceError::from));
+    let bytes = match bytes {
+        Ok(bytes) => bytes,
+        Err(WorkspaceError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return assessment(
+                SourceState::Unavailable,
+                "source file is missing".to_owned(),
+                None,
+            );
+        }
+        Err(error) => {
+            return assessment(
+                SourceState::Unavailable,
+                format!("source file is unreadable: {error}"),
+                None,
+            );
+        }
+    };
+    let fingerprint = hex_digest(&bytes);
+    if fingerprint == pin.fingerprint {
+        return assessment(
+            SourceState::Current,
+            "source bytes match the pin".to_owned(),
+            Some(fingerprint),
+        );
+    }
+    let reason = match &pin.revision {
+        Some(revision) => format!("source bytes differ from pinned revision {revision}"),
+        None => "source bytes differ from the pin".to_owned(),
+    };
+    assessment(SourceState::Changed, reason, Some(fingerprint))
+}
+
 #[cfg(test)]
 mod drift_tests {
     use super::*;

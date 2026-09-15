@@ -39,6 +39,12 @@ pub struct WorkspaceStatus {
     /// A proprioceptive fact the agent judges, not a verdict the kernel renders.
     #[serde(default)]
     pub observations_since_last_claim: usize,
+    /// Active knowledge bindings, with this worktree's source assessments.
+    #[serde(default)]
+    pub knowledge: Vec<KnowledgeBinding>,
+    /// Superseded or retired bindings, kept for audit.
+    #[serde(default)]
+    pub ended_knowledge: Vec<KnowledgeBinding>,
 }
 
 /// The default `status` output: the orientation surface an agent resumes from,
@@ -65,6 +71,25 @@ pub struct BriefStatus {
     /// verdict: only the agent knows if those reads produced a durable belief.
     pub observations_since_last_claim: usize,
     pub latest_checkpoint: Option<BriefCheckpoint>,
+    /// Applicable bindings, ranked (knowledge pulse contract §4), capped.
+    pub knowledge: Vec<BriefKnowledge>,
+    /// Applicable bindings not shown; bindings filtered out by scope are the
+    /// remainder of `counts.active_bindings`.
+    pub knowledge_omitted: usize,
+}
+
+/// One applicable binding on the bounded surface: a pointer, not a body.
+#[derive(Clone, Debug, Serialize)]
+pub struct BriefKnowledge {
+    pub id: u64,
+    pub headline: String,
+    pub authority: KnowledgeAuthority,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<SourceState>,
+    /// The rule that selected this binding.
+    pub why: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -96,6 +121,7 @@ pub struct BriefCounts {
     pub open_transactions: usize,
     pub checkpoints: usize,
     pub freshness: FreshnessHistogram,
+    pub active_bindings: usize,
 }
 
 /// The latest checkpoint as an orientation anchor: its label and sequence, plus
@@ -143,6 +169,7 @@ impl WorkspaceStatus {
                 FreshnessWithinScope::Unknown => freshness.unknown += 1,
             }
         }
+        let applicable = self.applicable_knowledge();
         let mut ranked_claims: Vec<&Claim> = self.claims.iter().collect();
         ranked_claims.sort_by_key(|claim| {
             let freshness_rank = match claim.report.freshness_within_scope {
@@ -193,9 +220,94 @@ impl WorkspaceStatus {
                     .count(),
                 checkpoints: self.checkpoints.len(),
                 freshness,
+                active_bindings: self.knowledge.len(),
             },
             latest_checkpoint: self.checkpoints.last().map(BriefCheckpoint::from_marker),
+            knowledge: applicable
+                .iter()
+                .take(BRIEF_KNOWLEDGE_LIMIT)
+                .map(|(binding, why)| BriefKnowledge {
+                    id: binding.id,
+                    headline: claim_headline(&binding.headline, BRIEF_KNOWLEDGE_HEADLINE_MAX_CHARS),
+                    authority: binding.authority(),
+                    reference: binding.reference.as_ref().map(|reference| {
+                        claim_headline(&reference.display(), BRIEF_KNOWLEDGE_REFERENCE_MAX_CHARS)
+                    }),
+                    source: binding.source_state(),
+                    why: claim_headline(why, BRIEF_KNOWLEDGE_WHY_MAX_CHARS),
+                })
+                .collect(),
+            knowledge_omitted: applicable.len().saturating_sub(BRIEF_KNOWLEDGE_LIMIT),
         }
+    }
+
+    /// Active bindings that apply to current work, ranked, each with the rule
+    /// that selected it (knowledge pulse contract §1.3, §4). Relevance comes
+    /// only from explicit scope and the kernel's own records of current work —
+    /// never from headline, detail, or source text.
+    pub fn applicable_knowledge(&self) -> Vec<(&KnowledgeBinding, String)> {
+        let mut applicable: Vec<(&KnowledgeBinding, String)> = self
+            .knowledge
+            .iter()
+            .filter_map(|binding| match &binding.scope {
+                KnowledgeScope::Repository => Some((binding, "repository".to_owned())),
+                KnowledgeScope::Paths { prefixes } => {
+                    self.first_path_match(prefixes).map(|why| (binding, why))
+                }
+            })
+            .collect();
+        applicable.sort_by_key(|(binding, _)| {
+            (
+                binding.source_state().unwrap_or(SourceState::Current),
+                matches!(binding.scope, KnowledgeScope::Repository),
+                Reverse(binding.established_sequence),
+            )
+        });
+        applicable
+    }
+
+    /// The first recorded piece of current work a path-scoped binding matches:
+    /// active claim inputs, then open transaction mutations. Both end (claims
+    /// retire, transactions close), so relevance fades with the work; the
+    /// working set is excluded because nothing ever removes an entry from it.
+    fn first_path_match(&self, prefixes: &[String]) -> Option<String> {
+        let matches = |path: &std::path::Path| {
+            let path = path.to_string_lossy();
+            prefixes.iter().any(|prefix| {
+                if prefix.ends_with('/') {
+                    path.starts_with(prefix.as_str())
+                } else {
+                    path == prefix.as_str()
+                }
+            })
+        };
+        for claim in &self.claims {
+            if let Some(input) = claim.inputs.iter().find(|input| matches(&input.path)) {
+                return Some(format!(
+                    "path {} via claim {}",
+                    input.path.display(),
+                    claim.id
+                ));
+            }
+        }
+        for transaction in self
+            .transactions
+            .iter()
+            .filter(|transaction| transaction.state == TransactionState::Open)
+        {
+            if let Some(mutation) = transaction
+                .mutations
+                .iter()
+                .find(|mutation| matches(&mutation.path))
+            {
+                return Some(format!(
+                    "path {} via transaction {}",
+                    mutation.path.display(),
+                    transaction.id
+                ));
+            }
+        }
+        None
     }
 }
 
@@ -517,6 +629,7 @@ pub enum Revealed {
     Observation(Box<Observation>),
     Finding(Box<Finding>),
     Transaction(Box<TransactionPreview>),
+    Knowledge(Box<KnowledgeBinding>),
 }
 
 /// A review-before-accept surface for one transaction: its intent, the locations
@@ -666,6 +779,11 @@ impl WorkspaceStatus {
 /// needs re-verification within budget with the intent present, and
 /// `claims_omitted` plus `--full` keep the remainder one step away.
 const BRIEF_CLAIM_LIMIT: usize = 5;
+/// Knowledge pulse contract §3: at most three applicable bindings, as pointers.
+const BRIEF_KNOWLEDGE_LIMIT: usize = 3;
+const BRIEF_KNOWLEDGE_HEADLINE_MAX_CHARS: usize = 100;
+const BRIEF_KNOWLEDGE_REFERENCE_MAX_CHARS: usize = 120;
+const BRIEF_KNOWLEDGE_WHY_MAX_CHARS: usize = 60;
 const BRIEF_HEADLINE_MAX_CHARS: usize = 80;
 /// The intent anchor's upper bound in the brief status — generous enough that
 /// a normal two-to-three sentence thesis shows whole, but bounded so the wake
@@ -721,6 +839,13 @@ pub struct DeltaStatus {
     pub observations_recorded: Vec<Observation>,
     pub transactions_opened: Vec<Transaction>,
     pub transactions_closed: Vec<Transaction>,
+    #[serde(default)]
+    pub knowledge_established: Vec<KnowledgeBinding>,
+    #[serde(default)]
+    pub knowledge_ended: Vec<KnowledgeBinding>,
+    /// Active bindings whose served source state differs from the checkpoint's.
+    #[serde(default)]
+    pub knowledge_source_changed: Vec<KnowledgeBinding>,
 }
 
 /// Bounded default delta. Full entities remain available through `delta --full`;
@@ -737,6 +862,9 @@ pub struct BriefDeltaStatus {
     pub observations_recorded: BriefIdSet,
     pub transactions_opened: BriefIdSet,
     pub transactions_closed: BriefIdSet,
+    pub knowledge_established: BriefIdSet,
+    pub knowledge_ended: BriefIdSet,
+    pub knowledge_source_changed: BriefIdSet,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -792,6 +920,13 @@ impl DeltaStatus {
             ),
             transactions_closed: BriefIdSet::from_ids(
                 self.transactions_closed.iter().map(|item| item.id),
+            ),
+            knowledge_established: BriefIdSet::from_ids(
+                self.knowledge_established.iter().map(|item| item.id),
+            ),
+            knowledge_ended: BriefIdSet::from_ids(self.knowledge_ended.iter().map(|item| item.id)),
+            knowledge_source_changed: BriefIdSet::from_ids(
+                self.knowledge_source_changed.iter().map(|item| item.id),
             ),
         }
     }

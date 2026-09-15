@@ -1,5 +1,16 @@
 ## 2026-09-15
 
+* **Update**: Implemented slice `kernel-knowledge-bindings`: `KnowledgeBound`/`KnowledgeRetired`/`KnowledgeSourceAssessed` events (assessments worktree-stamped, served only in their worktree, appended only on change), repository-file references (this project or a sibling locator resolved against the project root) pinned by root-commit identity, HEAD, and raw-byte hash, opaque references, repository/path applicability with `why`, ranking, brief/full status and delta knowledge fields, `bind-knowledge`/`retire-knowledge` over CLI and MCP, reveal `k` ids, fail-closed writes. Two contract revisions recorded in `specifications/knowledge-pulse-contract.md`: repository identity is root commit(s) (a path identity missed an impostor at the same locator and would false-alarm on moves), and applicability excludes the working set (record_belief focuses every cited file and entries never leave, so path scope decayed into repository scope, observed in a KP6 reproduction).
+
+* **Update**: Linked `design/networked-agency-continuity-commons.md` to `decisions/external-workspace-and-clearhead-boundary.md` (Preserves Clearhead as a linked optional intention authority while execution and epistemic workspace state retain separate ownership.).
+* **Update**: Updated concept `design/networked-agency-continuity-commons.md`.
+* **Update**: Linked `design/networked-agency-continuity-commons.md` to `decisions/coordination-selection-disposition.md` (Keeps the accepted no-built-in-coordination disposition in force unless council review later produces an explicit replacement decision.).
+* **Update**: Updated concept `design/networked-agency-continuity-commons.md`.
+* **Update**: Linked `design/networked-agency-continuity-commons.md` to `design/agent-perspective.md` (Extends the constructive collective-agency discussion with an owner-requested network-governance and non-surveillant continuity proposal.).
+* **Update**: Updated concept `design/networked-agency-continuity-commons.md`.
+
+* **Creation**: Documented concept `design/networked-agency-continuity-commons.md` (Networked agency and the continuity commons).
+
 * **Update**: Implemented slice `kernel-wake-summary`: `src/summary.rs` pure renderer (skeleton + greedy priority upgrade, hard 1000-byte clip), `status --summary [--since]`, MCP `workspace_status {summary, since}`, Claude SessionStart hook prints the summary verbatim (drive pins the binary under test), Pi guidance to one summary call plus `workspace_reveal` metadata. Revised `specifications/wake-summary-contract.md` from measurement and live use: 6-id lists (8 measured ~794B skeleton), compact line formats, goal/full note cut by bytes, ended entities by id only (a superseded false claim read as fact in the live plot wake), live 676B plot render replaces the illustration.
 
 * **Update**: Implemented slice `kernel-reveal-by-id`: kind-prefixed `EntityRef` (c/o/f/t), `Workspace::reveal`, CLI `reveal <id>` (keeping `reveal --observation`), MCP `workspace_reveal`. Recorded in `specifications/wake-summary-contract.md` §4 that observations reveal their reconciled record while retained bytes stay behind `reveal --observation`.

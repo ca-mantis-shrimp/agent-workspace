@@ -66,8 +66,12 @@ deferred until a scenario needs them (§9).
   - With `repository` present, the file is in another local Git repository.
     `repository` is a locator as the binder wrote it (e.g. `../agent-workspace`),
     resolved against **this project's repository root, never the process working
-    directory**. The kernel records that repository's canonical Git
-    common-directory identity at establish time.
+    directory**. The kernel records that repository's identity at establish
+    time: its root commit(s), or its canonical Git common directory before its
+    first commit. *(Decided during implementation: a path-based identity cannot
+    tell an unrelated repository at the same locator from the pinned one, and it
+    reports a false `unavailable` when repositories move together. Root commits
+    survive moves and re-clones and change for unrelated history.)*
   - An OKF concept is simply a repository file (`knowledge/decisions/….md`).
     There is no OKF-specific or Clearhead-specific kind: Git owns bytes, and a
     provider plugin surface is not needed to pin a file.
@@ -80,13 +84,19 @@ A binding is **applicable** when:
 
 - `scope = repository`: always; or
 - `scope = paths [prefix…]`: some prefix matches a path in the kernel's own
-  records of current work. Those records are active claim inputs, the working
-  set, and open transaction mutations. A prefix is an exact repository-relative
+  records of current work. Those records are active claim inputs and open
+  transaction mutations. A prefix is an exact repository-relative
   file, or a directory prefix ending in `/`. No globs, no semantic matching.
 
 Every served binding carries `why`, naming the rule that selected it:
-`repository`, or `path <p> via claim <id>` / `via working set` /
-`via transaction <id>` (first match in that order).
+`repository`, or `path <p> via claim <id>` / `via transaction <id>` (first
+match in that order).
+
+*(Decided during implementation: the working set is excluded. `record_belief`
+focuses every file it cites, and nothing removes working-set entries, so a
+path-scoped binding would apply forever once any work had touched its path.
+It would decay into repository scope, which is the false relevance K4 forbids.
+Claims retire and transactions close, so relevance fades with the work.)*
 
 ### 1.4 Source pin and source state
 

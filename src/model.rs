@@ -249,23 +249,26 @@ pub struct RevealedFinding {
 }
 
 /// A kind-prefixed entity id — `c15` claim, `o101` observation, `f4` finding,
-/// `t2` transaction. One token names one entity, so a bounded summary can
-/// shorten anything and still leave a one-call path back to the whole record
-/// (`reveal <id>`).
+/// `t2` transaction, `k3` knowledge binding. One token names one entity, so a
+/// bounded summary can shorten anything and still leave a one-call path back
+/// to the whole record (`reveal <id>`).
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum EntityRef {
     Claim(u64),
     Observation(u64),
     Finding(u64),
     Transaction(u64),
+    Knowledge(u64),
 }
 
 impl EntityRef {
     pub fn id(self) -> u64 {
         match self {
-            Self::Claim(id) | Self::Observation(id) | Self::Finding(id) | Self::Transaction(id) => {
-                id
-            }
+            Self::Claim(id)
+            | Self::Observation(id)
+            | Self::Finding(id)
+            | Self::Transaction(id)
+            | Self::Knowledge(id) => id,
         }
     }
 }
@@ -277,6 +280,7 @@ impl std::fmt::Display for EntityRef {
             Self::Observation(_) => 'o',
             Self::Finding(_) => 'f',
             Self::Transaction(_) => 't',
+            Self::Knowledge(_) => 'k',
         };
         write!(formatter, "{prefix}{}", self.id())
     }
@@ -297,6 +301,7 @@ impl std::str::FromStr for EntityRef {
             "o" => Ok(Self::Observation(id)),
             "f" => Ok(Self::Finding(id)),
             "t" => Ok(Self::Transaction(id)),
+            "k" => Ok(Self::Knowledge(id)),
             _ => Err(invalid()),
         }
     }
@@ -689,4 +694,204 @@ pub struct CheckpointMarker {
     pub git_revision: String,
     pub intent: Option<Intent>,
     pub sequence: u64,
+}
+
+/// Write-time bounds for a knowledge binding (knowledge pulse contract §3):
+/// thinness is enforced when writing, never by silent truncation.
+pub const KNOWLEDGE_HEADLINE_MAX_CHARS: usize = 120;
+pub const KNOWLEDGE_DETAIL_MAX_CHARS: usize = 400;
+pub const KNOWLEDGE_LOCATOR_MAX_CHARS: usize = 256;
+pub const KNOWLEDGE_SCOPE_PATHS_MAX: usize = 8;
+
+/// Where a binding's canonical text lives (knowledge pulse contract §1.2).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum KnowledgeReference {
+    /// A whole file in this project (`repository` absent) or in another local
+    /// Git repository reached by a locator relative to this project's root.
+    RepositoryFile {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repository: Option<String>,
+        path: PathBuf,
+    },
+    /// A URL, tracker id, or other pointer the kernel stores but never resolves.
+    Opaque { locator: String },
+}
+
+impl KnowledgeReference {
+    /// Build a reference from the flat shape both the CLI and MCP accept: a
+    /// `path` (optionally in another `repository`), or an opaque `locator`, or
+    /// neither. A binding has at most one reference.
+    pub fn from_parts(
+        path: Option<PathBuf>,
+        repository: Option<String>,
+        locator: Option<String>,
+    ) -> Result<Option<Self>, crate::WorkspaceError> {
+        let invalid = crate::WorkspaceError::InvalidKnowledge;
+        match (path, repository, locator) {
+            (None, None, None) => Ok(None),
+            (Some(path), repository, None) => Ok(Some(Self::RepositoryFile { repository, path })),
+            (None, None, Some(locator)) => Ok(Some(Self::Opaque { locator })),
+            (None, Some(_), None) => Err(invalid(
+                "a source repository needs the path of a file inside it".to_owned(),
+            )),
+            (_, _, Some(_)) => Err(invalid(
+                "a binding has at most one reference: give a path or a locator, not both"
+                    .to_owned(),
+            )),
+        }
+    }
+
+    /// Display form for bounded surfaces: `path`, `repository:path`, or the
+    /// opaque locator.
+    pub fn display(&self) -> String {
+        match self {
+            Self::RepositoryFile {
+                repository: None,
+                path,
+            } => path.display().to_string(),
+            Self::RepositoryFile {
+                repository: Some(repository),
+                path,
+            } => format!("{repository}:{}", path.display()),
+            Self::Opaque { locator } => locator.clone(),
+        }
+    }
+}
+
+/// Which work a binding governs (knowledge pulse contract §1.3).
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum KnowledgeScope {
+    #[default]
+    Repository,
+    /// Exact repository-relative files, or directory prefixes ending in `/`.
+    Paths { prefixes: Vec<String> },
+}
+
+/// What the binder relied on when establishing a file reference (§1.4).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SourcePin {
+    /// Canonical Git common directory of the repository that owns the file.
+    pub repository_identity: String,
+    /// `HEAD` of the owning repository at establish time, when it had one.
+    pub revision: Option<String>,
+    /// SHA-256 of the file's raw bytes.
+    pub fingerprint: String,
+}
+
+/// A referenced source's state — a report distinct from claim freshness and
+/// deliberately never called stale. Declaration order is ranking order.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceState {
+    Changed,
+    Unavailable,
+    Unknown,
+    Current,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SourceAssessment {
+    pub state: SourceState,
+    pub reason: String,
+    /// The fingerprint observed, when the file could be read.
+    #[serde(default)]
+    pub fingerprint: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum BindingLifecycle {
+    #[default]
+    Active,
+    Superseded {
+        replacement_binding_id: u64,
+    },
+    Retired {
+        reason: String,
+    },
+}
+
+impl BindingLifecycle {
+    pub fn is_active(&self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
+
+/// Whether a binding's own text is the record (`workspace`) or a wake pointer
+/// to a canonical source (`reference`). Derived, never declared.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeAuthority {
+    Workspace,
+    Reference,
+}
+
+/// A durable record that a piece of knowledge governs work here (knowledge
+/// pulse contract §1). Intent, not a belief: it never goes stale; only its
+/// referenced source can change or become unavailable.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KnowledgeBinding {
+    pub id: u64,
+    pub headline: String,
+    #[serde(default)]
+    pub detail: Option<String>,
+    #[serde(default)]
+    pub reference: Option<KnowledgeReference>,
+    #[serde(default)]
+    pub scope: KnowledgeScope,
+    #[serde(default)]
+    pub pin: Option<SourcePin>,
+    /// This worktree's latest source assessment; `None` without a reference.
+    #[serde(default)]
+    pub source: Option<SourceAssessment>,
+    #[serde(default)]
+    pub lifecycle: BindingLifecycle,
+    /// Log sequence of the establishing event, for newest-first ranking.
+    pub established_sequence: u64,
+}
+
+impl KnowledgeBinding {
+    pub fn authority(&self) -> KnowledgeAuthority {
+        if self.reference.is_some() {
+            KnowledgeAuthority::Reference
+        } else {
+            KnowledgeAuthority::Workspace
+        }
+    }
+
+    pub fn source_state(&self) -> Option<SourceState> {
+        self.source.as_ref().map(|source| source.state)
+    }
+
+    /// Compact write receipt; `full` still returns the whole binding.
+    pub fn brief(&self) -> KnowledgeBindingBrief {
+        KnowledgeBindingBrief {
+            id: self.id,
+            authority: self.authority(),
+            source: self.source_state(),
+            lifecycle: self.lifecycle.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct KnowledgeBindingBrief {
+    pub id: u64,
+    pub authority: KnowledgeAuthority,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<SourceState>,
+    pub lifecycle: BindingLifecycle,
+}
+
+/// Inputs to [`crate::Workspace::bind_knowledge`], shared by CLI and MCP.
+#[derive(Clone, Debug, Default)]
+pub struct KnowledgeBindingRequest {
+    pub headline: String,
+    pub detail: Option<String>,
+    pub reference: Option<KnowledgeReference>,
+    /// Empty means repository-wide scope.
+    pub scope_paths: Vec<String>,
+    pub supersedes: Option<u64>,
 }

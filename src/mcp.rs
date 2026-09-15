@@ -14,7 +14,8 @@
 use std::path::PathBuf;
 
 use agent_workspace::{
-    ClaimScopeStrategy, ReadCaptureOutcome, ReadCaptureRequest, Workspace, resolve_state_root,
+    ClaimScopeStrategy, KnowledgeBindingRequest, KnowledgeReference, ReadCaptureOutcome,
+    ReadCaptureRequest, Workspace, resolve_state_root,
 };
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
@@ -191,8 +192,45 @@ pub struct ExplainStaleParams {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RevealParams {
     /// Kind-prefixed entity id as summaries print it: `c15` claim, `o101`
-    /// observation, `f4` finding, `t2` transaction.
+    /// observation, `f4` finding, `t2` transaction, `k3` knowledge binding.
     pub id: String,
+}
+
+/// Input schema for `workspace_bind_knowledge`, mirroring CLI `bind-knowledge`.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct BindKnowledgeParams {
+    /// The governing line shown at wake, terse (1-120 chars).
+    pub headline: String,
+    /// Short rationale (up to 400 chars); authoritative only when there is no
+    /// reference, since a referenced source stays canonical.
+    pub detail: Option<String>,
+    /// Repository-relative file holding the canonical text, e.g. an OKF decision.
+    pub path: Option<String>,
+    /// With `path`: another local Git repository, relative to this project's root.
+    pub repository: Option<String>,
+    /// Instead of `path`: a URL or tracker id the kernel stores but never resolves.
+    pub locator: Option<String>,
+    /// Scope to work touching these repository-relative files or `dir/`
+    /// prefixes; omit for a repository-wide binding.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Active binding id this one replaces; re-affirms a changed source by re-pinning it.
+    pub supersedes: Option<u64>,
+    /// Return the whole binding instead of the compact receipt.
+    #[serde(default)]
+    pub full: bool,
+}
+
+/// Input schema for `workspace_retire_knowledge`.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RetireKnowledgeParams {
+    /// Id of the active binding to retire.
+    pub binding_id: u64,
+    /// Why the binding no longer governs work. Blank reasons are rejected.
+    pub reason: String,
+    /// Return the whole binding instead of the compact receipt.
+    #[serde(default)]
+    pub full: bool,
 }
 
 #[tool_router]
@@ -259,13 +297,33 @@ impl WorkspaceServer {
     }
 
     #[tool(
-        description = "Reveal the complete record behind a kind-prefixed id — c claim, o observation, f finding, t transaction (e.g. c15) — the whole text any bounded summary shortened. Claims and findings are reconciled before they are served. A malformed or unknown id is a strict tool error."
+        description = "Reveal the complete record behind a kind-prefixed id — c claim, o observation, f finding, t transaction, k knowledge binding (e.g. c15) — the whole text any bounded summary shortened. Claims and findings are reconciled before they are served. A malformed or unknown id is a strict tool error."
     )]
     fn workspace_reveal(
         &self,
         Parameters(params): Parameters<RevealParams>,
     ) -> Result<CallToolResult, McpError> {
         self.tool_result(self.reveal(params.id))
+    }
+
+    #[tool(
+        description = "Bind durable knowledge to this repository's work so a cold successor inherits it at wake without a recap. Give a terse headline plus at most one reference: a repository-relative `path` (optionally in another local Git `repository`, e.g. ../agent-workspace) whose canonical text stays authoritative and is pinned by content hash, or an opaque `locator`. With no reference the headline and detail are the record. `paths` scopes it to work touching those files or dir/ prefixes; omit for repository-wide. Supersede to replace or re-affirm a changed source. Duplicate sources, sensitive or escaping paths, and over-long fields are strict errors. Returns {id, authority, source?, lifecycle}."
+    )]
+    fn workspace_bind_knowledge(
+        &self,
+        Parameters(params): Parameters<BindKnowledgeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.tool_result(self.bind_knowledge(params))
+    }
+
+    #[tool(
+        description = "Retire a knowledge binding that no longer governs work, without a replacement: workspace_retire_knowledge(binding_id, reason). Its record and reason stay auditable. A missing or inactive id is a strict error."
+    )]
+    fn workspace_retire_knowledge(
+        &self,
+        Parameters(params): Parameters<RetireKnowledgeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.tool_result(self.retire_knowledge(params))
     }
 
     #[tool(
@@ -455,6 +513,39 @@ impl WorkspaceServer {
 
     fn reveal(&self, id: String) -> Result<String, String> {
         self.run(move |workspace| workspace.reveal(id.parse()?))
+    }
+
+    fn bind_knowledge(&self, params: BindKnowledgeParams) -> Result<String, String> {
+        self.run(move |workspace| {
+            let reference = KnowledgeReference::from_parts(
+                params.path.map(PathBuf::from),
+                params.repository,
+                params.locator,
+            )?;
+            let binding = workspace.bind_knowledge(KnowledgeBindingRequest {
+                headline: params.headline,
+                detail: params.detail,
+                reference,
+                scope_paths: params.paths,
+                supersedes: params.supersedes,
+            })?;
+            if params.full {
+                serde_json::to_value(&binding).map_err(Into::into)
+            } else {
+                serde_json::to_value(binding.brief()).map_err(Into::into)
+            }
+        })
+    }
+
+    fn retire_knowledge(&self, params: RetireKnowledgeParams) -> Result<String, String> {
+        self.run(move |workspace| {
+            let binding = workspace.retire_knowledge(params.binding_id, params.reason)?;
+            if params.full {
+                serde_json::to_value(&binding).map_err(Into::into)
+            } else {
+                serde_json::to_value(binding.brief()).map_err(Into::into)
+            }
+        })
     }
 
     fn delta(&self, full: bool, since: Option<String>) -> Result<String, String> {

@@ -789,3 +789,53 @@ fn mcp_status_summary_is_the_same_text_as_the_cli() {
         "WS7: one renderer"
     );
 }
+
+/// KP12: knowledge bindings are one kernel policy — an MCP bind serves the same
+/// bounded pulse over MCP and the CLI, and write errors are strict tool errors.
+#[test]
+fn mcp_binds_knowledge_and_serves_the_same_pulse_as_the_cli() {
+    let repo = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    make_repo(repo.path());
+    let mut server = start(repo.path(), state.path());
+
+    let names = server.handshake();
+    for name in ["workspace_bind_knowledge", "workspace_retire_knowledge"] {
+        assert!(
+            names.contains(&name.to_owned()),
+            "{name} not routed; got {names:?}"
+        );
+    }
+
+    let receipt = tool_json(&server.call(
+        3,
+        "workspace_bind_knowledge",
+        json!({"headline": "Greetings stay friendly", "path": "hello.txt"}),
+    ));
+    assert_eq!(receipt["authority"], "reference");
+    assert_eq!(receipt["source"], "current");
+    let id = receipt["id"].as_u64().unwrap();
+
+    let over_mcp = tool_json(&server.call(4, "workspace_status", json!({})));
+    let over_cli = run_cli(repo.path(), state.path(), &["status"]);
+    assert_eq!(over_mcp["knowledge"], over_cli["knowledge"]);
+    assert_eq!(over_mcp["knowledge"][0]["why"], "repository");
+
+    let duplicate = server.call(
+        5,
+        "workspace_bind_knowledge",
+        json!({"headline": "Again", "path": "hello.txt"}),
+    );
+    assert_eq!(duplicate["result"]["isError"], json!(true), "{duplicate}");
+    let text = duplicate["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("already bound"), "{text}");
+
+    let retired = tool_json(&server.call(
+        6,
+        "workspace_retire_knowledge",
+        json!({"binding_id": id, "reason": "no longer governs"}),
+    ));
+    assert_eq!(retired["lifecycle"]["state"], "retired");
+    let after = tool_json(&server.call(7, "workspace_status", json!({})));
+    assert_eq!(after["knowledge"], json!([]));
+}

@@ -135,6 +135,7 @@ fn kind_rank(entity: EntityRef) -> u8 {
         EntityRef::Observation(_) => 1,
         EntityRef::Finding(_) => 2,
         EntityRef::Transaction(_) => 3,
+        EntityRef::Knowledge(_) => 4,
     }
 }
 
