@@ -1,5 +1,7 @@
 ## 2026-09-15
 
+* **Creation**: Documented `specifications/knowledge-pulse-contract.md` (knowledge-pulse-contract action): one knowledge-binding entity (headline, optional detail, at most one reference), repository_file references pinned by content hash with current/changed/unavailable/unknown source state, explicit repository/paths applicability, bounded status/delta pulse (3 entries + omission count), two verbs (bind-knowledge, retire-knowledge), fail-closed writes, K1-K9 prohibited failures, KP1-KP14 scenarios. Evidence: 2026-09-15 cold-probe baseline and plot claim 6 (a rule forced into a claim, false-stale on README). Updated `decisions/durable-constraints-portable-intent-entity.md` status to point at the contract.
+
 * **Update**: Updated concept `decisions/durable-constraints-portable-intent-entity.md`.
 
 * **Update**: Updated concept `decisions/okf-curated-knowledge-layer.md`.

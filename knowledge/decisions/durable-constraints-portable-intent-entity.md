@@ -19,6 +19,14 @@ friction gate has fired. The owner authorized the active
 `knowledge-pulse-contract`; that executable contract remains the gate before
 implementation and may revise the entity shape below.
 
+**Contract selection (2026-09-15):** the
+[knowledge pulse contract](../specifications/knowledge-pulse-contract.md) makes
+"constraint" and "knowledge binding" one entity with headline, optional detail,
+and **at most one** reference (not "references"); a Git file reference is pinned
+by content hash and reports `current/changed/unavailable/unknown`, never claim
+freshness; applicability is explicit `repository` or `paths` scope. Where this
+decision's field list differs, the contract governs.
+
 **Date:** 2026-09-07
 
 **Participants:** user + assistant, reacting to the `plot` continuation-insight
