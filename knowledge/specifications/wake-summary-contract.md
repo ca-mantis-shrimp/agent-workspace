@@ -105,16 +105,23 @@ Every item has two forms:
 | Item | Cap |
 | --- | --- |
 | goal | 200 B |
-| checkpoint note | 240 B |
+| checkpoint note | 100 B excerpt in skeleton; 240 B full |
 | binding | 100 B headline + 100 B reference display |
 | news, finding, transaction | 100 B |
 
 Fill is deterministic for a given log and worktree:
 
-1. **Skeleton.** Render the header, every non-empty section in short form, and
-   the `more` line. Each id list is capped at 10 ids, newest first, plus `+k`,
-   so the skeleton's worst case is bounded well under the budget (asserted by
-   test, WS2).
+1. **Skeleton.** Render:
+   - the header;
+   - the **goal in full form**, always, because it is the anchor every other
+     line is read against;
+   - the checkpoint label with a first-sentence note excerpt of at most 100 B;
+   - every other non-empty section in short form;
+   - the `more` line.
+
+   Each id list is capped at 8 ids, newest first, plus `+k`. The skeleton's
+   worst case must stay at or below 750 B, so at least one full-form item
+   always fits (asserted by test, WS2).
 2. **Upgrade.** Walk the candidates in priority order. Upgrade an item to its
    full form only if the whole output stays at or below 1000 B. Otherwise leave
    it short and continue, since a later, smaller item may still fit.
@@ -125,16 +132,21 @@ Fill is deterministic for a given log and worktree:
 
 1. bindings whose source is `changed` or `unavailable`;
 2. claims newly stale since the checkpoint;
-3. goal;
-4. checkpoint note;
-5. other applicable bindings, in the knowledge pulse ranking order;
-6. open findings, then open transactions;
-7. claims recorded since the checkpoint, newest first;
-8. superseded or retired entities since the checkpoint.
+3. the full checkpoint note (up to 240 B, replacing the skeleton excerpt);
+4. other applicable bindings, in the knowledge pulse ranking order;
+5. open findings, then open transactions;
+6. claims recorded since the checkpoint, newest first;
+7. superseded or retired entities since the checkpoint.
 
-Rationale: things that should change what the reader does or trusts come
-first, then where the work stands, then standing rules, then new beliefs that
-can be revealed on demand.
+Rationale:
+
+- **The goal is not a priority candidate.** The owner ranked it most important
+  (2026-09-15), and its short form would be an empty label, so it lives in the
+  skeleton and is always shown whole within its cap.
+- **The checkpoint is always present** as a label and excerpt. Its full note
+  yields only to signals that should change what the reader trusts.
+- **After that:** standing rules, then new beliefs that can be revealed on
+  demand.
 
 ## 4. Recoverability
 
@@ -182,9 +194,9 @@ can be revealed on demand.
 bindings, findings, and checkpoints with maximal text, the summary is at most
 1000 B and the `more` count equals the omitted and shortened items.
 
-**WS2 — skeleton bound.** Given every section at its id-list cap, the skeleton
-alone (step 1) fits with a margin asserted by test, so step 2 always has room
-to upgrade at least the first-priority item.
+**WS2 — skeleton bound.** Given every section at its id-list cap, a maximal
+goal, and a maximal checkpoint note, the skeleton alone (step 1) is at most
+750 B, so step 2 always has room for at least one full-form item.
 
 **WS3 — news first.**
 - *Given* a checkpoint followed by two new claims, one of them now stale, plus
@@ -241,6 +253,20 @@ more: 2 shortened — workspace_reveal c23
 | Bounding intent when it is written | Reopen if dogfood shows intents written as status logs crowding out the note; `plot`'s current intent suggests it may. |
 | Harness-specific budgets | One budget for all adapters is deliberate. |
 | Semantic relevance, and ranking claims by relation to the intent | Excluded by §5.4. |
+
+## 10. Use test
+
+The owner's acceptance condition is that the reading agent actually uses this
+surface. Passing WS1–WS9 is necessary, not sufficient. In
+`knowledge-pulse-dogfood`, record for each cold run:
+
+- which wake lines the agent acted on or cited;
+- which `reveal` calls it made;
+- which facts it re-derived that the wake already carried.
+
+A section never used across runs is a removal candidate. A reveal never called
+suggests its full form should have been in the skeleton, or was not needed at
+all.
 
 ## Related concepts
 
