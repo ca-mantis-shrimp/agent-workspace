@@ -6389,3 +6389,132 @@ fn explain_stale_reports_a_missing_supporting_file() {
         Some(DriftView::Missing)
     ));
 }
+
+/// WS5 (wake summary contract): a kind-prefixed id is the one-call path back to
+/// the whole record for every kind a bounded summary can shorten, and a
+/// malformed or unknown id fails by name instead of serving something else.
+#[test]
+fn reveal_round_trips_every_kind_prefixed_id() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap();
+    let ws = workspace.to_str().unwrap();
+    let to_json = |output: Output| -> Value { serde_json::from_slice(&output.stdout).unwrap() };
+    let reveal = |id: &str| {
+        to_json(invoke(&[
+            "reveal",
+            id,
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+        ]))
+    };
+
+    let observation = to_json(invoke(&[
+        "observe",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--path",
+        "src/helper.rs",
+        "--provider",
+        "fixture-source",
+        "--retain-payload",
+        "true",
+    ]));
+    let statement = "foo returns one. This second sentence is the detail a summary would cut.";
+    let belief = to_json(invoke(&[
+        "record-belief",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--statement",
+        statement,
+        "--rests-on",
+        "src/lib.rs",
+    ]));
+    let finding = to_json(invoke_with_stdin(
+        &[
+            "record-finding",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--severity",
+            "warning",
+            "--message",
+            "unneeded return statement",
+            "--path",
+            "src/lib.rs",
+        ],
+        "",
+    ));
+    let claim_id = belief["claim"]["id"].as_u64().unwrap();
+    let transaction = to_json(invoke(&[
+        "begin-transaction",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--intent",
+        "fixture transaction intent",
+        "--claim",
+        &claim_id.to_string(),
+    ]));
+
+    let claim = reveal(&format!("c{claim_id}"));
+    assert_eq!(claim["kind"], "claim");
+    assert_eq!(claim["record"]["statement"], statement);
+
+    let observation_id = observation["id"].as_u64().unwrap();
+    let revealed = reveal(&format!("o{observation_id}"));
+    // An observation reveals its reconciled record; retained source bytes stay
+    // behind `reveal --observation` (asserted below), since not every capture
+    // retains a payload and every record must be revealable.
+    assert_eq!(revealed["kind"], "observation");
+    assert_eq!(revealed["record"]["id"], observation_id);
+    assert_eq!(revealed["record"]["path"], "src/helper.rs");
+
+    let revealed = reveal(&format!("f{}", finding["id"]));
+    assert_eq!(revealed["kind"], "finding");
+    assert_eq!(revealed["record"]["message"], "unneeded return statement");
+
+    let revealed = reveal(&format!("t{}", transaction["id"]));
+    assert_eq!(revealed["kind"], "transaction");
+    assert_eq!(revealed["record"]["intent"], "fixture transaction intent");
+
+    // The pre-existing observation form keeps working.
+    let legacy = to_json(invoke(&[
+        "reveal",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--observation",
+        &observation_id.to_string(),
+    ]));
+    assert_eq!(legacy["content"], "pub fn helper() -> i32 { 1 }\n");
+
+    for malformed in ["c", "x15", "c1a", "cc15", "15", "é1"] {
+        let failed =
+            invoke_failure(&["reveal", malformed, "--repository", repo, "--workspace", ws]);
+        let stderr = String::from_utf8_lossy(&failed.stderr);
+        assert!(
+            stderr.contains("invalid entity id"),
+            "{malformed:?} must fail by name: {stderr}"
+        );
+    }
+    for (unknown, message) in [
+        ("c999", "claim 999 not found"),
+        ("o999", "observation 999 not found"),
+        ("f999", "finding 999 not found"),
+        ("t999", "transaction 999 not found"),
+    ] {
+        let failed = invoke_failure(&["reveal", unknown, "--repository", repo, "--workspace", ws]);
+        let stderr = String::from_utf8_lossy(&failed.stderr);
+        assert!(stderr.contains(message), "{unknown}: {stderr}");
+    }
+}

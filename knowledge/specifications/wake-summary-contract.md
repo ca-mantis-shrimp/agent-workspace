@@ -155,6 +155,10 @@ Rationale:
 - The contract therefore requires one read verb:
   - CLI `reveal <id>`, MCP `workspace_reveal { id }`;
   - accepts any kind-prefixed id and returns that entity's complete record;
+  - claims, observations, and findings reveal their reconciled record, and a
+    transaction its preview. An observation's retained source bytes stay behind
+    `reveal --observation`, because not every capture retains a payload and
+    every record must be revealable (decided during implementation);
   - generalizes today's observation-only CLI `reveal`, which has no MCP
     equivalent.
 - The existing `reveal --observation <n>` form keeps working.

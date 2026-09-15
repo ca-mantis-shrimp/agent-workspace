@@ -180,6 +180,14 @@ pub struct ExplainStaleParams {
     pub claim_id: u64,
 }
 
+/// Input schema for `workspace_reveal`: the one-call path to a whole record.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RevealParams {
+    /// Kind-prefixed entity id as summaries print it: `c15` claim, `o101`
+    /// observation, `f4` finding, `t2` transaction.
+    pub id: String,
+}
+
 #[tool_router]
 impl WorkspaceServer {
     pub fn new(repository: PathBuf) -> Self {
@@ -241,6 +249,16 @@ impl WorkspaceServer {
         Parameters(params): Parameters<ExplainStaleParams>,
     ) -> Result<CallToolResult, McpError> {
         self.tool_result(self.explain(params.claim_id))
+    }
+
+    #[tool(
+        description = "Reveal the complete record behind a kind-prefixed id — c claim, o observation, f finding, t transaction (e.g. c15) — the whole text any bounded summary shortened. Claims and findings are reconciled before they are served. A malformed or unknown id is a strict tool error."
+    )]
+    fn workspace_reveal(
+        &self,
+        Parameters(params): Parameters<RevealParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.tool_result(self.reveal(params.id))
     }
 
     #[tool(
@@ -411,6 +429,10 @@ impl WorkspaceServer {
                 serde_json::to_value(workspace.resume_brief_status()?).map_err(Into::into)
             }
         })
+    }
+
+    fn reveal(&self, id: String) -> Result<String, String> {
+        self.run(move |workspace| workspace.reveal(id.parse()?))
     }
 
     fn delta(&self, full: bool, since: Option<String>) -> Result<String, String> {

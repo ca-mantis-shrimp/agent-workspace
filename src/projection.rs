@@ -505,6 +505,20 @@ pub struct PreviewEvidence {
     pub freshness: FreshnessWithinScope,
 }
 
+/// The complete record behind a kind-prefixed id — what `reveal <id>` serves.
+/// Claims, observations, and findings reveal their full reconciled record; a
+/// transaction its preview. An observation's retained source bytes (when it
+/// kept any) stay behind `reveal --observation`, because not every capture
+/// retains a payload and a record must always be revealable.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", content = "record", rename_all = "snake_case")]
+pub enum Revealed {
+    Claim(Box<Claim>),
+    Observation(Box<Observation>),
+    Finding(Box<Finding>),
+    Transaction(Box<TransactionPreview>),
+}
+
 /// A review-before-accept surface for one transaction: its intent, the locations
 /// it touches, the findings it addresses, the evidence and acceptance claims
 /// bearing on it, the residual risks its author accepted, and whether it is

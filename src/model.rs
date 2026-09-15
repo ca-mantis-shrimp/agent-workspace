@@ -248,6 +248,38 @@ pub struct RevealedFinding {
     pub content: String,
 }
 
+/// A kind-prefixed entity id — `c15` claim, `o101` observation, `f4` finding,
+/// `t2` transaction. One token names one entity, so a bounded summary can
+/// shorten anything and still leave a one-call path back to the whole record
+/// (`reveal <id>`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EntityRef {
+    Claim(u64),
+    Observation(u64),
+    Finding(u64),
+    Transaction(u64),
+}
+
+impl std::str::FromStr for EntityRef {
+    type Err = crate::WorkspaceError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let invalid = || crate::WorkspaceError::InvalidEntityRef(text.to_owned());
+        let (kind, digits) = text.split_at_checked(1).ok_or_else(invalid)?;
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(invalid());
+        }
+        let id = digits.parse().map_err(|_| invalid())?;
+        match kind {
+            "c" => Ok(Self::Claim(id)),
+            "o" => Ok(Self::Observation(id)),
+            "f" => Ok(Self::Finding(id)),
+            "t" => Ok(Self::Transaction(id)),
+            _ => Err(invalid()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaimInputSource {

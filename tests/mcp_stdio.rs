@@ -703,3 +703,45 @@ fn mcp_server_explains_a_stale_claim_over_stdio() {
     assert!(diff.contains("-hello world"), "old line: {diff}");
     assert!(diff.contains("+goodbye world"), "new line: {diff}");
 }
+
+#[test]
+fn mcp_server_reveals_a_kind_prefixed_id_over_stdio() {
+    let repo = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    make_repo(repo.path());
+    let mut server = start(repo.path(), state.path());
+
+    let names = server.handshake();
+    assert!(
+        names.contains(&"workspace_reveal".to_owned()),
+        "reveal not routed; got {names:?}"
+    );
+
+    let statement = "hello.txt greets the world. This sentence is the detail a summary would cut.";
+    let belief = server.call(
+        3,
+        "workspace_record_belief",
+        json!({"statement": statement, "rests_on": ["hello.txt"]}),
+    );
+    let id = format!("c{}", tool_json(&belief)["id"].as_u64().unwrap());
+
+    let revealed = tool_json(&server.call(4, "workspace_reveal", json!({ "id": id })));
+    assert_eq!(revealed["kind"], "claim");
+    assert_eq!(revealed["record"]["statement"], statement);
+    // One kernel policy: the CLI serves the identical record.
+    assert_eq!(
+        run_cli(repo.path(), state.path(), &["reveal", &id]),
+        revealed
+    );
+
+    for (bad, message) in [("q1", "invalid entity id"), ("c999", "claim 999 not found")] {
+        let response = server.call(5, "workspace_reveal", json!({ "id": bad }));
+        assert_eq!(
+            response["result"]["isError"],
+            json!(true),
+            "{bad}: {response}"
+        );
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains(message), "{bad}: {text}");
+    }
+}

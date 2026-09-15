@@ -26,6 +26,14 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
     let Some((command, rest)) = arguments.split_first() else {
         return Err(CliError::Usage(usage()));
     };
+    // `reveal <id>` is the one command with a positional argument: the
+    // kind-prefixed id a bounded summary printed. Flags follow it.
+    let (target, rest) = match rest.split_first() {
+        Some((first, tail)) if command == "reveal" && !first.starts_with("--") => {
+            (Some(first.as_str()), tail)
+        }
+        _ => (None, rest),
+    };
     let options = Options::parse(rest)?;
     let workspace_root = resolve_state_root(
         &options.repository,
@@ -178,14 +186,15 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
                 }
             }
         }
-        "reveal" => {
-            let observation_id = options
-                .observation_ids
-                .first()
-                .copied()
-                .ok_or_else(|| CliError::Usage("reveal requires --observation".to_owned()))?;
-            print_json(&workspace.reveal_observation(observation_id)?)?;
-        }
+        "reveal" => match target {
+            Some(id) => print_json(&workspace.reveal(id.parse()?)?)?,
+            None => {
+                let observation_id = options.observation_ids.first().copied().ok_or_else(|| {
+                    CliError::Usage("reveal requires an id (e.g. c15) or --observation".to_owned())
+                })?;
+                print_json(&workspace.reveal_observation(observation_id)?)?;
+            }
+        },
         "record-finding" => {
             let severity = options
                 .severity

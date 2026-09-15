@@ -49,6 +49,7 @@ pub enum WorkspaceError {
     InvalidTransaction(String),
     InvalidCheckpoint(String),
     CheckpointNotFound(String),
+    InvalidEntityRef(String),
     CorruptLog(String),
 }
 
@@ -88,6 +89,11 @@ impl fmt::Display for WorkspaceError {
             Self::CheckpointNotFound(label) => {
                 write!(formatter, "checkpoint {label:?} not found")
             }
+            Self::InvalidEntityRef(text) => write!(
+                formatter,
+                "invalid entity id {text:?}: expected a kind prefix (c claim, o observation, \
+                 f finding, t transaction) followed by a number, e.g. c15"
+            ),
             Self::CorruptLog(message) => write!(formatter, "corrupt event log: {message}"),
         }
     }
@@ -1315,6 +1321,24 @@ impl Workspace {
             observed_revision: finding.observed_revision.clone(),
             native_payload_fingerprint: fingerprint.to_owned(),
             content,
+        })
+    }
+
+    /// Serve the complete record behind a kind-prefixed id: the one-call
+    /// recovery path that makes shortening honest in bounded summaries. Claims
+    /// and findings are reconciled first, so a revealed verdict is never
+    /// inherited.
+    pub fn reveal(&self, entity: EntityRef) -> Result<Revealed, WorkspaceError> {
+        Ok(match entity {
+            EntityRef::Claim(id) => Revealed::Claim(Box::new(self.reconcile_claim(id)?)),
+            EntityRef::Observation(id) => {
+                Revealed::Observation(Box::new(self.reconcile_observation(id)?))
+            }
+            EntityRef::Finding(id) => Revealed::Finding(Box::new(self.reconcile_finding(id)?)),
+            EntityRef::Transaction(id) => Revealed::Transaction(Box::new(
+                self.resume_transaction_preview(id)?
+                    .ok_or(WorkspaceError::TransactionNotFound(id))?,
+            )),
         })
     }
 
