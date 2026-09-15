@@ -745,3 +745,47 @@ fn mcp_server_reveals_a_kind_prefixed_id_over_stdio() {
         assert!(text.contains(message), "{bad}: {text}");
     }
 }
+
+#[test]
+fn mcp_status_summary_is_the_same_text_as_the_cli() {
+    let repo = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    make_repo(repo.path());
+    let mut server = start(repo.path(), state.path());
+    server.handshake();
+
+    server.call(
+        3,
+        "workspace_set_intent",
+        json!({"thesis": "exercise the wake summary"}),
+    );
+    server.call(
+        4,
+        "workspace_record_belief",
+        json!({"statement": "hello.txt greets the world", "rests_on": ["hello.txt"]}),
+    );
+    server.call(5, "workspace_checkpoint", json!({"label": "wake-baseline"}));
+
+    let response = server.call(6, "workspace_status", json!({"summary": true}));
+    assert_eq!(response["result"]["isError"], json!(false), "{response}");
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("wake · "), "{text}");
+    assert!(text.contains("goal: exercise the wake summary\n"), "{text}");
+
+    let cli = Command::new(env!("CARGO_BIN_EXE_agent-workspace"))
+        .args([
+            "status",
+            "--summary",
+            "--repository",
+            repo.path().to_str().unwrap(),
+        ])
+        .env("XDG_STATE_HOME", state.path())
+        .output()
+        .expect("run agent-workspace CLI");
+    assert!(cli.status.success());
+    assert_eq!(
+        String::from_utf8(cli.stdout).unwrap(),
+        text,
+        "WS7: one renderer"
+    );
+}

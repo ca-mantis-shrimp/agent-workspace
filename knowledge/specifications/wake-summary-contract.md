@@ -63,14 +63,14 @@ except the header.
 
 | Section | Content |
 | --- | --- |
-| **header** | `workspace wake · stale outranks memory · whole text: workspace_reveal <id>` |
-| **goal** | intent |
-| **stopped at** | latest checkpoint label, then its note |
+| **header** | `wake · stale outranks memory · reveal ids: workspace_reveal` |
+| **goal** | `goal: <intent>` |
+| **stopped at** | `stopped at <label>: <note>` |
 | **governs** | active applicable knowledge bindings ([knowledge pulse contract](knowledge-pulse-contract.md) §1.3) |
-| **new since `<label>`** | changes since the checkpoint, one line per entity |
-| **needs you** | open findings and open transactions |
-| **beliefs** | `N active · s stale (<ids>)` |
-| **more** | present only if anything was shortened or omitted; says how many and how to get them |
+| **since then** | `since then: <n> reads captured · goal changed`, then one line per changed entity |
+| **open** | one `open <id>` line per open finding, then per open transaction |
+| **claims** | `claims: N active, s stale: <ids>` |
+| **more** | `more: <n> shortened · full: workspace_status\|workspace_delta full=true`, present only if anything was shortened |
 
 **Ids** are kind-prefixed so one token names one entity and one reveal call
 fetches it: `c` claim, `k` binding, `f` finding, `t` transaction, `o`
@@ -83,11 +83,11 @@ checkpoint is one line marked `!+`. Markers are:
 | --- | --- |
 | `+` | recorded |
 | `!` | newly stale, or a binding's source changed or became unavailable |
-| `-` | superseded or retired |
-| `~` | intent changed |
-| `t+` / `t-` | transaction opened / closed |
+| `-` | superseded or retired claim, or closed transaction (id only) |
 
-Observations appear only as a count (`13 reads captured`).
+Observations appear only as a count (`13 reads captured`). A goal change is
+`goal changed` on the since line. Open transactions appear under **open**, so
+there is no separate "opened" news marker.
 
 **Claims appear only as news or as stale ids.** There is no window of old claim
 headlines. Aged beliefs are re-verified when used (`explain_stale`), not at
@@ -104,8 +104,9 @@ Every item has two forms:
 
 | Item | Cap |
 | --- | --- |
-| goal | 200 B |
-| checkpoint note | 100 B excerpt in skeleton; 240 B full |
+| goal | 200 B, cut by bytes rather than to the first sentence |
+| checkpoint label | 32 B |
+| checkpoint note | 100 B first-sentence excerpt in skeleton; 240 B by bytes in full |
 | binding | 100 B headline + 100 B reference display |
 | news, finding, transaction | 100 B |
 
@@ -119,9 +120,10 @@ Fill is deterministic for a given log and worktree:
    - every other non-empty section in short form;
    - the `more` line.
 
-   Each id list is capped at 8 ids, newest first, plus `+k`. The skeleton's
+   Each id list is capped at 6 ids, newest first, plus `+k`. The skeleton's
    worst case must stay at or below 750 B, so at least one full-form item
-   always fits (asserted by test, WS2).
+   always fits (asserted by test, WS2, with ids below 100,000; beyond that a
+   hard clip still keeps the output within 1000 B).
 2. **Upgrade.** Walk the candidates in priority order. Upgrade an item to its
    full form only if the whole output stays at or below 1000 B. Otherwise leave
    it short and continue, since a later, smaller item may still fit.
@@ -135,8 +137,22 @@ Fill is deterministic for a given log and worktree:
 3. the full checkpoint note (up to 240 B, replacing the skeleton excerpt);
 4. other applicable bindings, in the knowledge pulse ranking order;
 5. open findings, then open transactions;
-6. claims recorded since the checkpoint, newest first;
-7. superseded or retired entities since the checkpoint.
+6. claims recorded since the checkpoint, newest first.
+
+Superseded or retired claims and closed transactions are **never upgraded**.
+They appear by id only, because their text is exactly what is no longer
+believed.
+
+**Revisions made during implementation (2026-09-15):**
+
+- **Id lists cap at 6, not 8.** With 8, the measured worst-case skeleton was
+  about 794 B.
+- **Line formats compacted** to the forms in §2.
+- **Goal and full note are cut by bytes.** The goal is the most important line,
+  so it keeps as much text as fits rather than only its first sentence.
+- **Ended entities show ids only.** The live `plot` wake rendered
+  `- c17 The legend palette supports 12 distinct series colors…`, the full text
+  of a claim superseded because it was false, and it read as fact.
 
 Rationale:
 
@@ -230,23 +246,19 @@ ids plus `+k`.
 **WS9 — determinism.** Two renders over the same log and worktree are
 byte-identical.
 
-## 8. Illustrative rendering (not normative)
+## 8. Live rendering (not normative)
 
-This is the busy `plot` state that measured 1283 B as a naive rendering,
-reshaped by §2–§3 (measured: 844 B):
+The installed kernel's wake for the live `plot` workspace on 2026-09-15,
+measured at 676 B. There are no bindings yet, so there is no governs section:
 
 ```text
-workspace wake · stale outranks memory · whole text: workspace_reveal <id>
-goal: Milestone 6 (categorical x / band scale for every mark) is complete, validated, and committed as e2929a2.
-stopped at ten-category-color-investigation-2026-09-14: Report confirmed: 10 color categories fail (cap 8, exit 2)…
-governs: k1 [current] Curated knowledge lives in OKF; workspace holds situated state → ../agent-workspace:knowledge/decisions/okf-curated-knowledge-layer.md
-new since plot-milestone-6-all-marks-committed · 13 reads captured
-!+ c15 The producer slice exposes `plot::legend::fit_labels(labels, max_width)`…
-!+ c18 Legend labels are bounded in the renderer…
-!+ c19 Series that share a label already render as separate legend entries…
-+ c23 c22
-beliefs: 11 active · 3 stale (c15 c18 c19)
-more: 2 shortened — workspace_reveal c23
+wake · stale outranks memory · reveal ids: workspace_reveal
+goal: Milestone 6 (categorical x / band scale for every mark) is complete, validated, and committed as e2929a2. The README milestone list (1-6) is fully done; the working tree is clean apart from the…
+stopped at ten-category-color-investigat…: Report confirmed: 10 color categories fail (cap 8, exit 2). Claim 21 (12-category support) was false and is superseded by 22. Claim 23: the cap is a deliberate design rule backed by an 8-hue validated palette; a trial 10-hue extension…
+since then:
+- c17
+claims: 11 active, 3 stale: c19 c18 c15
+more: 3 shortened · full: workspace_status|workspace_delta full=true
 ```
 
 ## 9. Out of scope

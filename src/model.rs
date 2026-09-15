@@ -252,12 +252,34 @@ pub struct RevealedFinding {
 /// `t2` transaction. One token names one entity, so a bounded summary can
 /// shorten anything and still leave a one-call path back to the whole record
 /// (`reveal <id>`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum EntityRef {
     Claim(u64),
     Observation(u64),
     Finding(u64),
     Transaction(u64),
+}
+
+impl EntityRef {
+    pub fn id(self) -> u64 {
+        match self {
+            Self::Claim(id) | Self::Observation(id) | Self::Finding(id) | Self::Transaction(id) => {
+                id
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for EntityRef {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let prefix = match self {
+            Self::Claim(_) => 'c',
+            Self::Observation(_) => 'o',
+            Self::Finding(_) => 'f',
+            Self::Transaction(_) => 't',
+        };
+        write!(formatter, "{prefix}{}", self.id())
+    }
 }
 
 impl std::str::FromStr for EntityRef {
@@ -443,6 +465,11 @@ pub struct ClaimBrief {
 }
 
 impl Claim {
+    /// Whether the claim's served verdict (for this handle's worktree) is stale.
+    pub(crate) fn is_stale(&self) -> bool {
+        self.report.freshness_within_scope == FreshnessWithinScope::Stale
+    }
+
     /// Project the claim onto its compact lifecycle receipt (see [`ClaimBrief`]).
     pub fn brief(&self) -> ClaimBrief {
         ClaimBrief {

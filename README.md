@@ -125,8 +125,11 @@ replaces a native tool:
 
 - **Sense** — a `PostToolUse(Read)` hook forwards each read window to the
   kernel's harness-agnostic `observe-read`.
-- **Proprioception** — a `SessionStart` hook pushes the bounded `status` and
-  `delta` into the model's opening context, so a cold session wakes oriented.
+- **Proprioception** — a `SessionStart` hook prints the kernel's wake summary
+  (`status --summary`: plain text of at most 1000 bytes — goal, last stop, news
+  since the checkpoint, open work, claims) verbatim into the model's opening
+  context, so a cold session wakes oriented. Any shortened id is one
+  `workspace_reveal` away.
 - **Write** — an MCP server (`agent-workspace mcp`) exposes the write loop over a
   harness-agnostic stdio server: `workspace_record_belief` (fused observe+claim),
   `workspace_bind_objective`, `workspace_supersede_claim`, `workspace_retire_claim`

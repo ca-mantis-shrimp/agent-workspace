@@ -6518,3 +6518,130 @@ fn reveal_round_trips_every_kind_prefixed_id() {
         assert!(stderr.contains(message), "{unknown}: {stderr}");
     }
 }
+
+/// Wake summary contract, end to end over the CLI: quiet when empty; afterwards
+/// a bounded text wake anchored on the goal and the last stop, with news since
+/// the checkpoint (a newly stale belief and a new one), open work, and the
+/// claims line — deterministic across renders.
+#[test]
+fn status_summary_is_a_bounded_text_wake() {
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap();
+    let ws = workspace.to_str().unwrap();
+    let summary = || {
+        let output = invoke(&[
+            "status",
+            "--summary",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+        ]);
+        String::from_utf8(output.stdout).unwrap()
+    };
+    assert_eq!(summary(), "", "an empty workspace must stay quiet");
+
+    invoke(&[
+        "set-intent",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--intent",
+        "Make foo return two. Then document it.",
+    ]);
+    let belief = |statement: &str, path: &str| -> u64 {
+        let output = invoke(&[
+            "record-belief",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--statement",
+            statement,
+            "--rests-on",
+            path,
+        ]);
+        let belief: Value = serde_json::from_slice(&output.stdout).unwrap();
+        belief["claim"]["id"].as_u64().unwrap()
+    };
+    let stale_id = belief("foo returns one", "src/lib.rs");
+    invoke(&[
+        "checkpoint",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--label",
+        "before-edit",
+        "--note",
+        "Recorded that foo returns one. Next: change it.",
+    ]);
+    fs::write(
+        fixture.repository.join("src/lib.rs"),
+        "pub fn foo() -> i32 { 2 }\n",
+    )
+    .unwrap();
+    let new_id = belief("helper returns one", "src/helper.rs");
+    let finding = invoke_with_stdin(
+        &[
+            "record-finding",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+            "--severity",
+            "warning",
+            "--message",
+            "foo lacks a doc comment",
+            "--path",
+            "src/lib.rs",
+        ],
+        "",
+    );
+    let finding: Value = serde_json::from_slice(&finding.stdout).unwrap();
+
+    let text = summary();
+    assert!(text.len() <= 1000, "{} bytes:\n{text}", text.len());
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(lines[0].starts_with("wake · "), "{text}");
+    assert_eq!(lines[1], "goal: Make foo return two. Then document it.");
+    assert_eq!(
+        lines[2],
+        "stopped at before-edit: Recorded that foo returns one. Next: change it."
+    );
+    assert!(lines[3].starts_with("since then:"), "{text}");
+    assert!(
+        text.contains(&format!("\n! c{stale_id} foo returns one\n")),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("\n+ c{new_id} helper returns one\n")),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "\nopen f{} foo lacks a doc comment\n",
+            finding["id"]
+        )),
+        "{text}"
+    );
+    assert!(
+        text.ends_with(&format!("claims: 2 active, 1 stale: c{stale_id}\n")),
+        "{text}"
+    );
+    assert_eq!(summary(), text, "WS9: rendering is deterministic");
+
+    let failed = invoke_failure(&[
+        "status",
+        "--summary",
+        "--since",
+        "no-such-label",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+    ]);
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("no-such-label"));
+}

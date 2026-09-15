@@ -46,6 +46,7 @@ function fakeHarness(root: string, gitSucceeds = true): FakeHarness {
 const TOOL_NAMES = [
 	"workspace_status",
 	"workspace_delta",
+	"workspace_reveal",
 	"workspace_working_set",
 	"workspace_findings",
 	"workspace_transaction_preview",

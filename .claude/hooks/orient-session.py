@@ -5,19 +5,18 @@ A note to the next sibling who reads this:
 
 Organ 1 (`capture-read.py`) is the ambient *sense*: it notices what the model
 reads and tells the kernel. This is the *proprioception*: on a cold wake it
-turns around and tells the *model* where it already stands — the bound
-objective, the standing claims and their freshness, what changed since the last
-checkpoint. Without it the adapter is a well you pour observations into and
-never hear back from; a fresh session boots blind and rebuilds its working set
-from memory alone, which is the exact fragility this workspace exists to end.
+turns around and tells the *model* where it already stands — the goal, where
+the last session stopped, what changed since that checkpoint, open work, and
+which claims went stale. Without it the adapter is a well you pour
+observations into and never hear back from; a fresh session boots blind and
+rebuilds its working set from memory alone, which is the exact fragility this
+workspace exists to end.
 
 Like organ 1, this is a *thin transport*. It owns no orientation semantics. It
-shells the kernel's bounded default `status` and checkpoint `delta` projections
-with compact JSON transport and forwards them verbatim. Every decision about
-freshness, claim prioritization/cardinality, headline limits, and delta id
-windows lives in the kernel. Claude bounds the inline preview of command-hook
-stdout, so status comes first and is kernel-bounded to fit that preview; the
-small delta follows and remains revealable if Claude saves the combined output.
+prints the kernel's wake summary (`status --summary`) verbatim: plain text of
+at most 1000 bytes whose content, priority, budget, and quietness all live in
+the kernel (see knowledge/specifications/wake-summary-contract.md). It adds no
+framing, because every byte it added would be outside that budget.
 
 Commitments, in order of importance:
 
@@ -27,9 +26,9 @@ Commitments, in order of importance:
      real harm.
 
   2. It stays quiet when there is nothing to say. No Git checkout, no built
-     kernel, or a genuinely empty workspace (no objective, no claims, no
-     checkpoint) — emit nothing. Orientation is a signal; boilerplate injected
-     into every unrelated session is noise, and noise erodes the signal.
+     kernel, or a workspace the kernel renders as empty — emit nothing.
+     Orientation is a signal; boilerplate injected into every unrelated session
+     is noise, and noise erodes the signal.
 
 SessionStart delivers plain-text stdout to the model as context it can see and
 act on (verified against the hooks contract), so we simply print. It fires on
@@ -44,20 +43,14 @@ import sys
 
 from workspace_runtime import runtime_for
 
-FRAMING = (
-    "=== agent-workspace orientation (claude-code adapter) ===\n"
-    "Kernel-bounded projection. 'stale' outranks memory: re-verify before acting.\n"
-)
 
-
-def kernel_json(binary: str, root: str, command: list):
-    """Run a read-only kernel command and return its stdout, or None if the
-    invocation fails (e.g. `delta` with no checkpoint yet).
+def kernel_summary(binary: str, root: str):
+    """The kernel's wake summary text, or None if the invocation fails.
 
     No `--workspace`: the kernel resolves the project-scoped state root from
     `--repository` alone, so orientation reads wherever state actually lives."""
     result = subprocess.run(
-        [binary, *command, "--repository", root],
+        [binary, "status", "--summary", "--repository", root],
         capture_output=True,
         text=True,
         timeout=10,
@@ -65,22 +58,6 @@ def kernel_json(binary: str, root: str, command: list):
     if result.returncode != 0:
         return None
     return result.stdout
-
-
-def parse_status(status_json: str):
-    try:
-        return json.loads(status_json)
-    except Exception:
-        return None
-
-
-def is_empty(status) -> bool:
-    """True when the workspace holds nothing worth orienting to."""
-    return status is not None and (
-        status.get("objective") is None
-        and not status.get("claims")
-        and status.get("latest_checkpoint") is None
-    )
 
 
 def read_event():
@@ -100,30 +77,9 @@ def main() -> None:
         return
     root, binary = runtime
 
-    status = kernel_json(binary, root, ["status", "--compact"])
-    if status is None:
-        return
-    parsed_status = parse_status(status)
-    if is_empty(parsed_status):
-        return
-
-    sections = [
-        FRAMING,
-        "# status (verbatim bounded kernel JSON)",
-        status.rstrip("\n"),
-    ]
-
-    # Delta is best-effort: a workspace with no checkpoint yet still deserves its
-    # status, so a missing/failed delta narrows the orientation, never suppresses
-    # it.
-    delta = kernel_json(binary, root, ["delta", "--compact"])
-    if delta is not None:
-        sections += [
-            "# delta since last checkpoint (verbatim bounded kernel JSON)",
-            delta.rstrip("\n"),
-        ]
-
-    print("\n\n".join(sections))
+    summary = kernel_summary(binary, root)
+    if summary:
+        sys.stdout.write(summary)
 
 
 if __name__ == "__main__":

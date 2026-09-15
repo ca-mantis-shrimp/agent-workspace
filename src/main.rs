@@ -102,7 +102,9 @@ fn run(arguments: Vec<String>) -> Result<(), CliError> {
             )?;
         }
         "status" => {
-            if options.full {
+            if options.summary {
+                print!("{}", workspace.resume_summary(options.since.as_deref())?);
+            } else if options.full {
                 print_selected_json(&workspace.resume_status()?, options.compact)?;
             } else {
                 print_selected_json(&workspace.resume_brief_status()?, options.compact)?;
@@ -485,6 +487,7 @@ struct Options {
     note: Option<String>,
     since: Option<String>,
     full: bool,
+    summary: bool,
     compact: bool,
     offset: Option<usize>,
     limit: Option<usize>,
@@ -530,6 +533,7 @@ impl Options {
         let mut note = None;
         let mut since = None;
         let mut full = false;
+        let mut summary = false;
         let mut compact = false;
         let mut offset = None;
         let mut limit = None;
@@ -552,6 +556,11 @@ impl Options {
             }
             if flag == "--compact" {
                 compact = true;
+                index += 1;
+                continue;
+            }
+            if flag == "--summary" {
+                summary = true;
                 index += 1;
                 continue;
             }
@@ -724,6 +733,7 @@ impl Options {
             note,
             since,
             full,
+            summary,
             compact,
             offset,
             limit,

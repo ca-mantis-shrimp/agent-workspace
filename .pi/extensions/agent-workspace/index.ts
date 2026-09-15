@@ -51,9 +51,10 @@ const TOOL_METADATA = {
 	workspace_status: {
 		label: "Workspace Status",
 		promptSnippet:
-			"Workspace orientation: intent, claim freshness, checkpoints.",
+			"Workspace wake (summary:true): goal, last stop, news, open work, claims.",
 		promptGuidelines: [
-			"Call workspace_status when resuming work or before acting on a workspace claim: a stale claim outranks your remembered belief.",
+			"When resuming, call workspace_status with summary:true once: at most 1000 bytes; reveal any shortened id with workspace_reveal.",
+			"A stale claim outranks your remembered belief.",
 		],
 	},
 	workspace_delta: {
@@ -61,7 +62,14 @@ const TOOL_METADATA = {
 		promptSnippet:
 			"Workspace resume surface: changes since the last checkpoint.",
 		promptGuidelines: [
-			"Call workspace_delta right after workspace_status when resuming.",
+			"Call workspace_delta when you need complete changes since a checkpoint beyond the wake summary.",
+		],
+	},
+	workspace_reveal: {
+		label: "Workspace Reveal",
+		promptSnippet: "The whole record behind a kind-prefixed id (c15, f4, t2).",
+		promptGuidelines: [
+			"Reveal an id the wake summary shortened instead of re-deriving it from files.",
 		],
 	},
 	workspace_working_set: {

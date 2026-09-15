@@ -146,13 +146,20 @@ pub struct ObserveReadParams {
     pub truncated: bool,
 }
 
-/// Input schema shared by projections that offer a bounded default and a full
-/// audit expansion.
+/// Input schema for `workspace_status`.
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct FullParams {
+pub struct StatusParams {
+    /// Return the wake summary instead of JSON: plain text of at most 1000
+    /// bytes (goal, last stop, news since the checkpoint, open work, claims).
+    /// Takes precedence over `full`.
+    #[serde(default)]
+    pub summary: bool,
     /// Return the complete audit projection instead of the bounded default.
     #[serde(default)]
     pub full: bool,
+    /// With `summary`, report news since this checkpoint label instead of the
+    /// latest checkpoint.
+    pub since: Option<String>,
 }
 
 /// Input schema for `workspace_delta`.
@@ -198,13 +205,13 @@ impl WorkspaceServer {
     }
 
     #[tool(
-        description = "Orient in the persistent agent workspace: intent, a kernel-bounded stale-first claim window with explicit omission count, aggregate freshness, open transactions, and latest checkpoint. `full` returns the complete audit record. A stale claim outranks your remembered belief."
+        description = "Orient in the persistent agent workspace. When resuming, pass summary:true for the wake: plain text of at most 1000 bytes — goal, where the last session stopped, news since the checkpoint (`since` selects a label), open work, and stale claims — with every shortened id revealable via workspace_reveal. Without it: JSON with intent, a kernel-bounded stale-first claim window with explicit omission count, aggregate freshness, open transactions, and latest checkpoint; `full` returns the complete audit record. A stale claim outranks your remembered belief."
     )]
     fn workspace_status(
         &self,
-        Parameters(params): Parameters<FullParams>,
+        Parameters(params): Parameters<StatusParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.tool_result(self.status(params.full))
+        self.tool_result(self.status(params))
     }
 
     #[tool(
@@ -386,14 +393,26 @@ impl WorkspaceServer {
         })
     }
 
-    /// The in-process `open -> lock -> op` path, mirroring CLI dispatch. Runs
-    /// `op` under the per-call exclusive lock and returns the kernel's JSON on
-    /// success, or its (strict, input-naming) error text. Every tool below is a
-    /// thin closure over this, so an MCP call and a CLI call stay identical.
+    /// The in-process `open -> lock -> op` path for JSON results: [`Self::run_text`]
+    /// with the kernel value pretty-printed. Every JSON tool is a thin closure
+    /// over this, so an MCP call and a CLI call stay identical.
     fn run<T, F>(&self, op: F) -> Result<String, String>
     where
         F: FnOnce(&Workspace) -> Result<T, agent_workspace::WorkspaceError>,
         T: serde::Serialize,
+    {
+        self.run_text(|workspace| {
+            let value = op(workspace)?;
+            serde_json::to_string_pretty(&value).map_err(Into::into)
+        })
+    }
+
+    /// The in-process `open -> lock -> op` path, mirroring CLI dispatch. Runs
+    /// `op` under the per-call exclusive lock and returns its text on success,
+    /// or the kernel's (strict, input-naming) error text.
+    fn run_text<F>(&self, op: F) -> Result<String, String>
+    where
+        F: FnOnce(&Workspace) -> Result<String, agent_workspace::WorkspaceError>,
     {
         // Fail with proprioception, not a bare os error. When the client starts
         // the server with a `--repository` that never resolved (e.g. an
@@ -417,13 +436,16 @@ impl WorkspaceServer {
         let _lock = workspace
             .lock_exclusive()
             .map_err(|error| error.to_string())?;
-        let value = op(&workspace).map_err(|error| error.to_string())?;
-        serde_json::to_string_pretty(&value).map_err(|error| error.to_string())
+        op(&workspace).map_err(|error| error.to_string())
     }
 
-    fn status(&self, full: bool) -> Result<String, String> {
+    fn status(&self, params: StatusParams) -> Result<String, String> {
+        if params.summary {
+            return self
+                .run_text(move |workspace| workspace.resume_summary(params.since.as_deref()));
+        }
         self.run(move |workspace| {
-            if full {
+            if params.full {
                 serde_json::to_value(workspace.resume_status()?).map_err(Into::into)
             } else {
                 serde_json::to_value(workspace.resume_brief_status()?).map_err(Into::into)

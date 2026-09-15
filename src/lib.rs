@@ -10,12 +10,14 @@ mod model;
 mod normalizer_config;
 mod projection;
 mod reconcile;
+mod summary;
 pub use locate::resolve_state_root;
 pub use model::*;
 pub use projection::*;
 use projection::{BRIEF_INTENT_MAX_CHARS, WORKING_SET_UNCITED_CANDIDATE_LIMIT, claim_headline};
 use reconcile::*;
 pub use reconcile::{DriftStatus, DriftView, InputDrift, RelocationProbe, StaleExplanation};
+use summary::{Marker, WakeCheckpoint, WakeInput, WakeItem};
 
 const EVENT_SCHEMA_VERSION: u32 = 2;
 const MINIMUM_EVENT_SCHEMA_VERSION: u32 = 1;
@@ -460,6 +462,138 @@ impl Workspace {
         }
         let projection = self.apply_reconciliations(projection, pending)?;
         Ok(Self::status_from_projection(projection).brief())
+    }
+
+    /// Render the wake summary (wake summary contract): kernel-owned plain text
+    /// of at most 1000 bytes, served in one call in place of the
+    /// status-then-delta pair. Reconciles only active claims — the only
+    /// verdicts it serves — and diffs against a pure replay to the checkpoint,
+    /// exactly as `delta` does.
+    pub fn resume_summary(&self, since: Option<&str>) -> Result<String, WorkspaceError> {
+        let current = self.project()?;
+        let mut pending = Vec::new();
+        for claim in current
+            .claims
+            .values()
+            .filter(|claim| claim.lifecycle.is_active())
+        {
+            pending.extend(self.claim_reconcile_event(claim)?);
+        }
+        let current = self.apply_reconciliations(current, pending)?;
+        let marker = match since {
+            Some(label) => Some(
+                current
+                    .checkpoints
+                    .iter()
+                    .find(|marker| marker.label == label)
+                    .cloned()
+                    .ok_or_else(|| WorkspaceError::CheckpointNotFound(label.to_owned()))?,
+            ),
+            None => current.checkpoints.last().cloned(),
+        };
+        let checkpoint = match marker {
+            Some(marker) => Some(self.wake_checkpoint(&current, marker)?),
+            None => None,
+        };
+        let active: Vec<&Claim> = current
+            .claims
+            .values()
+            .filter(|claim| claim.lifecycle.is_active())
+            .collect();
+        let findings = current
+            .findings
+            .values()
+            .filter(|finding| finding.disposition.is_open())
+            .map(|finding| WakeItem {
+                marker: Marker::Open,
+                entity: EntityRef::Finding(finding.id),
+                text: finding.message.clone(),
+            });
+        let transactions = current
+            .transactions
+            .values()
+            .filter(|transaction| transaction.state == TransactionState::Open)
+            .map(|transaction| WakeItem {
+                marker: Marker::Open,
+                entity: EntityRef::Transaction(transaction.id),
+                text: transaction.intent.clone().unwrap_or_default(),
+            });
+        Ok(summary::render(&WakeInput {
+            goal: current.intent.as_ref().map(|intent| intent.thesis.clone()),
+            active_claims: active.len(),
+            stale_claim_ids: active
+                .iter()
+                .filter(|claim| claim.is_stale())
+                .map(|claim| claim.id)
+                .collect(),
+            open: findings.chain(transactions).collect(),
+            checkpoint,
+        }))
+    }
+
+    /// What the wake reports about one checkpoint: its label and note plus the
+    /// news since it, derived by diffing the reconciled `current` projection
+    /// against a pure replay up to the checkpoint.
+    fn wake_checkpoint(
+        &self,
+        current: &Projection,
+        marker: CheckpointMarker,
+    ) -> Result<WakeCheckpoint, WorkspaceError> {
+        let baseline = self.project_upto(Some(marker.sequence))?;
+        let mut news = Vec::new();
+        for claim in current.claims.values() {
+            let before = baseline.claims.get(&claim.id);
+            let news_marker = if claim.lifecycle.is_active() {
+                match before {
+                    None if claim.is_stale() => Some(Marker::StaleRecorded),
+                    None => Some(Marker::Recorded),
+                    Some(before)
+                        if before.lifecycle.is_active()
+                            && before.report.freshness_within_scope
+                                == FreshnessWithinScope::Current
+                            && claim.is_stale() =>
+                    {
+                        Some(Marker::Stale)
+                    }
+                    Some(_) => None,
+                }
+            } else {
+                before
+                    .filter(|before| before.lifecycle.is_active())
+                    .map(|_| Marker::Ended)
+            };
+            if let Some(news_marker) = news_marker {
+                news.push(WakeItem {
+                    marker: news_marker,
+                    entity: EntityRef::Claim(claim.id),
+                    text: claim.statement.clone(),
+                });
+            }
+        }
+        for transaction in current.transactions.values() {
+            let was_open = baseline
+                .transactions
+                .get(&transaction.id)
+                .is_none_or(|before| before.state == TransactionState::Open);
+            if transaction.state != TransactionState::Open && was_open {
+                news.push(WakeItem {
+                    marker: Marker::Ended,
+                    entity: EntityRef::Transaction(transaction.id),
+                    text: transaction.intent.clone().unwrap_or_default(),
+                });
+            }
+        }
+        Ok(WakeCheckpoint {
+            reads_captured: current
+                .observations
+                .keys()
+                .filter(|id| !baseline.observations.contains_key(id))
+                .count(),
+            goal_changed: baseline.intent != current.intent,
+            label: marker.label,
+            note: marker.note,
+            news,
+        })
     }
 
     /// Reconcile focused observations plus a bounded recent uncited-candidate

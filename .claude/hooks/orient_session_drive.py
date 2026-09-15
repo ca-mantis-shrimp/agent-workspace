@@ -5,9 +5,9 @@ Invokes `orient-session.py` exactly as Claude Code does — a JSON event on stdi
 and asserts its two commitments and its happy path against the *real* built
 kernel binary. Run from the repository root:  python3 this_file.py
 
-The kernel's own Rust suite owns status/delta semantics; this drive owns the
+The kernel's own Rust suite owns wake summary semantics; this drive owns the
 adapter boundary: never harm (always exit 0), stay quiet when there is nothing
-to say, and forward kernel output verbatim when there is.
+to say, and forward the kernel's summary verbatim when there is.
 """
 
 import json
@@ -24,12 +24,15 @@ BINARY = os.path.join(REPO, "target", "debug", "agent-workspace")
 
 def drive(payload, stdin_override=None):
     stdin = json.dumps(payload) if stdin_override is None else stdin_override
+    # Pin the binary under test: the hook otherwise prefers `agent-workspace` on
+    # PATH, which may be an older install than the build this drive verifies.
     proc = subprocess.run(
         ["python3", HOOK],
         input=stdin,
         capture_output=True,
         text=True,
         timeout=20,
+        env={**os.environ, "AGENT_WORKSPACE_BIN": BINARY},
     )
     return proc.returncode, proc.stdout
 
@@ -38,13 +41,6 @@ def expect(name, condition):
     mark = "ok  " if condition else "FAIL"
     print(f"  [{mark}] {name}")
     return condition
-
-
-def load_json(text):
-    try:
-        return json.loads(text)
-    except Exception:
-        return {}
 
 
 def make_dir(path):
@@ -62,74 +58,28 @@ def main() -> int:
 
     passed = True
 
-    # Happy path: inside this repo, orientation projects the bound objective and
-    # both kernel sections, and never fails the session.
+    # Happy path: inside this repo, orientation is the kernel's wake summary,
+    # byte for byte, and never fails the session.
     code, out = drive(
         {"hook_event_name": "SessionStart", "source": "startup", "cwd": REPO}
     )
     passed &= expect("happy: exit 0", code == 0)
-    passed &= expect(
-        "happy: framing header present", "orientation (claude-code adapter)" in out
-    )
-    status_heading = "# status (verbatim bounded kernel JSON)\n\n"
-    delta_heading = (
-        "\n\n# delta since last checkpoint (verbatim bounded kernel JSON)\n\n"
-    )
-    passed &= expect("happy: status section present", status_heading in out)
-    passed &= expect("happy: delta section present", delta_heading in out)
-
-    status_start = out.index(status_heading) + len(status_heading)
-    status_end = out.index(delta_heading)
-    projected_status = out[status_start:status_end]
     # Recompute the reference with the SAME resolution the hook uses (no
     # `--workspace`): the kernel locates the project-scoped state root from
     # `--repository` alone, so both this reference and the hook read the same
-    # place. A pinned in-repo path would compare against a different workspace.
-    kernel_status = subprocess.run(
-        [
-            BINARY,
-            "status",
-            "--compact",
-            "--repository",
-            REPO,
-        ],
+    # place.
+    kernel_summary = subprocess.run(
+        [BINARY, "status", "--summary", "--repository", REPO],
         capture_output=True,
         text=True,
         check=True,
         timeout=20,
-    ).stdout.rstrip("\n")
+    ).stdout
     passed &= expect(
-        "happy: forwards bounded kernel status verbatim",
-        projected_status == kernel_status,
+        "happy: forwards the kernel wake summary verbatim", out == kernel_summary
     )
-    parsed_status = load_json(projected_status)
-    passed &= expect(
-        "happy: status carries objective", parsed_status.get("objective") is not None
-    )
-    passed &= expect("happy: essential status fits inline preview", status_end < 1_800)
-
-    delta_start = status_end + len(delta_heading)
-    projected_delta = out[delta_start:].rstrip("\n")
-    kernel_delta = subprocess.run(
-        [
-            BINARY,
-            "delta",
-            "--compact",
-            "--repository",
-            REPO,
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=20,
-    ).stdout.rstrip("\n")
-    passed &= expect(
-        "happy: forwards bounded kernel delta verbatim",
-        projected_delta == kernel_delta,
-    )
-    passed &= expect(
-        "happy: combined wake output stays below 3000 bytes", len(out) < 3_000
-    )
+    passed &= expect("happy: wake header present", out.startswith("wake · "))
+    passed &= expect("happy: wake fits 1000 bytes", len(out.encode()) <= 1_000)
 
     # No Git checkout: quiet and harmless.
     with tempfile.TemporaryDirectory() as plain:
@@ -139,8 +89,8 @@ def main() -> int:
         passed &= expect("no-git: exit 0", code == 0)
         passed &= expect("no-git: emits nothing", out == "")
 
-    # Git checkout with a built binary but an empty workspace: quiet (no
-    # objective, no claims, no checkpoint is nothing to orient to).
+    # Git checkout with a built binary but an empty workspace: the kernel
+    # renders nothing, so the hook emits nothing.
     with tempfile.TemporaryDirectory() as fresh:
         subprocess.run(["git", "-C", fresh, "init", "-q"], check=True)
         passed &= expect(
