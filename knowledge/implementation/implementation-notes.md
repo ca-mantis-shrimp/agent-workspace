@@ -1546,3 +1546,50 @@ own decision concept for the rationale.
 - [Dogfooding the workspace on a cold resume](../evaluations/dogfood-cold-resume.md): Implementation history records the executable consequences and follow-up evidence for this concept.
 - [First foreign dogfood of the semantic write API](../evaluations/plot-foreign-dogfood.md): Implementation history records the executable consequences and follow-up evidence for this concept.
 - [Claims gain a retirement disposition: retire without a replacement](../decisions/claim-retirement-disposition.md): Implementation history records the executable consequences of the claim-retirement disposition.
+
+## 2026-09-15 — Knowledge continuity kernel (knowledge-pulse-kernel slices 1–5)
+
+The [wake summary](../specifications/wake-summary-contract.md) and
+[knowledge pulse](../specifications/knowledge-pulse-contract.md) contracts
+were implemented in five slices. These choices were settled by running code;
+each is also recorded where it changed a contract.
+
+- **Reveal by id** (`0facceb`). Kind-prefixed ids (`c`/`o`/`f`/`t`/`k`) parse
+  once in the kernel.
+  - Claims, observations, findings and bindings reveal their reconciled record;
+    a transaction reveals its preview.
+  - Observations reveal the record rather than retained bytes, because plain
+    captures keep no payload and every id must be revealable.
+- **Text wake** (`63c0e2d`).
+  - `src/summary.rs` is a pure renderer over plain `WakeInput` data, so the
+    worst cases are unit-testable without a repository.
+  - Fill is greedy: a skeleton of short forms, then upgrades in priority order
+    while the output stays within 1000 bytes, with a hard clip as the backstop.
+  - The Claude hook prints the kernel text verbatim, and its drive pins the
+    binary under test. An older `PATH` install silently printed nothing,
+    because it rejected `--summary`.
+  - Ended entities render by id only. The live `plot` wake had shown a
+    superseded false claim as a sentence.
+- **Knowledge bindings** (`a47a363`).
+  - Source assessments are events appended only on change, served only in their
+    worktree, and diffed by replay (the same pattern as claims).
+  - Repository identity is the root commit(s). A path identity missed an
+    unrelated repository at the same locator.
+  - The working set does not confer applicability: `record_belief` focuses every
+    cited file and entries never leave, so path scope decayed into repository
+    scope in a KP6 reproduction.
+- **Governs in the wake** (`28dda4a`).
+  - The wake reuses `applicable_knowledge()`, so ranking is defined once.
+  - The governs line pushed the worst-case skeleton to 781 B. Id lists went from
+    6 to 5, and the header and `more:` wording were trimmed, keeping the 750 B
+    bound instead of loosening it.
+- **Field smoke** (slice 5).
+  - The installed kernel bound `plot`'s governing decision across repositories
+    (`../agent-workspace:knowledge/decisions/okf-curated-knowledge-layer.md`, pinned at
+    `28dda4a`).
+  - `plot`'s wake went from 676 B to 837 B with one pointer line.
+  - MCP and CLI summaries were byte-identical, and the Claude hook through the
+    `PATH` install printed the governs line.
+- **Not yet shown.** Whether a cold agent inherits the decision more cheaply than
+  the 2026-09-15 baseline is `knowledge-pulse-dogfood`'s question. The smoke
+  proves only that the pulse reaches the wake.

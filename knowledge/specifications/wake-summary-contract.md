@@ -253,17 +253,19 @@ byte-identical.
 
 ## 8. Live rendering (not normative)
 
-The installed kernel's wake for the live `plot` workspace on 2026-09-15,
-measured at 676 B. There are no bindings yet, so there is no governs section:
+The installed kernel's wake for the live `plot` workspace on 2026-09-15, after
+binding its governing decision across repositories, measured at 837 B (676 B
+before the binding):
 
 ```text
-wake · stale outranks memory · reveal ids: workspace_reveal
+wake · stale outranks memory · reveal: workspace_reveal
 goal: Milestone 6 (categorical x / band scale for every mark) is complete, validated, and committed as e2929a2. The README milestone list (1-6) is fully done; the working tree is clean apart from the…
 stopped at ten-category-color-investigat…: Report confirmed: 10 color categories fail (cap 8, exit 2). Claim 21 (12-category support) was false and is superseded by 22. Claim 23: the cap is a deliberate design rule backed by an 8-hue validated palette; a trial 10-hue extension…
+k1 Curated project knowledge lives in OKF; Agent Workspace holds situated state and its bindings → ../agent-workspace:knowledge/decisions/okf-curated-knowledge-layer.md
 since then:
 - c17
 claims: 11 active, 3 stale: c19 c18 c15
-more: 3 shortened · full: workspace_status|workspace_delta full=true
+more: 3 shortened · workspace_status|workspace_delta full=true
 ```
 
 ## 9. Out of scope

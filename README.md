@@ -113,10 +113,16 @@ vocabulary:
 - **objective / working set / finding / transaction** — the bound goal, the
   ranked locations under attention, an outstanding issue, and a reversible
   evidence-gated change.
+- **knowledge binding** — a durable rule or decision that governs work here: a
+  terse headline, optionally pinned to one canonical source (such as an OKF
+  decision, even in another repository) whose changes the wake reports. The
+  binding itself never goes stale.
 
 Both surfaces below bound their projections identically — compact JSON, capped
 cardinality with explicit omission counts, `full` on demand — because those
-limits are kernel semantics, not adapter-local summaries.
+limits are kernel semantics, not adapter-local summaries. The wake itself is
+kernel-rendered text of at most 1000 bytes (`status --summary`), and any id it
+shortens is one `reveal <id>` away.
 
 ### Claude Code
 
@@ -132,9 +138,10 @@ replaces a native tool:
   `workspace_reveal` away.
 - **Write** — an MCP server (`agent-workspace mcp`) exposes the write loop over a
   harness-agnostic stdio server: `workspace_record_belief` (fused observe+claim),
-  `workspace_bind_objective`, `workspace_supersede_claim`, `workspace_retire_claim`
-  (retire a claim without a replacement), and `workspace_checkpoint`. The same
-  server also serves the bounded read projections.
+  `workspace_set_intent`, `workspace_supersede_claim`, `workspace_retire_claim`
+  (retire a claim without a replacement), `workspace_bind_knowledge` and
+  `workspace_retire_knowledge`, and `workspace_checkpoint`. The same server
+  also serves the bounded read projections and `workspace_reveal`.
 
 Per-repo setup — install the kernel with the (opt-in) MCP subcommand onto your
 `PATH`, then let `.mcp.json` wire the server:
