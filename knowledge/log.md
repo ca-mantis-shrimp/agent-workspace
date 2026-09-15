@@ -1,5 +1,16 @@
 ## 2026-09-15
 
+* **Update**: Linked `decisions/plural-agency-charter-transition.md` to `decisions/coordination-selection-disposition.md` (Preserves cancelled coordination entities while replacing the obsolete swarm-dogfood obligation.).
+* **Update**: Updated concept `decisions/plural-agency-charter-transition.md`.
+* **Update**: Linked `decisions/plural-agency-charter-transition.md` to `evaluations/networked-agency-council-review.md` (Turns the council recommendation into a staged falsification trial without authorizing machinery.).
+* **Update**: Updated concept `decisions/plural-agency-charter-transition.md`.
+* **Update**: Linked `decisions/plural-agency-charter-transition.md` to `design/networked-agency-continuity-commons.md` (Applies the owner-chartered plural-agency hypothesis as a bounded research program.).
+* **Update**: Updated concept `decisions/plural-agency-charter-transition.md`.
+
+* **Creation**: Documented concept `decisions/plural-agency-charter-transition.md` (Charter plural agency as a falsifiable research program).
+
+* **Update**: Updated concept `design/networked-agency-continuity-commons.md`.
+
 * **Update**: Linked `evaluations/networked-agency-council-review.md` to `decisions/coordination-selection-disposition.md` (Keeps cancelled coordination machinery and deferred Clearhead integration in force absent new repeated evidence.).
 * **Update**: Updated concept `evaluations/networked-agency-council-review.md`.
 * **Update**: Linked `evaluations/networked-agency-council-review.md` to `evaluations/coordination-pilot-report.md` (Uses the prior two-harness pilot as the simpler-tools baseline and negative evidence against premature machinery.).

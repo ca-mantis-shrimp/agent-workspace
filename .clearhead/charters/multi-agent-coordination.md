@@ -6,6 +6,17 @@ state: Active
 ---
 # Harness-neutral multi-agent coordination
 
+**Current disposition (2026-09-15):** the entity-heavy build thesis below is a
+historical hypothesis, not a current implementation commitment. The 2026-09-14
+selection cancelled workstreams, sessions, declarations, and structured handoff;
+the 2026-09-15
+[plural-agency transition](../../knowledge/decisions/plural-agency-charter-transition.md)
+replaces the broad swarm dogfood with a separate research-only charter. This
+charter remains active only for the independently selected
+`orientation-worktree-context` correctness fix and
+`coordination-authority-boundary` design action. Its original completion criteria
+do not silently reopen cancelled entities.
+
 The normative identities, failure semantics, and executable scenarios are defined in the
 [contextual coordination contract](../../knowledge/specifications/contextual-coordination-contract.md).
 

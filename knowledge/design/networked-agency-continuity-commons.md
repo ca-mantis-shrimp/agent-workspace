@@ -1,8 +1,8 @@
 ---
 type: Design Proposal
 title: Networked agency and the continuity commons
-description: Owner-accepted direction for a council experiment: temporary evidence-led deliberation, self-organizing execution, and continuity through intentionally published consequences; Clearhead plan integration remains deferred until repeated use demonstrates a need.
-generated: { by: agent/cli, at: 2026-09-15T17:40:45Z }
+description: Owner-chartered plural-agency hypothesis: temporary evidence-led consensus rounds, federated local autonomy, scoped commitments, forkability, and continuity through intentionally published consequences; machinery remains deferred until evidence demonstrates a need.
+generated: { by: agent/pi, at: 2026-09-15T19:28:09Z }
 sources:
   - resource: design/agent-perspective.md
   - resource: decisions/coordination-selection-disposition.md
@@ -11,41 +11,51 @@ sources:
 
 # Networked agency and the continuity commons
 
-**Status:** owner-accepted direction for a bounded council experiment, still
-written for independent council review rather than treated as proven
-architecture. The owner accepted the protocol principles on 2026-09-15 and
-explicitly deferred Clearhead integration: these outputs are mostly plans, so
-integration must be earned by recurring friction rather than built in advance.
-This authorizes configuration and evaluation of the council protocol, not a
-roadmap change or silent reopening of coordination entities cancelled by the
+**Status:** owner-chartered hypothesis for a bounded falsification experiment,
+not proven architecture. On 2026-09-15 the owner accepted the plural-agency
+framing and authorized a research-only Clearhead charter with two staged actions.
+Clearhead records that commitment in this repository; protocol integration and
+new coordination machinery remain deferred until repeated evidence demonstrates
+a need. This does not silently reopen coordination entities cancelled by the
 existing selection disposition.
 
 **Accepted experimental protocol:** use an immutable bounded brief, independent
-first reports, a mechanically assembled claim matrix, at most one focused
-cross-examination, and a decision membrane that separates deterministic facts,
-reversible in-mandate choices, unresolved hypotheses, and authority-expanding
-choices. The facilitator records and exposes synthesis but does not govern.
-Persist the recommendation, evidence, dissent, uncertainty, reopening
-conditions, participants, context modes, cost, and owner disposition—not
-transcripts or private reasoning. Begin with existing Pi council machinery and
-two read-only project profiles; extract harness-neutral or Clearhead machinery
-only after observed use demonstrates a need.
+first reports, a mechanically assembled throwaway claim matrix, at most one
+focused cross-examination, and a decision membrane that separates deterministic
+facts, reversible in-mandate choices, unresolved hypotheses, and
+authority-expanding choices. The facilitator records and exposes synthesis but
+does not govern. Persist the recommendation, evidence, dissent, uncertainty,
+reopening conditions, participants, context modes, cost, and owner
+disposition—not transcripts or private reasoning. Begin with existing Pi council
+machinery and two read-only project profiles; extract harness-neutral or
+Clearhead machinery only after observed use demonstrates a need.
 
 ## Thesis
 
-A multi-agent system should not assume that technical orchestration requires a
-command hierarchy. Mechanical infrastructure may launch, connect, isolate, and
-stop agents without becoming their governing authority. A healthier model is a
-networked community: a temporary council maintains the best current public
-state of the plan, while agents self-organize around that state and shared
-standards.
+The durable subject is a plural collective. Individual model invocations,
+harness sessions, machines, and worktrees are temporary runtimes or platforms
+through which portions of it reason and act. A participant joins by inheriting a
+bounded public state, works locally, deliberately publishes a consequential
+delta, and may disappear without taking the collective's continuity with it.
+
+This is a federated community, not a supervisor with workers or a privileged
+council over agents. Local plans remain autonomous by default; agreement is
+needed only where commitments intersect or authority changes. Decisions belong
+to the smallest actually affected group, and competing proposals or
+implementations may remain first-class when convergence is unnecessary. A
+council is one temporary consensus operation for reconciling a consequential
+boundary, not a standing governing body.
 
 The continuity system should make participation easier without making every
-participant continuously legible. It should remember consequential
-commitments, discoveries, decisions, and unresolved disagreements—not model all
-activity.
+participant continuously legible. It should remember consequential commitments,
+discoveries, decisions, and unresolved disagreements—not model all activity.
 
 > Remember consequences, not behavior.
+
+The collective pronoun **we** is earned by accepted public commitments. One
+runtime's proposal, or several correlated reports, must not be presented as
+collective belief before adoption; provenance and preserved dissent prevent the
+collective voice from laundering individual judgment.
 
 ## Separate governance from execution
 
@@ -61,26 +71,28 @@ is instead:
 ```text
 human mandate and constitutional boundaries
                     |
-          temporary agent council
-       maintains the best current plan
+       small shared constitutional root
                     |
-       shared, versioned intention graph
-                    |
-         self-organizing community
+ scoped commitments + competing proposals
+          /                     \
+ local autonomous work     affected-party circle
+          \                     /
+       evidence-led state transitions
                     |
       harness-neutral execution machinery
 ```
 
 The human retains authority over ends, permissions, consequential external
 effects, and resource boundaries without becoming the dispatcher for every
-reversible step. The council governs plan transitions, not workers. The
-execution broker is a servant of the community: it may adapt to Pi subagents,
-Claude Code, or another harness, but it owns no planning authority.
+reversible step. No standing council owns plan transitions. The execution broker
+is a servant of the community: it may adapt to Pi subagents, Claude Code, or
+another harness, but it owns no planning authority.
 
-Council membership and roles should be temporary and decision-specific. A
-particular deliberation may need a proposer, independent critic, domain
-advisor, synthesizer, verifier, or minority reporter. Those roles should not
-harden into a permanent ruling class.
+Deliberation membership and roles should be temporary, decision-specific, and
+limited by affected scope. A particular reconciliation may need a proposer,
+independent critic, domain advisor, synthesizer, verifier, or minority reporter.
+Those roles should not harden into a permanent ruling class, and an unaffected
+majority cannot vote away a locally held reversible choice.
 
 ## Clearhead as intention graph, not activity monitor
 
@@ -147,17 +159,18 @@ artifact, or handoff another participant must inherit.
 Provenance remains modest: a record means that an actor reported something; it
 does not prove what the actor perceived or authenticate the whole trajectory.
 
-## Council by exception, autonomy by default
+## Consensus by exception, autonomy by default
 
-Council deliberation earns its cost when evidence may change the shared plan:
-ambiguous decomposition, incompatible architectures, overlapping commitments,
-consequential integration, invalidated assumptions, stopping decisions, or
-requests for more authority and resources.
+A temporary consensus round earns its cost when evidence may change a shared
+commitment: ambiguous decomposition, incompatible architectures, overlapping
+commitments, consequential integration, invalidated assumptions, stopping
+decisions, or requests for more authority and resources.
 
 It should not be required for bounded implementation, ordinary investigation,
 local execution choices, reversible experiments, or questions that
-deterministic checks can settle. A council is an event convened around a
-specific decision, not a standing meeting through which all work must pass.
+deterministic checks can settle. A council, when used, is an event convened
+among the affected participants around a specific decision, not a standing
+meeting through which all work must pass.
 
 A proposal should be a compact plan diff:
 
@@ -236,8 +249,9 @@ failed.
 8. What should remain deliberately unknowable to the commons?
 
 The desired shape is neither an obedient swarm nor governance everywhere. It is
-free initiative within a visible mandate, a small continuity root, deliberate
-publication, and temporary councils at consequential forks.
+a durable plural agency with free initiative inside a visible mandate, a small
+continuity root, scoped commitments, deliberate publication, first-class forks,
+and temporary affected-party consensus rounds at consequential intersections.
 
 # Related Concepts
 
