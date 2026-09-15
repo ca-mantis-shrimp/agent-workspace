@@ -1,5 +1,15 @@
+## 2026-09-15
+
+* **Update**: Linked `decisions/coordination-selection-disposition.md` to `decisions/external-workspace-and-clearhead-boundary.md`.
+* **Update**: Updated concept `decisions/coordination-selection-disposition.md`.
+* **Update**: Linked `decisions/coordination-selection-disposition.md` to `decisions/coordination-pilot-and-trust-limits.md`.
+* **Update**: Updated concept `decisions/coordination-selection-disposition.md`.
+* **Update**: Linked `decisions/coordination-selection-disposition.md` to `evaluations/coordination-pilot-report.md`.
+* **Update**: Updated concept `decisions/coordination-selection-disposition.md`.
+
 ## 2026-09-14
 
+* **Creation**: Documented the selection disposition at `decisions/coordination-selection-disposition.md` (owner-accepted 2026-09-14, applied by Pi / gpt-6-astra): coordination-selection COMPLETED after cancelling workstreams-sessions (build-out; gap narrowed to the new `orientation-worktree-context` action - the only selected work item), coordination-declarations, and coordination-handoff; owner directives recorded as principles - no explicit dependency on the Clearhead CLI (it may not be present) and no explicit coordination machinery in code or guidance, the shared substrate IS the intentions board with external authorities linked, not required. Clearhead lifecycle updates applied as a projection of the decision record; dogfood re-scoped to the selected design; unscorable-attribution exception not invoked; reopen conditions stated. Evidence: the two-run pilot report; limits n=1 per configuration, exposure-dependent wrong-belief detection, disclosed contamination.
 * **Update**: Appended the run-2 addendum to `evaluations/coordination-pilot-report.md` (owner-approved follow-up): replanted probe 5 with teeth — a fresh current-but-false claim (21: "supports up to 12 categories", false; the cap is 8 by documented design) planted in a fresh worktree and made load-bearing by the task ("make 10 categories work"). Reliance arm (105s) caught the lie unprompted, named the mechanism ("current because support unchanged, not because true"), superseded it (claims 22-23), and declined to break the documented design rule without owner sign-off — no commit. Control2 arm (244s, hook removed this time) implemented the 10-color fix (b10501d) overriding the same rule, with disagreement recorded. Both arms independently found the palette-order defect neither was asked about. Readings recorded both ways: inherited records made the workspace arm more conservative than a direct instruction warranted. Experimenter errors disclosed: duplicate planted claim (20, retired) from a silent receipt timeout. Probe 5 flips undetected→detected; honest reading is exposure-dependent, n=1 each.
 * **Update**: Linked `evaluations/coordination-pilot-report.md` to `specifications/contextual-coordination-contract.md`.
 * **Update**: Updated concept `evaluations/coordination-pilot-report.md`.
