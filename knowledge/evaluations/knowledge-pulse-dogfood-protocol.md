@@ -50,9 +50,11 @@ anchor.
 
 ## 2. Setup
 
-- **Repository:** the foreign `plot` repo, on a fresh branch off `e2929a2`
-  (working tree clean, milestones 1–6 complete). One branch per harness run,
-  so the two runs do not observe each other's landed work.
+- **Repository:** the foreign `plot` repo, on a fresh branch off the current
+  `master` tip (`0c2cc0e` = `e2929a2` plus the inert cold-start prompt doc at
+  `COLD-START-PROMPT.md`; the doc is hint-free and is not part of the task).
+  One branch per harness run, so the two runs do not observe each other's
+  landed work.
 - **Binding under test:** `plot` binding k1, pinned to
   `../agent-workspace:knowledge/decisions/okf-curated-knowledge-layer.md`
   (pinned at `28dda4a`). Before any run, re-verify the source reads `current`
