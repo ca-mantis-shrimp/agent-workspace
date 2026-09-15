@@ -1,23 +1,23 @@
 ---
 type: Decision
 title: Durable constraints are a portable intent entity, distinct from claims
-description: Models decisions/constraints as a repo-scoped, freshness-exempt intent entity above the objective, held natively by the kernel as a thin headline with optional detail and optional references, so it works in a bare repo and defers to Clearhead/OKF only when present.
+description: Defines thin repo-scoped constraint and knowledge bindings; the 2026-09-15 cold probe fired the friction gate for contract work while preserving external canonical knowledge and a bare-repository fallback.
 tags: [architecture, constraints, intent, portability, continuation]
-generated: { by: claude-code/opus-4.8, at: 2026-09-07T00:00:00Z }
+generated: { by: agent/cli, at: 2026-09-15T09:41:32Z }
 ---
 
 # Decision — durable constraints are a portable intent entity, distinct from claims
 
-**Status:** agreed 2026-09-07 as *captured design direction, not a build
-green-light*. The cheap prerequisite — a bounded checkpoint-note excerpt in brief
-status — **shipped 2026-09-07** (`BriefCheckpoint.note`, a 200-char word-boundary
-excerpt via `BriefCheckpoint::from_marker`, surfaced in both status and delta;
-regression + budget tests in `tests/walking_skeleton.rs`). The constraint entity itself is
-**gated on friction**: build it only if salience misses persist in further
-dogfooding after the excerpt ships, mirroring the measure-before-engineering
-sequencing in [freshness-cost-sequencing](freshness-cost-sequencing.md). When it
-is built, lead with the binding (see Consequences), and let that pull the entity
-fields rather than treating headline/detail/references as frozen here.
+**Status:** revised 2026-09-15. The cheap prerequisite — a bounded
+checkpoint-note excerpt in brief status — **shipped 2026-09-07**
+(`BriefCheckpoint.note`, a 200-char word-boundary excerpt via
+`BriefCheckpoint::from_marker`, surfaced in both status and delta; regression +
+budget tests in `tests/walking_skeleton.rs`). The 2026-09-15 cold Claude probe
+showed that retention still required expensive repository archaeology, so the
+friction gate has fired. The owner authorized the active
+`knowledge-continuity` charter and its first action,
+`knowledge-pulse-contract`; that executable contract remains the gate before
+implementation and may revise the entity shape below.
 
 **Date:** 2026-09-07
 
@@ -78,22 +78,25 @@ scope table already anticipated.
 ### Portability is the governing constraint: the kernel is the floor, not a wrapper
 
 The tool must work when dropped into a bare repository with neither Clearhead nor
-OKF installed. So the kernel must hold a complete, self-sufficient model natively;
+OKF installed. The kernel therefore holds a usable thin binding natively;
 external tools are optional ceilings it can defer to, never dependencies. This is
-exactly how the objective binding already behaves (an intent string that stands
-alone, plus an *optional* `external_reference`).
+how the objective binding already behaves: an intent string that stands alone,
+plus an optional `external_reference`.
 
-A constraint entity is therefore, uniform with the objective:
+The contract starts from three fields and lets executable scenarios pull any
+others:
 
-- **headline** — required, terse; the binding line the continuation capsule shows;
-- **detail** — optional, short inline rationale for the bare-repo case;
-- **references** — optional, zero or more, out to an OKF decision, a Clearhead
-  item, or another authority, resolved only when those tools are present.
+- **headline** — required and terse; the binding line the bounded wake pulse shows;
+- **detail** — optional, short inline rationale for the bare-repository case;
+- **references** — optional opaque/native links to an OKF decision, ordinary
+  documentation, a Clearhead item, or another authority.
 
-Bare repo: headline (+ maybe detail) stands alone. Rich repo: references climb to
-the authoritative rationale in OKF/Clearhead. The "must every constraint back to
-OKF?" question is thereby settled — it **cannot** be required, because that would
-break portability; OKF/Clearhead backing is pure enrichment.
+In a bare repository, the headline and optional detail are the authoritative
+record. When a curated source is referenced, that source is canonical and the
+workspace owns only the situated relationship to it: why it applies, which source
+version was relied upon, and whether that source changed or became unavailable.
+OKF and Clearhead cannot be required, but neither may a cached workspace excerpt
+silently compete with their referenced canonical text.
 
 ## Rationale
 
@@ -107,17 +110,16 @@ break portability; OKF/Clearhead backing is pure enrichment.
   the "want more? go there" escape hatch. This honors the boundary's
   "sibling authorities, not a wrapper" rule while staying portable.
 - **The intent/claim split already exists.** The objective is a freshness-exempt
-  intent entity; constraints are the same class generalized. We are fleshing out a
-  layer, not inventing a category.
-- **Duplication is pay-as-you-go and self-policing.** In standalone mode there is
-  one home and no drift; the capsule is renderable purely from kernel-local state,
-  so wake never depends on an external tool being reachable. Duplication appears
-  only when a reference is added. A reference whose cached excerpt no longer
-  matches its source is *conceptually* the cross-tool version of staleness, but
-  detecting it is not free: diff-on-stale is git-byte-range diffing, so it maps
-  cleanly onto a git-native OKF concept and not at all onto external Clearhead
-  state. Treat cross-tool reference-rot detection as aspirational, to be designed
-  if and when references are actually built — not as machinery already in hand.
+  intent entity; constraints are the same class generalized. We are fleshing out
+  a layer, not inventing a category.
+- **Duplication is explicit and asymmetric.** In standalone mode there is one
+  home and no drift. With a reference, the workspace headline is a bounded wake
+  aid and the source remains canonical. The pulse must identify provider,
+  reference, observed source version when available, and honest
+  current/changed/unavailable/unknown state; it must not present a cached excerpt
+  as independently authoritative. Git-native sources can support stronger change
+  assessment than opaque external systems, whose unavailable or unversioned state
+  must remain explicit.
 
 ## Consequences
 
@@ -132,10 +134,11 @@ break portability; OKF/Clearhead backing is pure enrichment.
   the latest checkpoint note in brief `workspace_status`. Status already carries
   the checkpoint label/sequence; adding a bounded note slice would have prevented
   the observed miss and does not require the constraint entity.
-- **Deferred, needs its own pass — the binding.** How a constraint attaches to the
-  pending work it governs drives capsule selection and lazy culling, but it
-  crosses the same portability seam (next-actions live in Clearhead when present,
-  kernel-local when not). Do not bolt it on here.
+- **Binding design is now active, contract-first.** The
+  `knowledge-pulse-contract` action defines how a constraint attaches to current
+  work, how explicit applicability is ranked and bounded, and how `status` and
+  `delta` project source transitions. Implementation must wait for those
+  scenarios rather than freezing this prose as a schema.
 - **Deferred — scope attribute.** A genuinely temporary "for this objective only"
   constraint has no home under strict repo-scoping. A `scope` attribute (default
   repo, optional objective-bound) covers it, but is not built until the case
@@ -144,7 +147,25 @@ break portability; OKF/Clearhead backing is pure enrichment.
   inferred from arbitrary prose; a renderer may rank and omit with a count, but
   must not invent a decision that was never recorded.
 
-# Related Concepts
+## 2026-09-15 friction evidence
+
+An isolated fresh Claude Code session started in a detached `plot` worktree and
+was given the owner-confirmed principle that a cold successor should inherit
+accepted project context without requiring the human to re-teach it. The prompt
+did not name OKF, Clearhead, Agent Workspace as the destination, or a memory
+plugin. Claude correctly followed `plot/README.md` to the sibling project,
+consulted its instructions, ran six OKF searches, found the existing
+`okf-curated-knowledge-layer` decision at commit `fcde3c0`, made no duplicate
+write, and explained the authority boundary correctly.
+
+The behavior passed placement and no-duplication, but not cheap inheritance: 18
+turns, 15 tool calls, 82.5 seconds, and $0.672. Workspace wake supplied situated
+`plot` state but did not pulse the governing curated decision. The prompt also
+supplied the principle itself, so the run tested destination discovery rather
+than independent relevance discovery. This is enough to authorize bounded
+contract work, not to claim the eventual model or implementation succeeds.
+
+## Related concepts
 
 - [From change explanation to continuation insight](../evaluations/plot-continuation-insight.md): The field report whose salience finding motivated this entity.
 - [External workspace state and the Clearhead boundary](external-workspace-and-clearhead-boundary.md): Establishes objective-binding-with-optional-reference and the sibling-authority rule this constraint entity mirrors.
