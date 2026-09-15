@@ -96,6 +96,15 @@ there is no separate "opened" news marker.
 headlines. Aged beliefs are re-verified when used (`explain_stale`), not at
 wake.
 
+**The last stop is worktree-scoped.** The `stopped at` anchor and the
+`since then` news it defines are drawn from the latest checkpoint *this
+worktree* recorded, never the latest checkpoint in the shared log. A
+checkpoint stamps its recording worktree; a checkpoint attributed to another
+worktree — or a legacy identity-less checkpoint recorded before worktree
+attribution existed — is never presented as this worktree's own last stop. An
+explicit `--since <label>` still resolves any checkpoint by its unique label,
+whatever worktree drew it.
+
 ## 3. Forms and fill
 
 Every item has two forms:
@@ -197,6 +206,11 @@ Rationale:
 5. **One renderer.** The kernel renders once, CLI and MCP deliver identical
    bytes, and adapters add or remove nothing.
 6. **Quiet when empty.**
+7. **Worktree-scoped last stop.** The default `stopped at` anchor and the
+   `since then` news it defines come only from a checkpoint this worktree
+   recorded. Another worktree's checkpoint, or a legacy unattributed one, is
+   never presented as local; only an explicit `--since <label>` reaches
+   across worktrees.
 
 ## 6. Prohibited failures
 
@@ -250,6 +264,12 @@ ids plus `+k`.
 
 **WS9 — determinism.** Two renders over the same log and worktree are
 byte-identical.
+
+**WS10 — worktree-scoped last stop.**
+- *Given* checkpoints recorded in two linked worktrees of one repository,
+- *then* a wake opened in worktree X shows only X's latest checkpoint as
+  `stopped at` and never Y's; and a legacy identity-less checkpoint is never
+  shown as `stopped at`.
 
 ## 8. Live rendering (not normative)
 

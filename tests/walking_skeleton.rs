@@ -5697,6 +5697,179 @@ fn linked_worktrees_keep_independent_freshness_verdicts() {
 }
 
 #[test]
+fn checkpoint_records_its_worktree_identity() {
+    // orientation-worktree-context: a checkpoint carries the worktree that drew
+    // it, surfaced verbatim in the full delta so the wake can scope its anchor.
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap();
+    let ws = workspace.to_str().unwrap();
+    invoke(&[
+        "checkpoint",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--label",
+        "stamped",
+    ]);
+    let delta: DeltaStatus = serde_json::from_slice(
+        &invoke(&["delta", "--full", "--repository", repo, "--workspace", ws]).stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        delta.checkpoint.worktree_identity.as_deref(),
+        Some(delta.worktree.as_str())
+    );
+}
+
+#[test]
+fn wake_scopes_its_last_stop_to_the_querying_worktree() {
+    // orientation-worktree-context: a wake opened in a linked worktree must not
+    // present another worktree's checkpoint as its own last stop.
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let linked = fixture.root.path().join("linked-worktree");
+    git(
+        &fixture.repository,
+        &["worktree", "add", "--quiet", linked.to_str().unwrap()],
+    );
+    let primary_repo = fixture.repository.to_str().unwrap();
+    let linked_repo = linked.to_str().unwrap();
+    let workspace_path = workspace.to_str().unwrap();
+
+    invoke(&[
+        "set-intent",
+        "--repository",
+        primary_repo,
+        "--workspace",
+        workspace_path,
+        "--intent",
+        "Ship the scoped wake",
+    ]);
+
+    let summary = |repo: &str| -> String {
+        String::from_utf8(
+            invoke(&[
+                "status",
+                "--summary",
+                "--repository",
+                repo,
+                "--workspace",
+                workspace_path,
+            ])
+            .stdout,
+        )
+        .unwrap()
+    };
+
+    invoke(&[
+        "checkpoint",
+        "--repository",
+        primary_repo,
+        "--workspace",
+        workspace_path,
+        "--label",
+        "primary-stop",
+        "--note",
+        "Primary worktree drew this line",
+    ]);
+
+    let linked_wake = summary(linked_repo);
+    assert!(
+        !linked_wake.contains("primary-stop"),
+        "another worktree's checkpoint must not read as local: {linked_wake}"
+    );
+    assert!(
+        !linked_wake.contains("stopped at"),
+        "a worktree with no local checkpoint has no last stop: {linked_wake}"
+    );
+
+    invoke(&[
+        "checkpoint",
+        "--repository",
+        linked_repo,
+        "--workspace",
+        workspace_path,
+        "--label",
+        "linked-stop",
+        "--note",
+        "Linked worktree drew this line",
+    ]);
+
+    let linked_wake = summary(linked_repo);
+    assert!(
+        linked_wake.contains("stopped at linked-stop"),
+        "{linked_wake}"
+    );
+    assert!(!linked_wake.contains("primary-stop"), "{linked_wake}");
+
+    let primary_wake = summary(primary_repo);
+    assert!(
+        primary_wake.contains("stopped at primary-stop"),
+        "{primary_wake}"
+    );
+    assert!(!primary_wake.contains("linked-stop"), "{primary_wake}");
+}
+
+#[test]
+fn legacy_identity_less_checkpoint_is_not_presented_as_local() {
+    // orientation-worktree-context: an identity-less checkpoint from before the
+    // worktree stamp must replay without corruption and never read as this
+    // worktree's local last stop.
+    let fixture = GitFixture::new();
+    let workspace = fixture.root.path().join("workspace-state");
+    let repo = fixture.repository.to_str().unwrap();
+    let ws = workspace.to_str().unwrap();
+    invoke(&[
+        "set-intent",
+        "--repository",
+        repo,
+        "--workspace",
+        ws,
+        "--intent",
+        "Legacy checkpoints stay unattributed",
+    ]);
+
+    let log_path = workspace.join("events.jsonl");
+    let last_sequence = fs::read_to_string(&log_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .next_back()
+        .unwrap()["sequence"]
+        .as_u64()
+        .unwrap();
+    let legacy = serde_json::json!({
+        "schema_version": 2,
+        "sequence": last_sequence + 1,
+        "event": {
+            "type": "checkpointed",
+            "label": "legacy-stop",
+            "git_revision": "0000000000000000000000000000000000000000"
+        }
+    });
+    let mut log = fs::read_to_string(&log_path).unwrap();
+    log.push_str(&format!("{}\n", serde_json::to_string(&legacy).unwrap()));
+    fs::write(&log_path, log).unwrap();
+
+    let text = String::from_utf8(
+        invoke(&[
+            "status",
+            "--summary",
+            "--repository",
+            repo,
+            "--workspace",
+            ws,
+        ])
+        .stdout,
+    )
+    .unwrap();
+    assert!(!text.contains("legacy-stop"), "{text}");
+    assert!(!text.contains("stopped at"), "{text}");
+}
+
+#[test]
 fn legacy_identity_less_reconcile_is_not_served_as_current() {
     // CC2: an identity-less `ClaimReconciled` (the pre-contextual schema) must
     // replay without corruption and must never be served as a current contextual

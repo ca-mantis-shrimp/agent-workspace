@@ -694,6 +694,11 @@ pub struct CheckpointMarker {
     pub git_revision: String,
     pub intent: Option<Intent>,
     pub sequence: u64,
+    /// The worktree that drew this line, when the recording kernel was
+    /// worktree-aware. A legacy (`None`) checkpoint is unattributed and must
+    /// never be presented as a specific worktree's local last stop.
+    #[serde(default)]
+    pub worktree_identity: Option<String>,
 }
 
 /// Write-time bounds for a knowledge binding (knowledge pulse contract §3):

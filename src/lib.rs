@@ -368,6 +368,8 @@ enum Event {
         #[serde(default)]
         note: Option<String>,
         git_revision: String,
+        #[serde(default)]
+        worktree_identity: Option<String>,
     },
 }
 
@@ -538,7 +540,7 @@ impl Workspace {
                     .cloned()
                     .ok_or_else(|| WorkspaceError::CheckpointNotFound(label.to_owned()))?,
             ),
-            None => current.checkpoints.last().cloned(),
+            None => self.latest_local_checkpoint(&current),
         };
         let checkpoint = match marker {
             Some(marker) => Some(self.wake_checkpoint(&current, marker)?),
@@ -590,6 +592,22 @@ impl Workspace {
             governs,
             checkpoint,
         }))
+    }
+
+    /// The latest checkpoint this worktree drew, or `None` when it has not.
+    /// Checkpoints are worktree-local orientation anchors: a wake opened in
+    /// worktree X must not present worktree Y's landing line — or a legacy
+    /// unattributed one — as X's own last stop. An explicit `--since <label>`
+    /// still resolves any checkpoint by its unique label.
+    fn latest_local_checkpoint(&self, current: &Projection) -> Option<CheckpointMarker> {
+        current
+            .checkpoints
+            .iter()
+            .rev()
+            .find(|marker| {
+                marker.worktree_identity.as_deref() == Some(self.worktree_identity.as_str())
+            })
+            .cloned()
     }
 
     /// What the wake reports about one checkpoint: its label and note plus the
@@ -956,6 +974,7 @@ impl Workspace {
             label: label.clone(),
             note,
             git_revision,
+            worktree_identity: Some(self.worktree_identity.clone()),
         })?;
 
         self.project()?
@@ -3694,11 +3713,13 @@ impl Projection {
                 label,
                 note,
                 git_revision,
+                worktree_identity,
             } => {
                 self.checkpoints.push(CheckpointMarker {
                     label,
                     note,
                     git_revision,
+                    worktree_identity,
                     intent: self.intent.clone(),
                     // `next_sequence` was advanced above; this event's own
                     // sequence is therefore one less.
