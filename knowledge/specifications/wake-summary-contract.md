@@ -63,14 +63,14 @@ except the header.
 
 | Section | Content |
 | --- | --- |
-| **header** | `wake · stale outranks memory · reveal ids: workspace_reveal` |
+| **header** | `wake · stale outranks memory · reveal: workspace_reveal` |
 | **goal** | `goal: <intent>` |
 | **stopped at** | `stopped at <label>: <note>` |
-| **governs** | active applicable knowledge bindings ([knowledge pulse contract](knowledge-pulse-contract.md) §1.3) |
+| **governs** | up to 3 applicable bindings in the [knowledge pulse](knowledge-pulse-contract.md) order: `k3 [changed] <headline> → <reference>` in full (the tag only when the source is not current), or `governs: k4 k7!` in short form, where `!` marks a changed or unavailable source |
 | **since then** | `since then: <n> reads captured · goal changed`, then one line per changed entity |
 | **open** | one `open <id>` line per open finding, then per open transaction |
 | **claims** | `claims: N active, s stale: <ids>` |
-| **more** | `more: <n> shortened · full: workspace_status\|workspace_delta full=true`, present only if anything was shortened |
+| **more** | `more: <n> shortened · workspace_status\|workspace_delta full=true`, present only if anything was shortened |
 
 **Ids** are kind-prefixed so one token names one entity and one reveal call
 fetches it: `c` claim, `k` binding, `f` finding, `t` transaction, `o`
@@ -82,8 +82,11 @@ checkpoint is one line marked `!+`. Markers are:
 | Marker | Meaning |
 | --- | --- |
 | `+` | recorded |
-| `!` | newly stale, or a binding's source changed or became unavailable |
-| `-` | superseded or retired claim, or closed transaction (id only) |
+| `!` | claim newly stale |
+| `-` | superseded or retired claim or binding, or closed transaction (id only) |
+
+A binding's source transition is carried by its **governs** tag, not by a
+separate news line, so each entity still appears on one line.
 
 Observations appear only as a count (`13 reads captured`). A goal change is
 `goal changed` on the since line. Open transactions appear under **open**, so
@@ -120,7 +123,7 @@ Fill is deterministic for a given log and worktree:
    - every other non-empty section in short form;
    - the `more` line.
 
-   Each id list is capped at 6 ids, newest first, plus `+k`. The skeleton's
+   Each id list is capped at 5 ids, newest first, plus `+k`. The skeleton's
    worst case must stay at or below 750 B, so at least one full-form item
    always fits (asserted by test, WS2, with ids below 100,000; beyond that a
    hard clip still keeps the output within 1000 B).
@@ -145,8 +148,10 @@ believed.
 
 **Revisions made during implementation (2026-09-15):**
 
-- **Id lists cap at 6, not 8.** With 8, the measured worst-case skeleton was
-  about 794 B.
+- **Id lists cap at 5, not 8.** With 8, the measured worst-case skeleton was
+  about 794 B. With 6 it fit until the governs line arrived, which pushed it to
+  781 B. Cutting to 5 ids and trimming the header and `more:` wording kept the
+  750 B bound instead of loosening it.
 - **Line formats compacted** to the forms in §2.
 - **Goal and full note are cut by bytes.** The goal is the most important line,
   so it keeps as much text as fits rather than only its first sentence.

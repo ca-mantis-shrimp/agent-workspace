@@ -12,7 +12,7 @@
 use std::cmp::Reverse;
 use std::collections::BTreeSet;
 
-use crate::model::EntityRef;
+use crate::model::{EntityRef, SourceState};
 
 pub(crate) const WAKE_BUDGET_BYTES: usize = 1000;
 const GOAL_CAP: usize = 200;
@@ -20,9 +20,12 @@ const LABEL_CAP: usize = 32;
 const NOTE_EXCERPT_CAP: usize = 100;
 const NOTE_FULL_CAP: usize = 240;
 const ITEM_CAP: usize = 100;
-const ID_LIST_CAP: usize = 6;
+const REFERENCE_CAP: usize = 80;
+const ID_LIST_CAP: usize = 5;
+/// The knowledge pulse's own cap (knowledge pulse contract §3).
+const GOVERNS_LIST_CAP: usize = 3;
 const ELLIPSIS: &str = "…";
-const HEADER: &str = "wake · stale outranks memory · reveal ids: workspace_reveal";
+const HEADER: &str = "wake · stale outranks memory · reveal: workspace_reveal";
 
 /// Everything the wake reports, as plain data assembled by the kernel.
 #[derive(Clone, Debug, Default)]
@@ -34,6 +37,28 @@ pub(crate) struct WakeInput {
     pub(crate) stale_claim_ids: Vec<u64>,
     /// Open findings and transactions.
     pub(crate) open: Vec<WakeItem>,
+    /// Applicable knowledge bindings, already ranked by the kernel (knowledge
+    /// pulse contract §4); the renderer never re-ranks them.
+    pub(crate) governs: Vec<WakeBinding>,
+}
+
+/// A governing binding as the wake shows it: a pointer, never a source body.
+#[derive(Clone, Debug)]
+pub(crate) struct WakeBinding {
+    pub(crate) id: u64,
+    pub(crate) headline: String,
+    pub(crate) reference: Option<String>,
+    pub(crate) source: Option<SourceState>,
+}
+
+impl WakeBinding {
+    /// A changed or unavailable source should change what the reader trusts.
+    fn needs_attention(&self) -> bool {
+        matches!(
+            self.source,
+            Some(SourceState::Changed | SourceState::Unavailable)
+        )
+    }
 }
 
 /// The latest (or `since`) checkpoint and what happened after it.
@@ -144,23 +169,32 @@ fn is_quiet(input: &WakeInput) -> bool {
         && input.checkpoint.is_none()
         && input.active_claims == 0
         && input.open.is_empty()
+        && input.governs.is_empty()
 }
 
-/// Upgrade candidates in contract priority order: newly stale news, the full
-/// checkpoint note, open work, then new claims. Ended entities are never
-/// candidates: their text is exactly what is no longer believed, and a
-/// superseded false claim rendered as a sentence reads as fact at wake.
+/// Upgrade candidates in contract priority order: governing bindings whose
+/// source changed or became unavailable, newly stale news, the full checkpoint
+/// note, other governing bindings, open work, then new claims. Ended entities
+/// are never candidates: their text is exactly what is no longer believed, and
+/// a superseded false claim rendered as a sentence reads as fact at wake.
 fn candidates(input: &WakeInput) -> Vec<Candidate> {
+    let governs = &input.governs[..input.governs.len().min(GOVERNS_LIST_CAP)];
+    let binding = |binding: &WakeBinding| Candidate::Item(EntityRef::Knowledge(binding.id));
     let news = input
         .checkpoint
         .as_ref()
         .map_or(&[][..], |checkpoint| listed(&checkpoint.news));
     let item = |item: &WakeItem| Candidate::Item(item.entity);
-    let mut order: Vec<Candidate> = news
+    let mut order: Vec<Candidate> = governs
         .iter()
-        .filter(|entry| entry.marker.is_stale())
-        .map(item)
+        .filter(|entry| entry.needs_attention())
+        .map(binding)
         .collect();
+    order.extend(
+        news.iter()
+            .filter(|entry| entry.marker.is_stale())
+            .map(item),
+    );
     if input
         .checkpoint
         .as_ref()
@@ -168,6 +202,12 @@ fn candidates(input: &WakeInput) -> Vec<Candidate> {
     {
         order.push(Candidate::Note);
     }
+    order.extend(
+        governs
+            .iter()
+            .filter(|entry| !entry.needs_attention())
+            .map(binding),
+    );
     order.extend(listed(&input.open).iter().map(item));
     order.extend(
         news.iter()
@@ -205,6 +245,9 @@ fn compose(input: &WakeInput, upgraded: &BTreeSet<Candidate>) -> String {
                 lines.push(format!("stopped at {label}: {text}"));
             }
         }
+    }
+    shortened += push_governs(&mut lines, &input.governs, upgraded);
+    if let Some(checkpoint) = &input.checkpoint {
         let mut activity = Vec::new();
         if checkpoint.reads_captured > 0 {
             let plural = if checkpoint.reads_captured == 1 {
@@ -235,12 +278,70 @@ fn compose(input: &WakeInput, upgraded: &BTreeSet<Candidate>) -> String {
     }
     if shortened > 0 {
         lines.push(format!(
-            "more: {shortened} shortened · full: workspace_status|workspace_delta full=true"
+            "more: {shortened} shortened · workspace_status|workspace_delta full=true"
         ));
     }
     let mut text = lines.join("\n");
     text.push('\n');
     text
+}
+
+/// Governing knowledge: one pointer line per upgraded binding
+/// (`k3 [changed] headline → reference`, the tag only when the source is not
+/// current), then one short line for the rest (`governs: k4 k7!`, where `!`
+/// marks a changed or unavailable source). Returns how many listed bindings
+/// are not shown whole.
+fn push_governs(
+    lines: &mut Vec<String>,
+    bindings: &[WakeBinding],
+    upgraded: &BTreeSet<Candidate>,
+) -> usize {
+    let listed = &bindings[..bindings.len().min(GOVERNS_LIST_CAP)];
+    let mut shortened = 0;
+    let mut short = Vec::new();
+    for binding in listed {
+        let entity = EntityRef::Knowledge(binding.id);
+        if !upgraded.contains(&Candidate::Item(entity)) {
+            shortened += 1;
+            let flag = if binding.needs_attention() { "!" } else { "" };
+            short.push(format!("{entity}{flag}"));
+            continue;
+        }
+        let (headline, mut cut) = clip(&binding.headline, ITEM_CAP);
+        let mut line = entity.to_string();
+        if let Some(state) = binding
+            .source
+            .filter(|state| *state != SourceState::Current)
+        {
+            line.push_str(&format!(" [{}]", source_label(state)));
+        }
+        line.push(' ');
+        line.push_str(&headline);
+        if let Some(reference) = &binding.reference {
+            let (reference, reference_cut) = clip(reference, REFERENCE_CAP);
+            cut |= reference_cut;
+            line.push_str(&format!(" → {reference}"));
+        }
+        shortened += usize::from(cut);
+        lines.push(line);
+    }
+    let omitted = bindings.len() - listed.len();
+    if omitted > 0 {
+        short.push(format!("(+{omitted} more)"));
+    }
+    if !short.is_empty() {
+        lines.push(format!("governs: {}", short.join(" ")));
+    }
+    shortened
+}
+
+fn source_label(state: SourceState) -> &'static str {
+    match state {
+        SourceState::Changed => "changed",
+        SourceState::Unavailable => "unavailable",
+        SourceState::Unknown => "unknown",
+        SourceState::Current => "current",
+    }
 }
 
 /// One full line per upgraded item, then one short line (`+ c9 c8 · - c3`) for
@@ -373,6 +474,20 @@ mod tests {
         }
     }
 
+    fn binding(
+        id: u64,
+        headline: &str,
+        reference: Option<&str>,
+        source: Option<SourceState>,
+    ) -> WakeBinding {
+        WakeBinding {
+            id,
+            headline: headline.to_owned(),
+            reference: reference.map(str::to_owned),
+            source,
+        }
+    }
+
     /// Every section at its cap with maximal text and ids below 100,000.
     fn worst_case() -> WakeInput {
         let long = "claim text ".repeat(60);
@@ -404,6 +519,21 @@ mod tests {
                     item(Marker::Open, entity, &long)
                 })
                 .collect(),
+            governs: (0..20)
+                .map(|n| {
+                    let source = if n % 2 == 0 {
+                        SourceState::Changed
+                    } else {
+                        SourceState::Current
+                    };
+                    binding(
+                        99_999 - n,
+                        &"governing rule ".repeat(20),
+                        Some(&"../repository/".repeat(20)),
+                        Some(source),
+                    )
+                })
+                .collect(),
         }
     }
 
@@ -415,6 +545,77 @@ mod tests {
             "WS2: skeleton is {} bytes:\n{skeleton}",
             skeleton.len()
         );
+        assert!(
+            skeleton.contains("governs: k99999! k99998 k99997! (+17 more)"),
+            "{skeleton}"
+        );
+    }
+
+    #[test]
+    fn governing_knowledge_reads_as_pointer_lines_after_the_last_stop() {
+        let text = render(&WakeInput {
+            goal: Some("ship the pulse".to_owned()),
+            checkpoint: Some(WakeCheckpoint {
+                label: "c0".to_owned(),
+                news: vec![item(
+                    Marker::Recorded,
+                    EntityRef::Claim(4),
+                    "foo returns one",
+                )],
+                ..WakeCheckpoint::default()
+            }),
+            governs: vec![
+                binding(1, "Keep modules pure", None, None),
+                binding(
+                    2,
+                    "Curated knowledge lives in OKF",
+                    Some("../kb:decisions/boundary.md"),
+                    Some(SourceState::Current),
+                ),
+            ],
+            ..WakeInput::default()
+        });
+        assert_eq!(
+            text,
+            format!(
+                "{HEADER}\ngoal: ship the pulse\nstopped at c0\nk1 Keep modules pure\n\
+                 k2 Curated knowledge lives in OKF → ../kb:decisions/boundary.md\n\
+                 since then:\n+ c4 foo returns one\n"
+            )
+        );
+    }
+
+    #[test]
+    fn a_changed_governing_source_outranks_newly_stale_claims() {
+        let long = "claim text ".repeat(20);
+        let news = (1..=6)
+            .map(|n| item(Marker::Stale, EntityRef::Claim(n), &long))
+            .collect();
+        let text = render(&WakeInput {
+            goal: Some("goal word ".repeat(100)),
+            checkpoint: Some(WakeCheckpoint {
+                label: "c0".to_owned(),
+                note: Some("note word ".repeat(100)),
+                news,
+                ..WakeCheckpoint::default()
+            }),
+            governs: vec![binding(
+                9,
+                &"governing rule ".repeat(6),
+                Some("../kb:decisions/boundary.md"),
+                Some(SourceState::Changed),
+            )],
+            ..WakeInput::default()
+        });
+        assert!(text.len() <= WAKE_BUDGET_BYTES);
+        assert!(
+            text.contains("\nmore: "),
+            "fixture must be under pressure: {text}"
+        );
+        assert!(
+            text.contains("\nk9 [changed] governing rule"),
+            "WS3: {text}"
+        );
     }
 
     #[test]
@@ -425,8 +626,8 @@ mod tests {
             text.lines().any(|line| line.starts_with("more: ")),
             "{text}"
         );
-        assert!(text.contains("(+34 more)"), "{text}");
-        assert!(text.contains("(+34 more)") && text.contains("claims: 99999 active"));
+        assert!(text.contains("(+35 more)"), "{text}");
+        assert!(text.contains("(+35 more)") && text.contains("claims: 99999 active"));
     }
 
     #[test]
@@ -510,7 +711,7 @@ mod tests {
             ..WakeInput::default()
         });
         assert!(
-            text.contains("claims: 30 active, 30 stale: c30 c29 c28 c27 c26 c25 (+24 more)\n"),
+            text.contains("claims: 30 active, 30 stale: c30 c29 c28 c27 c26 (+25 more)\n"),
             "WS8: {text}"
         );
     }

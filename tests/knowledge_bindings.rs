@@ -603,3 +603,55 @@ fn kp13_invalid_writes_fail_by_name_and_append_nothing() {
     .unwrap_err();
     assert!(both.to_string().contains("at most one reference"));
 }
+
+/// KP14: governing knowledge reaches the text wake as a pointer line, a
+/// revised source is tagged there, and an ended binding shows by id only.
+#[test]
+fn kp14_governing_knowledge_reaches_the_wake_summary() {
+    let fixture = Fixture::new();
+    let workspace = fixture.workspace();
+    workspace
+        .set_intent("Ship the legend layout", None)
+        .unwrap();
+    let bound = workspace.bind_knowledge(foreign_boundary()).unwrap();
+    workspace
+        .checkpoint("c0", Some("Bound the boundary decision.".to_owned()))
+        .unwrap();
+    let wake = || {
+        let output = fixture.cli(&["status", "--summary"]);
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    let text = wake();
+    assert!(text.len() <= 1000, "{} bytes", text.len());
+    assert!(
+        text.contains(&format!(
+            "\nk{} {BOUNDARY_HEADLINE} → ../kb:decisions/boundary.md\n",
+            bound.id
+        )),
+        "{text}"
+    );
+
+    fs::write(
+        fixture.kb().join("decisions/boundary.md"),
+        "# Boundary\nRevised.\n",
+    )
+    .unwrap();
+    git(&fixture.kb(), &["commit", "--quiet", "-a", "-m", "revise"]);
+    let text = wake();
+    assert!(
+        text.contains(&format!("\nk{} [changed] {BOUNDARY_HEADLINE}", bound.id)),
+        "{text}"
+    );
+
+    workspace
+        .retire_knowledge(bound.id, "no longer governs")
+        .unwrap();
+    let text = wake();
+    assert!(text.contains(&format!("\n- k{}\n", bound.id)), "{text}");
+    assert!(
+        !text.contains(BOUNDARY_HEADLINE),
+        "ended text must not read as fact: {text}"
+    );
+}

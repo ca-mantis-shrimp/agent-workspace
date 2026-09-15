@@ -17,7 +17,7 @@ pub use projection::*;
 use projection::{BRIEF_INTENT_MAX_CHARS, WORKING_SET_UNCITED_CANDIDATE_LIMIT, claim_headline};
 use reconcile::*;
 pub use reconcile::{DriftStatus, DriftView, InputDrift, RelocationProbe, StaleExplanation};
-use summary::{Marker, WakeCheckpoint, WakeInput, WakeItem};
+use summary::{Marker, WakeBinding, WakeCheckpoint, WakeInput, WakeItem};
 
 const EVENT_SCHEMA_VERSION: u32 = 2;
 const MINIMUM_EVENT_SCHEMA_VERSION: u32 = 1;
@@ -544,38 +544,50 @@ impl Workspace {
             Some(marker) => Some(self.wake_checkpoint(&current, marker)?),
             None => None,
         };
-        let active: Vec<&Claim> = current
-            .claims
-            .values()
-            .filter(|claim| claim.lifecycle.is_active())
+        // One full status serves the rest, so the wake takes goal, claims, open
+        // work, and governing knowledge from the same projections status serves,
+        // with knowledge applicability and ranking defined once.
+        let status = Self::status_from_projection(current);
+        let governs = status
+            .applicable_knowledge()
+            .into_iter()
+            .map(|(binding, _)| WakeBinding {
+                id: binding.id,
+                headline: binding.headline.clone(),
+                reference: binding.reference.as_ref().map(KnowledgeReference::display),
+                source: binding.source_state(),
+            })
             .collect();
-        let findings = current
+        let findings = status
             .findings
-            .values()
+            .iter()
             .filter(|finding| finding.disposition.is_open())
             .map(|finding| WakeItem {
                 marker: Marker::Open,
                 entity: EntityRef::Finding(finding.id),
                 text: finding.message.clone(),
             });
-        let transactions = current
+        let transactions = status
             .transactions
-            .values()
+            .iter()
             .filter(|transaction| transaction.state == TransactionState::Open)
             .map(|transaction| WakeItem {
                 marker: Marker::Open,
                 entity: EntityRef::Transaction(transaction.id),
                 text: transaction.intent.clone().unwrap_or_default(),
             });
+        let open = findings.chain(transactions).collect();
         Ok(summary::render(&WakeInput {
-            goal: current.intent.as_ref().map(|intent| intent.thesis.clone()),
-            active_claims: active.len(),
-            stale_claim_ids: active
+            goal: status.intent.as_ref().map(|intent| intent.thesis.clone()),
+            active_claims: status.claims.len(),
+            stale_claim_ids: status
+                .claims
                 .iter()
                 .filter(|claim| claim.is_stale())
                 .map(|claim| claim.id)
                 .collect(),
-            open: findings.chain(transactions).collect(),
+            open,
+            governs,
             checkpoint,
         }))
     }
@@ -629,6 +641,19 @@ impl Workspace {
                     marker: Marker::Ended,
                     entity: EntityRef::Transaction(transaction.id),
                     text: transaction.intent.clone().unwrap_or_default(),
+                });
+            }
+        }
+        for binding in current.knowledge.values() {
+            let was_active = baseline
+                .knowledge
+                .get(&binding.id)
+                .is_some_and(|before| before.lifecycle.is_active());
+            if was_active && !binding.lifecycle.is_active() {
+                news.push(WakeItem {
+                    marker: Marker::Ended,
+                    entity: EntityRef::Knowledge(binding.id),
+                    text: binding.headline.clone(),
                 });
             }
         }
