@@ -51,8 +51,10 @@ anchor.
 ## 2. Setup
 
 - **Repository:** the foreign `plot` repo, on a fresh branch off the current
-  `master` tip (`0c2cc0e` = `e2929a2` plus the inert cold-start prompt doc at
-  `COLD-START-PROMPT.md`; the doc is hint-free and is not part of the task).
+  `master` tip (`3d41dc5` = `e2929a2` plus the inert cold-start prompt doc
+  `COLD-START-PROMPT.md` and the committed harness wiring `.mcp.json` +
+  `opencode.json`). The prompt doc is hint-free and is not part of the task;
+  the MCP wiring is what makes the write loop reachable in a fresh worktree.
   One branch per harness run, so the two runs do not observe each other's
   landed work.
 - **Binding under test:** `plot` binding k1, pinned to
