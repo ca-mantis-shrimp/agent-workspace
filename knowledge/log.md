@@ -1,3 +1,7 @@
+## 2026-09-16
+
+* **Creation**: Documented concept `evaluations/knowledge-pulse-dogfood-report.md` (Knowledge-pulse dogfood field report — wake load-bearing, measurement invalid).
+
 ## 2026-09-15
 
 * **Creation**: Documented concept `evaluations/knowledge-pulse-dogfood-protocol.md` (Predeclared knowledge-pulse dogfood protocol).
