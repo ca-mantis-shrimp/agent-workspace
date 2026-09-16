@@ -1,5 +1,5 @@
 ## 2026-09-16
-
+* **Creation**: Documented concept `specifications/coordination-authority-boundary-contract.md` (Coordination authority boundary contract).
 * **Creation**: Documented concept `evaluations/knowledge-pulse-dogfood-report.md` (Knowledge-pulse dogfood field report — wake load-bearing, measurement invalid).
 
 ## 2026-09-15
