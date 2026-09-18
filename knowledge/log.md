@@ -1,4 +1,23 @@
+## 2026-09-18
+
+* **Update**: Updated concept `evaluations/unified-root-orientation-trial-protocol.md`.
+
+* **Update**: Updated concept `design/intent-relative-orientation-compiler.md`.
+
+* **Creation**: Documented concept `evaluations/unified-root-orientation-trial-report.md` (Unified-root orientation trial — wake did not beat the charter).
+
+* **Update**: Updated concept `evaluations/unified-root-orientation-trial-protocol.md`.
+
+* **Creation**: Documented concept `evaluations/unified-root-orientation-trial-protocol.md` (Unified-root read-only orientation trial).
+
+* **Update**: Updated concept `design/intent-relative-orientation-compiler.md`.
+
+## 2026-09-17
+
+* **Creation**: Documented concept `design/intent-relative-orientation-compiler.md` (Intent-relative orientation compiler).
+
 ## 2026-09-16
+
 * **Creation**: Documented concept `specifications/coordination-authority-boundary-contract.md` (Coordination authority boundary contract).
 * **Creation**: Documented concept `evaluations/knowledge-pulse-dogfood-report.md` (Knowledge-pulse dogfood field report — wake load-bearing, measurement invalid).
 
