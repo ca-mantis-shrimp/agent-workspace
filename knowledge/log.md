@@ -1,3 +1,6 @@
+## 2026-09-22
+* **Creation**: Documented concept `decisions/session-log-observability.md` (Harness session logs are a separate authority).
+
 ## 2026-09-16
 * **Creation**: Documented concept `specifications/coordination-authority-boundary-contract.md` (Coordination authority boundary contract).
 * **Creation**: Documented concept `evaluations/knowledge-pulse-dogfood-report.md` (Knowledge-pulse dogfood field report — wake load-bearing, measurement invalid).
