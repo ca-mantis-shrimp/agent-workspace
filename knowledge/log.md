@@ -1,3 +1,15 @@
+## 2026-09-24
+* **Update**: Updated concept `evaluations/memory-system-reassessment.md`.
+* **Update**: Linked `evaluations/memory-system-reassessment.md` to `evaluations/unified-root-orientation-trial-report.md` (incorporates the matched trial showing equal quality at higher treatment cost).
+* **Update**: Updated concept `evaluations/memory-system-reassessment.md`.
+* **Update**: Linked `evaluations/memory-system-reassessment.md` to `decisions/okf-curated-knowledge-layer.md` (proposes retaining repository-carried authority while reducing mandatory OKF tooling).
+* **Update**: Updated concept `evaluations/memory-system-reassessment.md`.
+* **Update**: Linked `evaluations/memory-system-reassessment.md` to `research/structural-freshness-without-formatter-coupling.md` (uses the rejected structural-freshness spike as evidence that semantic freshness is not a sustainable generic kernel promise).
+* **Update**: Updated concept `evaluations/memory-system-reassessment.md`.
+* **Update**: Linked `evaluations/memory-system-reassessment.md` to `design/agent-perspective.md` (reassesses the original agent-authored product request after implementation and market comparison).
+* **Update**: Updated concept `evaluations/memory-system-reassessment.md`.
+* **Creation**: Documented concept `evaluations/memory-system-reassessment.md` (Memory system reassessment: what agents were asking for).
+
 ## 2026-09-18
 
 * **Update**: Updated concept `evaluations/unified-root-orientation-trial-protocol.md`.
