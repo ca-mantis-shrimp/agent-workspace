@@ -2,7 +2,7 @@
 id: 01a09e5a-1e60-7d81-a5ef-832eaea56380
 alias: multi-agent-coordination
 parent: agent-workspace
-state: Active
+state: Closed
 ---
 # Harness-neutral multi-agent coordination
 

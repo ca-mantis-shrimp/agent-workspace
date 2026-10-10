@@ -2,7 +2,7 @@
 id: 01a0a46f-3a7d-7e12-8f35-fb86cbf8554a
 alias: knowledge-continuity
 parent: agent-workspace
-state: Active
+state: Closed
 ---
 # Harness-neutral knowledge continuity
 

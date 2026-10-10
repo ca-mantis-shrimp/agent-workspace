@@ -2,7 +2,7 @@
 id: 01a0a687-f09d-7b22-a7f6-91f89221f472
 alias: plural-agency
 parent: agent-workspace
-state: Active
+state: Closed
 ---
 # Plural agency
 

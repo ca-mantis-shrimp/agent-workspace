@@ -1,5 +1,13 @@
 # Agent Workspace
 
+> **Archived (2026-10-10).** This experiment is concluded; the repository is read-only and kept for its evidence.
+> The [memory system reassessment](knowledge/evaluations/memory-system-reassessment.md) explains why: a generic
+> kernel cannot tell whether a change matters to a belief written in prose, and trying cost a growing set of
+> language and formatter adapters. Mature memory systems and plain repository documents cover the rest.
+> Two ideas outlive it: the bounded wake (a small summary, capped lists with omission counts, ids one `reveal` away)
+> and finding 1 of the [cold-resume field report](knowledge/evaluations/dogfood-cold-resume.md) (capture must not
+> depend on the recording agent's incentives). All charters are closed.
+
 An experiment toward an agent-native equivalent of the capabilities Neovim provides a human: durable orientation, semantic navigation, immediate feedback, bounded attention, and reversible change.
 
 This is not intended to be another editor or a wrapper that renames existing tools. It is a **stateful coordination layer** over native authorities such as Git, LSP, tree-sitter, test runners, Clearhead, Pi, and Neovim.

@@ -2,7 +2,7 @@
 id: 01a0cce3-ae0a-73e1-ba39-3b00db9d02bd
 alias: session-observability
 parent: agent-workspace
-state: New
+state: Closed
 ---
 # Agent session observability
 

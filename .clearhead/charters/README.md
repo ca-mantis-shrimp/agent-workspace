@@ -1,7 +1,7 @@
 ---
 id: 01a05b72-fb07-7052-b5e6-0e9f546aba4a
 alias: agent-workspace
-state: Active
+state: Closed
 ---
 # Agent Workspace
 

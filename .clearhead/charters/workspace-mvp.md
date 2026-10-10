@@ -2,7 +2,7 @@
 id: 01a05b72-fb11-7201-aaa0-b02243a7a699
 alias: workspace-mvp
 parent: agent-workspace
-state: Active
+state: Closed
 ---
 # Agent Workspace MVP
 
